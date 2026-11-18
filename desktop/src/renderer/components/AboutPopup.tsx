@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
+import { isUnsupportedHere } from '../utils/ipc-error';
 import { useSaveNotice } from '../hooks/useSaveNotice';
 import { Toggle } from './settings-toggle';
-import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow, ErrorState } from './ui';
 import { formatVersionLine } from '../../shared/version-line';
 
 // Shared About popup for Desktop and Android settings. Previously this was an
@@ -63,12 +64,23 @@ function AnalyticsOptInToggle() {
   const current = useRef<boolean | null>(null);
   if (saved.current === null && optIn !== null) { saved.current = optIn; current.current = optIn; }
 
+  // Card #134 round 4: a read that failed left this row missing with no word. `readFailed` is set only by a real failure of the
+  // newest read (unmount cancels it) and cleared by a successful read, i.e. Try again.
+  const [readFailed, setReadFailed] = useState(false);
+  const [readTry, setReadTry] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    window.claude.analytics.getOptIn().then((v) => { if (!cancelled) setOptIn(v); });
+    setReadFailed(false);
+    Promise.resolve(window.claude.analytics.getOptIn()).then(
+      (v) => { if (!cancelled) setOptIn(v); },
+      (e: unknown) => { if (!cancelled && !isUnsupportedHere(e)) { console.warn('[about] usage-stats setting read failed:', e); setReadFailed(true); } }, // not allowed over remote: row stays hidden, as before
+    );
     return () => { cancelled = true; };
-  }, []);
+  }, [readTry]);
 
+  if (optIn === null && readFailed) {
+    return <ErrorState variant="inline" message="Couldn't load the usage stats setting." onRetry={() => setReadTry((n) => n + 1)} />;
+  }
   // Don't render until we know the state — avoids a visible flicker from OFF → ON.
   if (optIn === null) return null;
 

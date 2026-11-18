@@ -842,20 +842,54 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
   }
 }
 
-export async function uninstallPlugin(id: string): Promise<boolean> {
+/**
+ * What an uninstall did. `ok:false` has three reasons, and only ONE is a failure the person should hear about (card #134 round 4):
+ *  - 'id-refused' / 'path-refused': the id failed the safety check or resolved outside the plugins folder. Nothing was deleted
+ *    and nothing could be — the settings entry should still be cleared by the caller, exactly as before.
+ *  - 'delete-failed': a delete was attempted and the folder is STILL there afterwards. `unregistered` says whether Claude Code's
+ *    own registries had already let go of it (so a retry only has the folder left to do).
+ */
+export type UninstallOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'id-refused' | 'path-refused' }
+  // `detail` is PLAIN words for the screen ("permission denied"), or '' when the error code is not one we can explain —
+  // never the raw system message, which carries a file path. The raw message goes to the log only.
+  | { ok: false; reason: 'delete-failed'; unregistered: boolean; detail: string };
+
+/** The error code of a failed delete in plain words, or '' when unknown (better no reason than a made-up one). */
+function plainDeleteReason(err: unknown): string {
+  switch ((err as { code?: string } | null)?.code) {
+    case 'EBUSY': return 'it is in use by another program';
+    case 'EPERM': case 'EACCES': return 'permission denied';
+    case 'EROFS': return 'the disk is read-only';
+    default: return '';
+  }
+}
+
+export async function uninstallPlugin(id: string): Promise<UninstallOutcome> {
   // Security: validate plugin ID to prevent path traversal → arbitrary directory deletion
-  if (!SAFE_ID_RE.test(id)) return false;
+  if (!SAFE_ID_RE.test(id)) return { ok: false, reason: 'id-refused' };
+  let unregistered = false;
+  const stillThere = (p: string) => fs.promises.stat(p).then(() => true, () => false);
+  const attempted: string[] = [];
+  let firstErr: unknown;
+  // WHY collected, not thrown at once (round 4 review): a legacy folder whose delete threw used to be reported ok because only the
+  // main folder was checked afterwards. Every folder we tried is now checked at the end.
+  // Async delete (also takes the two blocking rmSync calls off the main process's one thread).
+  const tryRemove = async (dir: string) => {
+    attempted.push(dir);
+    try { await fs.promises.rm(dir, { recursive: true, force: true }); }
+    catch (err) { if (firstErr === undefined) firstErr = err; }
+  };
   try {
     // Remove from all four Claude Code registries first so /reload-plugins
     // stops trying to load a directory we're about to delete.
-    try { await unregisterPluginInstall(id); } catch {}
+    try { await unregisterPluginInstall(id); unregistered = true; } catch {}
 
     const targetDir = pluginInstallDir(id);
     // Double-check: resolved path must stay within plugins directory
-    if (!isContainedIn(targetDir, PLUGINS_DIR)) return false;
-    if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
-    }
+    if (!isContainedIn(targetDir, PLUGINS_DIR)) return { ok: false, reason: 'path-refused' };
+    if (fs.existsSync(targetDir)) await tryRemove(targetDir);
     // Clean up stale install locations from earlier YouCoded versions:
     //   (a) ~/.claude/plugins/<id>/                         (pre-registry)
     //   (b) ~/.claude/marketplaces/youcoded/plugins/<id>/ (first registry fix, wrong path)
@@ -865,13 +899,16 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
     ];
     for (const legacyDir of legacyDirs) {
       const parent = path.dirname(legacyDir);
-      if (fs.existsSync(legacyDir) && isContainedIn(legacyDir, parent)) {
-        fs.rmSync(legacyDir, { recursive: true, force: true });
-      }
+      if (fs.existsSync(legacyDir) && isContainedIn(legacyDir, parent)) await tryRemove(legacyDir);
     }
-    return true;
-  } catch {
-    return false;
+    // A delete that threw is only a failure if one of the folders is still there; a folder gone anyway is nothing to report.
+    for (const dir of attempted) {
+      if (await stillThere(dir)) throw firstErr ?? new Error('folder still present');
+    }
+    return { ok: true };
+  } catch (err) {
+    console.warn(`[plugin-installer] could not delete ${id}: ${err instanceof Error ? err.message : String(err)}`);   // raw message (has a path): log only
+    return { ok: false, reason: 'delete-failed', unregistered, detail: plainDeleteReason(err) };
   }
 }
 

@@ -256,7 +256,11 @@ describe('Assistant settings — the ChatGPT card and chatgpt.supported', () => 
     stub({ supported: true, status: async () => ({ state: 'signed-out' }), signIn });
     (window as any).claude.capabilities = ANDROID_LOCAL_CAPABILITIES;
     open();
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with ChatGPT' }));
+    // WHY: the button is drawn (disabled) while the status is still "Checking…"; on a busy machine a click landed before
+    // the status arrived and did nothing. Wait until the row has read "Not signed in" and the button is live.
+    const button = await screen.findByRole('button', { name: 'Sign in with ChatGPT' });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
     await waitFor(() => expect(signIn).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/To connect ChatGPT, sign in on the host device/)).toBeNull();
   });

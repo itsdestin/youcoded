@@ -326,6 +326,30 @@ describe('edit and save guards', () => {
       view.utils.unmount();
     });
 
+    // Card #134 round 4: "Load the whole file" that fails says so in the toast; one that works says nothing.
+    it('Load the whole file: a refused or rejected read toasts "Couldn\'t load the whole file."; a good one does not', async () => {
+      const got: string[] = [];
+      const on = (e: Event) => got.push((e as CustomEvent).detail.message);
+      window.addEventListener('youcoded:notice', on);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const onDiskRead = vi.fn();
+      const view = mountView({ content: 'PREFIX', contentInfo: { sizeBytes: 9_000_000, truncated: true }, onDiskRead });
+      get.mockResolvedValueOnce({ ok: false, error: 'too big' });
+      fireEvent.click(view.utils.getByRole('button', { name: /Load the whole file/i }));
+      await waitFor(() => expect(got).toEqual(["Couldn't load the whole file."]));
+      got.length = 0;
+      get.mockRejectedValueOnce(new Error('bridge down'));
+      fireEvent.click(view.utils.getByRole('button', { name: /Load the whole file/i }));
+      await waitFor(() => expect(got).toEqual(["Couldn't load the whole file."]));
+      got.length = 0;
+      get.mockResolvedValueOnce({ ok: true, content: 'WHOLE', binary: false, truncated: false, sizeBytes: 9_000_000, mtimeMs: 3 });
+      fireEvent.click(view.utils.getByRole('button', { name: /Load the whole file/i }));
+      await waitFor(() => expect(onDiskRead).toHaveBeenCalledWith(expect.objectContaining({ content: 'WHOLE' })));
+      expect(got).toEqual([]);
+      window.removeEventListener('youcoded:notice', on);
+      view.utils.unmount();
+    });
+
     // A blocked save must never be a silent no-op — the button would appear dead.
     it('refuses an over-cap save and says why instead of doing nothing', async () => {
       const { ref, utils } = mountView({
@@ -1117,6 +1141,19 @@ describe('first save without a conflict token', () => {
       expect(ok).toBe(false);
       expect(save).not.toHaveBeenCalled();
       expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy();
+    });
+
+    // Card #134 round 4: a save that REJECTS used to do nothing (editor open, no banner).
+    it('a save that rejects shows the Save failed banner with the real reason, keeps the editor open and the draft', async () => {
+      get.mockResolvedValue({ ok: true, content: 'hello', orphan: false, mtimeMs: 77 });
+      save.mockRejectedValue(new Error('EACCES: permission denied'));
+      const { ref, utils } = mountView();
+      await act(async () => { ref.current!.startEdit(); });
+      let ok: boolean | undefined;
+      await act(async () => { ok = await ref.current!.saveEdit(); });
+      expect(ok).toBe(false);
+      expect(utils.getByText(/Save failed: .*permission denied/i)).toBeTruthy();
+      expect(ref.current!.editing).toBe(true);
     });
 
     it('when the check itself fails, refuses to save and says the check could not be made', async () => {

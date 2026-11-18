@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { META_UNSUPPORTED_FALLBACK, type SessionFlagName, type SessionMetaResult } from '../../shared/types';
 import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 import { plainMessage } from '../utils/ipc-error';
+import { announceFailed } from '../utils/announce';
 
 export interface SessionMetaApi {
   tags: Set<string>;   // applied tag ids
@@ -30,9 +31,12 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   const [note, setNoteState] = useState('');
   // Default TRUE so the controls don't flash disabled during the first getMeta.
   const [supported, setSupported] = useState(true);
-  // Last value we believe the backend accepted — the rollback target for a
-  // refused write. Kept in a ref so back-to-back setNote calls chain correctly.
+  // Last value the backend CONFIRMED (answered without ok:false) — the rollback target for a refused write. NOT the previous
+  // optimistic value: with save 1 (on) and save 2 (off) in flight, a failing save 2 must return to what the server really holds,
+  // not to save 1's unconfirmed "on". Refs so back-to-back calls see each other; a read of server truth resets them (round 4 review).
   const savedNote = useRef('');
+  const confirmedTags = useRef<Set<string>>(new Set());
+  const confirmedFlags = useRef<Partial<Record<SessionFlagName, boolean>>>({});
   // Counts the person's note edits. A read that started before the latest edit must not put the
   // older text back: the editor saves on every keystroke, and a re-read landing mid-typing (a
   // reconnect's, or the change event after a save) snapped letters back (review of the
@@ -43,6 +47,20 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   // after the view closed set state on nothing (seen as stray errors after a test ended).
   const readSeq = useRef(0);
   const [unsupportedReason, setUnsupportedReason] = useState(META_UNSUPPORTED_FALLBACK);
+  // Card #134 round 4: a refused write already rolled the control back, but said nothing. It now says so — only for a real refusal
+  // (`ok:false`) that is not the host-is-unsupported case (that one already greys the controls out with its reason on hover), and
+  // only while this conversation is still the one on screen (a late answer for one you left, or after close, stays quiet).
+  // Newest-wins per field: the number of the latest save SENT for each tag / flag. An older answer (a failure arriving after a newer
+  // save of the same field) neither rolls back nor speaks, so it cannot put an old value back over a newer one.
+  const fieldSeq = useRef<Record<string, number>>({});
+  const nextSeq = (key: string) => (fieldSeq.current[key] = (fieldSeq.current[key] ?? 0) + 1);
+  const liveSession = useRef<string | null>(sessionId);
+  liveSession.current = sessionId;
+  useEffect(() => () => { liveSession.current = null; }, []);
+  const sayRefused = useCallback((forSession: string, what: string, res: any) => {
+    if (liveSession.current !== forSession || res?.unsupported) return;
+    announceFailed(what, res?.error);
+  }, []);
 
   // Only a refusal that explicitly says `unsupported` may flip `supported`.
   // Ordinary failures (invalid tag id, note too long) must NOT touch it — and
@@ -57,7 +75,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   }, []);
 
   const refetch = useCallback((opts?: { keepOnFailure?: boolean }) => {
-    if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); return; }
+    if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; confirmedTags.current = new Set(); confirmedFlags.current = {}; setSupported(true); return; }
     const editsAtStart = noteEdits.current;
     const mine = ++readSeq.current;
     // WHY a failed read locks the editor (code review 2026-09-11, F1, on error inventory
@@ -66,7 +84,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // nobody was shown. The hosts now answer `unreadable`; that, or a rejected call, takes
     // the same disabled state a refusing host does, with the reason in the tooltip.
     const markUnreadable = (reason: string) => {
-      setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = '';
+      setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; confirmedTags.current = new Set(); confirmedFlags.current = {};
       setSupported(false);
       setUnsupportedReason(`Couldn't load this conversation's tags and note, so they can't be changed here: ${reason}`);
     };
@@ -75,8 +93,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
         if (mine !== readSeq.current) return;
         if (m?.unreadable) { markUnreadable(m.unreadable); return; }
         setTags(new Set(m?.tags ?? []));
+        confirmedTags.current = new Set(m?.tags ?? []);   // server truth is the rollback target
         // Missing is "none set" — an older peer omits the field entirely.
         setFlags(m?.flags ?? {});
+        confirmedFlags.current = { ...(m?.flags ?? {}) };
         if (noteEdits.current === editsAtStart) {
           setNoteState(m?.note ?? '');
           // Server truth resets the rollback target too, or a later refusal would
@@ -120,8 +140,11 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
 
   const setTag = useCallback((tagId: string, next: boolean) => {
     if (!sessionId) return;
+    const mine = nextSeq(`tag:${tagId}`);
+    const isNewest = () => fieldSeq.current[`tag:${tagId}`] === mine;
+    // WHY confirmed, not "the opposite of next": roll back to what the server last accepted for this tag.
     const revert = () => setTags((prev) => {
-      const s = new Set(prev); if (next) s.delete(tagId); else s.add(tagId); return s;
+      const s = new Set(prev); if (confirmedTags.current.has(tagId)) s.add(tagId); else s.delete(tagId); return s;
     });
     setTags((prev) => { const s = new Set(prev); if (next) s.add(tagId); else s.delete(tagId); return s; });
     // Optimistic, but NOT fire-and-forget: an ok:false (e.g. a native session, whose
@@ -131,41 +154,49 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // backend-side and we leave the optimistic value rather than fighting the network.
     try {
       Promise.resolve((window as any).claude.session.setTag(sessionId, tagId, next))
-        .then((res: any) => { if (res && res.ok === false) { revert(); noteRefusal(res); } })
+        .then((res: any) => {
+          // WHY both checks (review of 12b302b16): only the NEWEST save of this tag may set the confirmed value (an older ok landing
+          // last would put older data back), and an answer for a conversation we have since left must touch nothing in the new one.
+          if (liveSession.current !== sessionId) return;
+          if (!res || res.ok !== false) { if (isNewest()) { if (next) confirmedTags.current.add(tagId); else confirmedTags.current.delete(tagId); } return; }
+          if (isNewest()) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); }
+        })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, noteRefusal]);
+  }, [sessionId, noteRefusal, sayRefused]);
 
   const setNote = useCallback((text: string) => {
     if (!sessionId) return;
-    noteEdits.current++;
-    // Revert target comes from a REF, not the render closure: two setNote calls
-    // dispatched from the same callback instance would both capture the same
-    // closure value, so a failed second write could roll back past the first.
-    const prevNote = savedNote.current;
-    savedNote.current = text;
+    const myEdit = ++noteEdits.current;
+    // Revert target is the last CONFIRMED text (a ref, so it is current even for two calls from one callback instance).
     setNoteState(text);
     try {
       Promise.resolve((window as any).claude.session.setNote(sessionId, text))
         .then((res: any) => {
-          if (res && res.ok === false) { savedNote.current = prevNote; setNoteState(prevNote); noteRefusal(res); }
+          if (liveSession.current !== sessionId) return;   // another conversation is on screen now: this answer is not about it
+          if (!res || res.ok !== false) { if (noteEdits.current === myEdit) savedNote.current = text; return; }   // only the newest edit confirms
+          if (noteEdits.current === myEdit) { setNoteState(savedNote.current); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
         })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, noteRefusal]);
+  }, [sessionId, noteRefusal, sayRefused]);
 
   // Same optimistic-then-revert contract as setTag: a refused write must roll
   // the local value back, or the flag looks set until the next refetch.
   const setFlag = useCallback((flag: SessionFlagName, next: boolean) => {
     if (!sessionId) return;
-    const prev = !!flags[flag];
+    const mine = nextSeq(`flag:${flag}`);
     setFlags((f) => ({ ...f, [flag]: next }));
     try {
       Promise.resolve((window as any).claude.session.setFlag(sessionId, flag, next))
-        .then((res: any) => { if (res && res.ok === false) { setFlags((f) => ({ ...f, [flag]: prev })); noteRefusal(res); } })
+        .then((res: any) => {
+          if (liveSession.current !== sessionId) return;   // answer for a conversation we have left
+          if (!res || res.ok !== false) { if (fieldSeq.current[`flag:${flag}`] === mine) confirmedFlags.current[flag] = next; return; }   // only the newest save confirms
+          if (fieldSeq.current[`flag:${flag}`] === mine) { setFlags((f) => ({ ...f, [flag]: !!confirmedFlags.current[flag] })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); }
+        })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, flags, noteRefusal]);
+  }, [sessionId, noteRefusal, sayRefused]);
 
   return { tags, flags, note, supported, unsupportedReason, setTag, setNote, setFlag };
 }

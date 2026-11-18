@@ -102,6 +102,16 @@ describe('sync spaces: leases and devices behave the same for a phone', () => {
       expect(await run(IPC.SYNC_SPACES_LEASE_FORCE, { claudeSessionId: 'x' })).toEqual({ ok: false });
     }
   });
+  // Card #134 round 4: the failure answer carries the real reason, so the screen's "Couldn't rename this device" has Details.
+  it('a rename that fails passes the real error message back; a rename that works says ok with no error', async () => {
+    expect(await asDesktop(IPC.SYNC_SPACES_RENAME_DEVICE, { id: 'other', name: 'Desk' })).toEqual({ ok: true });
+    fs.rmSync(path.join(personalRoot!, 'Devices'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(personalRoot!, 'Devices'), 'a file where the folder should be');
+    const bad: any = await asDesktop(IPC.SYNC_SPACES_RENAME_DEVICE, { id: 'other', name: 'Desk' });
+    expect(bad.ok).toBe(false);
+    expect(typeof bad.error).toBe('string');
+    fs.rmSync(path.join(personalRoot!, 'Devices'), { force: true });
+  });
   it('with no managed folders, the device calls answer empty / not-ok rather than throwing', async () => {
     const real = personalRoot; setRoot(null);
     expect(await asPhone(IPC.SYNC_SPACES_LIST_DEVICES)).toEqual([]);

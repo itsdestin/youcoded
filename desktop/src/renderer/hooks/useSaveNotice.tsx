@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ErrorState } from '../components/ui';
-import { plainMessage } from '../utils/ipc-error';
+import { plainMessage, isUnsupportedHere } from '../utils/ipc-error';
 
 /** One failed save of a small setting, as shown beside its control. */
 interface SaveFailure { message: string; details?: string; retry: () => void }
@@ -23,7 +23,7 @@ export function useSaveNotice(open: boolean) {
   /** Per control: the number of the newest save, how many are still running, and how the newest one ended. */
   const seq = useRef<Record<string, number>>({});
   const inFlight = useRef<Record<string, number>>({});
-  const newest = useRef<Record<string, { failed: boolean; details: string }>>({});
+  const newest = useRef<Record<string, { failed: boolean; details: string; unsupported: boolean }>>({});
 
   // Closing (or reopening) starts a new generation: pending results from the old one are ignored, and no notice survives.
   useEffect(() => {
@@ -46,9 +46,11 @@ export function useSaveNotice(open: boolean) {
     const mine = (seq.current[key] = (seq.current[key] ?? 0) + 1);
     inFlight.current[key] = (inFlight.current[key] ?? 0) + 1;
     let failed = false;
+    let unsupported = false; // not allowed / not available on this client: the control goes back, but no "Couldn't save" notice
     let details = '';
     try {
       const r = await save();
+      if (isUnsupportedHere(r)) { failed = true; unsupported = true; }
       if (r === false || (r && typeof r === 'object' && (r as { ok?: unknown }).ok === false)) {
         failed = true;
         const err = (r as { error?: unknown } | null)?.error;
@@ -56,12 +58,12 @@ export function useSaveNotice(open: boolean) {
       }
     } catch (e) {
       failed = true;
-      details = plainMessage(e, '');
+      if (isUnsupportedHere(e)) unsupported = true; else details = plainMessage(e, '');
     }
     if (gen !== generation.current) return; // popup closed, or unmounted: nothing to say
     inFlight.current[key] -= 1;
     // Only the NEWEST save decides what the person sees; an older one just records nothing.
-    if (mine === seq.current[key]) newest.current[key] = { failed, details };
+    if (mine === seq.current[key]) newest.current[key] = { failed, details, unsupported };
     // Wait until every save of this control has settled, so a late result of an older one can never leave the screen and the
     // disk disagreeing: whatever ended last, the control then shows the last value known saved unless the newest save worked.
     if (inFlight.current[key] > 0) return;
@@ -71,6 +73,7 @@ export function useSaveNotice(open: boolean) {
       return;
     }
     snapBack();
+    if (outcome.unsupported) return;
     setFailures((f) => ({ ...f, [key]: { message: `Couldn't save ${label}`, details: outcome.details || undefined, retry } }));
   }, []);
 

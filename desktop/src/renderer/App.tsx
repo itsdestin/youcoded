@@ -1,6 +1,7 @@
 // Registers window.__terminalRegistry so main-process executeJavaScript
 // can call getScreenText for the attention classifier's ~1s buffer reads.
 // Must run before any TerminalView mounts (which call registerTerminal).
+import { useModelModes } from './hooks/useModelModes';
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
@@ -529,18 +530,8 @@ function AppInner() {
   // an empty task list via useChatState's singleton EMPTY_SESSION_STATE.
   const openTasks = useSessionTasks(sessionId ?? '');
   // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/youcoded-model-modes.json.
-  const [fastMode, setFastMode] = useState(false);
-  const [effortLevel, setEffortLevel] = useState<string>('auto');
-  // Load persisted modes on mount, and re-load when popup closes (picks up
-  // edits made in the popup). Simple poll on popup close keeps the chips in sync.
-  useEffect(() => {
-    const api = (window.claude as any).modes;
-    if (!api) return;
-    api.get().then((m: { fast?: boolean; effort?: string }) => {
-      setFastMode(!!m?.fast);
-      if (m?.effort) setEffortLevel(m.effort);
-    }).catch(() => {});
-  }, [modelPickerOpen]);
+  // WHY (card #134 round 4, Destin Q-1): the chips stay hidden until the saved values are really read (see the hook).
+  const { fast: fastMode, effort: effortLevel, read: modesRead } = useModelModes(modelPickerOpen);
   // App-scoped marketplace destinations (NOT per-session). The full-screen
   // marketplace + library replaced the legacy three-tab modal entirely.
   const [activeView, setActiveView] = useState<'chat' | 'terminal' | 'marketplace' | 'library'>('chat');
@@ -3795,6 +3786,7 @@ function AppInner() {
                   permissionPending={!!sessionId && modePending.has(`mode:${sessionId}`)}
                   fast={fastMode}
                   effort={effortLevel}
+                  modesUnread={!modesRead}
                   onOpenModelPicker={openModelPicker}
                   sessionId={sessionId}
                   sessionName={currentSession?.name}

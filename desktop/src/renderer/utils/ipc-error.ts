@@ -62,3 +62,15 @@ export function plainMessage(e: unknown, fallback = 'Something went wrong.'): st
   if (unsupported) return remoteUnsupportedMessage(unsupported[1], onPhone() ? 'phone' : 'remote');
   return text.replace(ELECTRON_WRAPPER, '') || fallback;
 }
+
+/**
+ * True when a rejection (or answer) means "this client is not allowed / has no such feature" rather than "it was tried and failed":
+ * the remote shim's REMOTE_UNSUPPORTED rejection (it already shows its own "not available here" notice) or an `{ unsupported }`
+ * answer. Card #134 round 4 (Destin: no false error warnings): such a thing is NEVER a "Couldn't …" notice.
+ */
+export function isUnsupportedHere(e: unknown): boolean {
+  const o = e as { code?: unknown; unsupported?: unknown; message?: unknown } | null | undefined;
+  if (!o) return false;
+  if (o.code === 'REMOTE_UNSUPPORTED' || o.unsupported === true) return true;
+  return typeof o.message === 'string' && /remote-unsupported:\s*\S+/.test(o.message);
+}
