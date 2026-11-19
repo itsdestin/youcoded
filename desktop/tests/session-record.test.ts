@@ -529,6 +529,21 @@ describe('what the computer reads a session\'s screen for', () => {
   });
 });
 
+describe('a message that starts a turn', () => {
+  it('a picture sent with no words counts, so the conversation reads as working while Claude replies', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'p', timestamp: 1, data: { text: '', attachedFiles: ['/tmp/paste-1.png'] } });
+    expect(r.screenNeed(S)!.working).toBe(true);
+  });
+  it('a user line with neither words nor files does not', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'p', timestamp: 1, data: { text: '' } });
+    expect(r.screenNeed(S)!.working).toBe(false);
+  });
+});
+
 describe('what a summary says about "stuck"', () => {
   it('the computer\'s reading shows when nothing else is wrong, another writer\'s state wins, and the turn ending takes it back', () => {
     const r = new SessionRecords();

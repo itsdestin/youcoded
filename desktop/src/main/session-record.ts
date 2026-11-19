@@ -843,7 +843,9 @@ export class SessionRecords {
     const stamped = !!d.parentAgentToolUseId;
     switch (ev.type) {
       case 'user-message':
-        if (!d.text || stamped || !this.firstTime(rec, ev.uuid)) return;
+        // WHY attachedFiles counts as a message: a picture sent with no words is text '' plus its files (claude-queue-wire.ts),
+        // and it starts a turn like any other message — skipping it left the conversation reading "not working" while Claude replied.
+        if ((!d.text && !(Array.isArray(d.attachedFiles) && d.attachedFiles.length)) || stamped || !this.firstTime(rec, ev.uuid)) return;
         f.hasHistory = true;
         if (d.slashCommand) return; // a slash command starts no turn (reducer)
         f.working = true;

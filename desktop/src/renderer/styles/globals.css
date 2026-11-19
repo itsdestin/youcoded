@@ -8,7 +8,7 @@
 @import "./phone-density.css"; /* WHY: phone-width chat spacing (card #213); the file says what and why. */
 @import "./keyboard.css"; @import "./terminal-scrollbar.css"; /* WHY: the empty-chat hint above the keyboard (card #213); the terminal's one scroll bar. */
 @import "./input-bar.css"; /* WHY: the message box hint stays on one line beside the stop button (card #213). */
-@import "./brand.css"; /* WHY here: the logo and setup's brand surface (first-run rebuild), known to the design lint like every other class. */
+@import "./brand.css"; /* WHY here: the logo and setup's brand surface (first-run rebuild), known to the design lint like every other class. */ @import "./send-note.css"; /* WHY: the not-sent note inside a sent bubble (pinned-bubbles-review-7#V-3); the file says why. */
 
 @source "../../";
 
