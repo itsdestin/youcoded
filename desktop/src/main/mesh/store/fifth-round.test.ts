@@ -306,3 +306,79 @@ describe('F3 a whole chat folder put back is reported, never silent, nothing is 
     await s.close(); await t.cleanup();
   });
 });
+
+describe('the pieces behind F4: every reader copes with an index whose evicted prefix has no records', () => {
+  const L = mk('q', 21);
+  async function lost() {
+    const t = await tmpRoot('r5-f4b-');
+    const s = await open(t.dir);
+    for (let i = 0; i < 21; i += 3) await s.append(V(1), 0, i, L.slice(i, i + 3));
+    await evict(s, 12); await s.close();
+    fs.unlinkSync(path.join(vdir(t.dir), 'index.bin'));
+    return { t, s: await open(t.dir) };
+  }
+  it('scrub, summary, reply ends, verify and a full resend from line 0 all work; hashAt inside the lost prefix says evicted; the boundary and the head answer', async () => {
+    const { t, s } = await lost();
+    expect((await s.scrubStep(V(1), { maxBytes: 1 << 20 })).damagedFromLine).toBeNull();
+    expect((await s.summary(V(1))).lines).toBe(21);
+    await s.replyEnds(V(1));
+    expect((await s.verify(V(1))).ok).toBe(true);
+    expect(await s.append(V(1), 0, 0, L)).toBe('ok');                         // a peer resends everything: the lost prefix is skipped, the kept lines are compared, nothing changes
+    expect((await s.head(V(1))).lines).toBe(21);
+    await expect(s.hashAt(V(1), 0, 5)).rejects.toMatchObject({ code: 'evicted' });
+    expect(await s.hashAt(V(1), 0, 12)).not.toBeNull(); expect(await s.hashAt(V(1), 0, 21)).not.toBeNull();
+    const seen: number[] = []; try { for await (const b of s.conversationLines(V(1), 0)) for (const x of b) seen.push(x.line); } catch (e: any) { expect(e.code).toBe('evicted'); }
+    await s.close(); await t.cleanup();
+  });
+  it('a second eviction after the loss moves the boundary on and a third open still serves every kept line', async () => {
+    const { t, s } = await lost();
+    await evict(s, 17); await s.close();
+    const s2 = await open(t.dir);
+    expect((await s2.head(V(1))).evictedLines).toBe(17);
+    expect(await readAll(s2, L)).toBe('E'.repeat(17) + '.'.repeat(4));
+    await s2.close(); await t.cleanup();
+  });
+});
+
+describe('the rebuild believes the checkpoint over an older index of a replaced history', () => {
+  it('an older index.bin whose records describe lines a set-aside tail later replaced costs no line', async () => {
+    const t = await tmpRoot('r5-old-');
+    const A = mk('A', 7), B = mk('B', 48);
+    let s = await open(t.dir, { ...opts, chunkBytes: 100000 }); await s.append(V(1), 0, 0, A); await s.close();
+    const ix = path.join(vdir(t.dir), 'index.bin'); const old = fs.readFileSync(ix);            // the index of history A (7 lines)
+    s = await open(t.dir, { ...opts, chunkBytes: 100000 });
+    await s.setAsideTail('aaaaaaaa', V(1), 4); await s.append(V(1), 0, 4, B); await s.close();   // lines 4.. are replaced: history B
+    fs.writeFileSync(ix, old);                                                                    // ONE fault: the older index comes back
+    s = await open(t.dir, { ...opts, chunkBytes: 100000 });
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(52); expect(h.damagedFromLine).toBeNull();                              // the old store answered head 7, damaged from 4, and 45 lines unserved
+    expect(await readAll(s, [...A.slice(0, 4), ...B])).toBe('.'.repeat(52));
+    await s.close(); await t.cleanup();
+  });
+});
+
+describe('the high-water record names its own points', () => {
+  it('a head that falls BETWEEN two recorded points is still reported, using the nearest point below it', async () => {
+    const t = await tmpRoot('r5-hw-');
+    const L = mk('w', 3 * HW_EVERY + 40);
+    let s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 });
+    await s.append(V(1), 0, 0, L.slice(0, HW_EVERY + 10)); await s.close();                      // point at HW_EVERY (during the append) and again at close
+    const snap = path.join(t.dir, '..', path.basename(t.dir) + '-hwsnap'); fs.cpSync(vdir(t.dir), snap, { recursive: true });
+    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 }); await s.append(V(1), 0, HW_EVERY + 10, L.slice(HW_EVERY + 10)); await s.close();
+    fs.rmSync(vdir(t.dir), { recursive: true }); fs.cpSync(snap, vdir(t.dir), { recursive: true });
+    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 });
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(HW_EVERY + 10); expect(h.rolledBack).toEqual({ from: HW_EVERY + 10, had: L.length });
+    await s.close(); fs.rmSync(snap, { recursive: true }); await t.cleanup();
+  });
+  it('a head behind the record whose nearest recorded point does NOT match the folder (another history) is not called a rollback', async () => {
+    const t = await tmpRoot('r5-hw2-');
+    let s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 }); await s.append(V(1), 0, 0, mk('p', HW_EVERY)); await s.append(V(1), 0, HW_EVERY, mk('p2', 44)); await s.close();   // points at 0, 256 and 300
+    fs.rmSync(vdir(t.dir), { recursive: true });                                                  // the folder is gone, a DIFFERENT 280-line history of the same version is written
+    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 }); await s.append(V(1), 0, 0, mk('other', 280)); await s.close();
+    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 });                                      // (the check runs at open)
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(280); expect(h.rolledBack).toBeNull();                                  // the point at 256 does not match: not the same history, so no claim
+    await s.close(); await t.cleanup();
+  });
+});
