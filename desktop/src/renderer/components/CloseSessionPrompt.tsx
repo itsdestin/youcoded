@@ -33,7 +33,9 @@ interface Props {
   onConfirm: (result: {
     flags: Partial<Record<FlagName, boolean>>;
     addTagIds: string[]; removeTagIds: string[]; note: string; noteChanged: boolean;
-  }) => void;
+  }) => void | string[] | Promise<void | string[]>;
+  // WHY it may answer with the parts that failed (R-1, 2026-11-18): the caller now waits for the writes; any
+  // names it returns ("lists", "tags", "note") keep this prompt open with a notice and Try again.
 }
 
 // localStorage key used to suppress this prompt permanently. Exported so
@@ -62,7 +64,7 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
   const registry = useTagRegistry();
   const [tagIds, setTagIds] = useState<Set<string>>(new Set());
   // The notes tip's moment: the first time this prompt shows (guide/tips.ts).
-  useEffect(() => { if (open) triggerTip('notes'); }, [open]);
+  useEffect(() => { if (open) { triggerTip('notes'); setFailedParts(null); } }, [open]);
   // Rename opens the shared rename popup over this one (Session details' name card does the
   // same). It writes at once, like a tag rename; the name shown follows the session list.
   const [renaming, setRenaming] = useState(false);
@@ -72,6 +74,9 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
   // operation's text is for a bug report, not the message). Null when the read worked.
   const [readError, setReadError] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  // The writes are in flight / the parts that did not save (null = no notice). See confirm().
+  const [saving, setSaving] = useState(false);
+  const [failedParts, setFailedParts] = useState<string[] | null>(null);
   // The session's tags/note as loaded on open — the baseline for the delta, so
   // Cancel changes nothing and Confirm only writes what the user toggled.
   const [original, setOriginal] = useState<{ tags: Set<string>; note: string; flags: Record<FlagName, boolean> }>(
@@ -165,13 +170,25 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
 
   // WHY one confirm for the button and Enter: Enter used to call onConfirm directly and so
   // skipped "Don't show again" — the prompt came back next time although the switch was on.
-  const confirm = () => {
+  const confirm = async () => {
+    if (saving) return; // a second Enter / click while the writes are landing
     // Persist the suppress preference first so the caller can skip the prompt on the next close.
     if (dontShowAgain) localStorage.setItem(SUPPRESS_KEY, '1');
-    onConfirm(buildResult());
+    setSaving(true);
+    try {
+      const failed = await onConfirm(buildResult());
+      setFailedParts(Array.isArray(failed) && failed.length > 0 ? failed : null);
+    } catch (e) {
+      // A caller that threw: say so rather than close or freeze with no word. No cause is guessed.
+      console.warn('[CloseSessionPrompt] closing failed', e);
+      setFailedParts([]);
+    } finally { setSaving(false); }
   };
 
   if (!open) return null;
+
+  // "tags, note" → "tags and note"; named from what the caller reported failed, never guessed.
+  const failedText = failedParts === null ? '' : failedParts.length === 0 ? 'your choices' : failedParts.length === 1 ? failedParts[0] : `${failedParts.slice(0, -1).join(', ')} and ${failedParts[failedParts.length - 1]}`;
 
   const toggleTag = (id: string, next: boolean) =>
     setTagIds((prev) => { const s = new Set(prev); if (next) s.add(id); else s.delete(id); return s; });
@@ -203,9 +220,17 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
               <Toggle checked={dontShowAgain} onChange={setDontShowAgain} aria-label="Don't show again" />
               Don't show again
             </label>
-            <Button size="sm" className="whitespace-nowrap" onClick={confirm}>Close session</Button>
+            <Button size="sm" className="whitespace-nowrap" onClick={confirm} disabled={saving}>Close session</Button>
           </div>
         }>
+            {failedParts !== null && (
+              // WHY the red box with Try again (Destin, R-1 H-1: work that could be lost gets the box that stays):
+              // the chat is still open, so nothing is lost; Try again writes the choices again.
+              <Callout tone="danger" role="alert" actionsPlacement="below"
+                actions={<Button size="sm" onClick={confirm} disabled={saving}>Try again</Button>}>
+                {`Couldn’t save ${failedText}. This chat is still open.`}
+              </Callout>
+            )}
             {!metaLoaded ? null : !metaSupported ? (
               <>
                 {/* WHY the notice and its Details fold sit INSIDE the name card (Destin,

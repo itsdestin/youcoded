@@ -9,6 +9,7 @@ import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
+import { reportFailure } from '../utils/report-failure';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -380,7 +381,12 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
     if (sessionId && !sendPtyCommand(`/fast ${v ? 'on' : 'off'}\r`)) return;
     setFast(v);
     const api = (window.claude as any).modes;
-    api?.set({ fast: v }).catch(() => {});
+    // WHY roll back + say so (R-1, Destin H-3: on/off settings snap back to the real value with a message): the
+    // switch used to flip and a failed save was swallowed, so it read ON until the next launch put it back to OFF.
+    Promise.resolve(api?.set({ fast: v })).catch((cause: unknown) => {
+      setFast(!v);
+      reportFailure({ what: 'save Fast mode', cause, where: 'ModelPickerPopup.applyFast', show: 'toast' });
+    });
   };
 
   const handleFastToggle = () => {
@@ -397,9 +403,14 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
     // Guarded like applyFast above — don't let /effort answer a live Ink
     // prompt, and don't record a level CC never received.
     if (sessionId && !sendPtyCommand(`/effort ${level}\r`)) return;
+    const before = effort;
     setEffort(level);
     const api = (window.claude as any).modes;
-    api?.set({ effort: level }).catch(() => {});
+    // WHY roll back + say so: same as applyFast (R-1, Destin H-3).
+    Promise.resolve(api?.set({ effort: level })).catch((cause: unknown) => {
+      setEffort(before);
+      reportFailure({ what: 'save the effort level', cause, where: 'ModelPickerPopup.updateEffort', show: 'toast' });
+    });
   };
 
   if (!open) return null;

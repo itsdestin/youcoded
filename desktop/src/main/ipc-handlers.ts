@@ -1,4 +1,5 @@
 import { setBrowserAskListener } from './ipc/browser';
+import { checkNamingModel } from './naming-model-check';
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -2273,10 +2274,9 @@ export function registerIpcHandlers(
         }
         // Same confirm-against-the-catalog rule as the specialist defaults: a
         // model we cannot see is refused, never quietly swapped for another.
-        const catalog = await modelCatalog.get(await providerRegistry.list()).catch(() => null);
-        if (catalog && !catalog.some((m) => m.id === choice.modelId && m.providerId === choice.providerId)) {
-          return { ok: false, error: `"${choice.modelId}" isn’t in the model list right now — pick it from the list.` };
-        }
+        // WHY a list that fails to load now REFUSES (R-1 batch 1; main/naming-model-check.ts): it used to skip the check.
+        const problem = await checkNamingModel(async () => modelCatalog.get(await providerRegistry.list()), { providerId: choice.providerId, modelId: choice.modelId });
+        if (problem) return { ok: false, error: problem };
         model = { providerId: choice.providerId, modelId: choice.modelId };
       }
       await namingSettings.update({ mode: v.mode, model });

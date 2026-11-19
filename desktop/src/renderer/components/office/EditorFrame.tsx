@@ -22,6 +22,7 @@ import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
+import { reportFailure } from '../../utils/report-failure';
 
 export type OfficeCommand = 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'markers' | 'numbering' | 'align-left' | 'align-center' | 'align-right';
 export type OfficeCommandState = Partial<Record<OfficeCommand, { on: boolean; enabled: boolean }>>;
@@ -394,7 +395,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     keptRef.current = false;
     keptBinRef.current = null;
     replacedRef.current = true;
-    if (token) void officeBridge()?.saveCopy(token, 'release').catch(() => {});
+    // WHY logged, never shown (R-1, Destin H-2): if main cannot drop the pictures it set aside they are tidied up
+    // later; nothing the person typed is at risk and there is nothing for them to do.
+    if (token) void officeBridge()?.saveCopy(token, 'release').catch((cause: unknown) => reportFailure({ what: 'release the kept pictures', cause, where: 'EditorFrame.letGoOfKept', show: 'log-only' }));
   };
   const discardPending = () => {
     const s = save.current;
@@ -411,7 +414,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (keptRef.current) letGoOfKept(token);
     discardPending();
     markUnchanged(file.path);
-    if (token) await officeBridge()?.invoke(token, 'recovery_discard', {}).catch(() => {});
+    // WHY logged, never shown (R-1, Destin H-2): the worst case is that the next open offers the discarded typing
+    // back and the person says no again — nothing is lost, and there is nothing they could do about it now.
+    if (token) await officeBridge()?.invoke(token, 'recovery_discard', {}).catch((cause: unknown) => reportFailure({ what: 'clear the recovery copy', cause, where: 'EditorFrame.discard', show: 'log-only' }));
   };
   // Send the newest edits to the recovery journal now (the window is closing, fix round 1): the
   // editor answers yc:office-journaled once it has sent them, or 1 s passes.
@@ -654,7 +659,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       const t = openedRef.current?.token;
       noteRecoverOffer(file.path, false);
       if (!b || !t) return;
-      if (!recover) { await b.invoke(t, 'recovery_discard_held', {}).catch(() => {}); return; }
+      // WHY logged, never shown (R-1, Destin H-2): same as discard() above — the offer simply comes back next open.
+      if (!recover) { await b.invoke(t, 'recovery_discard_held', {}).catch((cause: unknown) => reportFailure({ what: 'clear the kept changes', cause, where: 'EditorFrame.answerRecoverOffer', show: 'log-only' })); return; }
       // The kept edits become this document's journal; reopening the editor replays them (the
       // file as it is was kept in Versions when it opened).
       const ok = await b.invoke(t, 'recovery_accept_held', {}).catch(() => false);
