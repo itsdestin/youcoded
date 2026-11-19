@@ -1,5 +1,6 @@
 import type { ClaudeControlBridge } from './claude-control-bridge';
 import type { SessionManager } from './session-manager';
+import type { QueueInputBlock } from './session-screens';
 import { ClaudeQueue } from './claude-queue';
 import { ClaudeQueueStore } from './claude-queue-store';
 import { retainQueueAttachments } from './claude-queue-attachments';
@@ -15,6 +16,8 @@ interface Options {
  bridge: ClaudeControlBridge;
  manager: Pick<SessionManager, 'getSession' | 'sendInput' | 'queueWorkerCommand'>;
  inputSafe(sessionId: string): boolean;
+ /** Why inputSafe is false (SessionScreens.queueInputBlock), for Send now's note; absent = say nothing. */
+ inputBlock?(sessionId: string): QueueInputBlock | null;
  waitInputSafe?(sessionId: string, deadline: number): Promise<boolean>;
  working(sessionId: string): boolean;
  publish(sessionId: string, body: SessionLiveBody): void;
@@ -22,6 +25,14 @@ interface Options {
 }
 /** How long an idle send may stay out of the strip while it is being delivered (its bubble is already drawn). */
 const IMMEDIATE_HIDE_MS = 8000;
+/** What a queued message says after Send now could not send it yet, by the reason the screen check gave. */
+const SEND_NOW_WAITING: Record<QueueInputBlock | 'none', string | undefined> = {
+ none: undefined,
+ updating: undefined,
+ 'no-terminal': 'Waiting for Claude Code to be ready.',
+ question: 'Waiting for your answer to the question in this chat.',
+ screen: 'Waiting — something in the terminal has the keyboard. Open the terminal to see it.',
+};
 /** Recent confirmed sends whose transcript identity is republished with every queue snapshot. */
 const BOUND_SENDS = 16;
 /** `seenConversationId`: the conversation the helper last reported, kept even when linking it failed, so the link can be retried. */
@@ -245,6 +256,10 @@ export class ClaudeQueueRuntime {
     if(this.options.working(id))this.options.manager.sendInput(id,'\x1b');
     await cleanup;
     await queue.prioritize(root,action.itemId,b.incarnation,false);
+    // WHY (card #278): Send now used to ask again silently; when the same check refused, nothing on screen changed and the
+    // button looked broken. Say on that message why it still waits. A passing reason (bytes mid-parse) says nothing.
+    const why = SEND_NOW_WAITING[this.options.inputBlock?.(id) ?? 'none'];
+    if (why) { this.issues.set(id,{ message: why, queueItemId: action.itemId }); this.publish(id,queue.snapshot(root)); }
     transport.requestIdle(id); return { status: 'done' };
    }
    if (action.kind === 'clear') {
