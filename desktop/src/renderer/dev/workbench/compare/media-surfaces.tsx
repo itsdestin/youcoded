@@ -840,6 +840,24 @@ function VideoDone3() {
   );
 }
 
+/** Video, round 4. WHY: Destin wanted round 2's SMALL finished card ("frame beside the facts"), not the
+ *  full-width frame; round 3 misread his pick. Small first frame at the left, name and details in the middle,
+ *  and the same two icon buttons every other made-thing box carries, in place of the pill Open button. */
+function VideoDone4() {
+  return (
+    <NativeBox>
+      <div className="flex items-center gap-3 p-2">
+        <img src={frameData} alt="First frame of the video" className="h-16 w-28 shrink-0 rounded-md object-cover" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-fg-2 truncate">ocean-loop.mp4</p>
+          <p className="text-xs text-fg-muted truncate">0:08 · Veo 4 · $0.80</p>
+        </div>
+        <div className="flex shrink-0 items-center"><Actions /></div>
+      </div>
+    </NativeBox>
+  );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════════════
 export const MEDIA_SURFACES: CompareSurface[] = [
   {
@@ -945,6 +963,11 @@ export const MEDIA_SURFACES: CompareSurface[] = [
         { id: 'making-then-done', label: 'Making, then finished', note: 'Making: header, Stop and a bar. Finished: info line with Open and View in folder icon buttons, the first frame full width under it.', render: () => (
           <div><Cap>Making it</Cap><Reply text="Making your video now."><VideoMaking3 /></Reply>
           <Cap>Finished</Cap><Reply text="Your video is ready."><VideoDone3 /></Reply></div>) },
+      ] },
+      { n: 4, basis: 'Round 2: making = stacked, finished = side (the small card); Open and View in folder as the shared icon buttons.', candidates: [
+        { id: 'making-then-small', label: 'Making, then the small finished card', note: 'Making: header, Stop and a bar. Finished: small first frame, name and details, the two icon buttons at the right.', render: () => (
+          <div><Cap>Making it</Cap><Reply text="Making your video now."><VideoMaking3 /></Reply>
+          <Cap>Finished</Cap><Reply text="Your video is ready."><VideoDone4 /></Reply></div>) },
       ] },
     ],
   },
