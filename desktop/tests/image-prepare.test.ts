@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -233,8 +233,8 @@ describe('ImagePreparer', () => {
       age(r.path, 120);
       expect(readImageFromDisk(r.path).ok).toBe(true);
       expect(readImageFromDisk(p).ok).toBe(true);
-      // The touch is asynchronous: wait for it (up to 2 s) rather than a fixed sleep a loaded machine can outrun.
-      for (let i = 0; i < 200 && Date.now() - fs.statSync(r.path).mtimeMs > DAY; i++) await new Promise((res) => setTimeout(res, 10));
+      // The touch is asynchronous: wait for it rather than a fixed sleep a loaded machine can outrun.
+      await vi.waitFor(() => expect(Date.now() - fs.statSync(r.path).mtimeMs).toBeLessThan(DAY));
       expect(await new ImagePreparer(real, resize).sweepStale()).toBe(0);
       expect(fs.existsSync(r.path)).toBe(true);
       expect(Date.now() - fs.statSync(p).mtimeMs).toBeGreaterThan(150 * DAY);   // the user's original keeps its date
