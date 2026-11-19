@@ -88,7 +88,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     checkpointEvery: [32, 32, 8][Math.floor(r() * 3)],
   };
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
-  let closedAckedMax = 0; let rollbackDone = false; let hwFaulted = false;   // a fault hit the high-water record: a rollback on top of it is two faults, and the record can only under-report
+  let closedAckedMax = 0; let rollbackDone = false; let hwFaulted = false; let rollbackActive = false;   // a fault hit the high-water record: a rollback on top of it is two faults, and the record can only under-report
      // acknowledged count at the last CLEAN close (the high-water record is raised there); whether a whole-folder rollback was dealt
   let ack2Max = 0; let faultsSinceClean = 0; let faultNote = ''; let faultOnIndexAfterEviction = false;
   const snaps: Map<string, Buffer>[] = [];
@@ -173,7 +173,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           ev('absent-but-kept');
         }
       }
-      if (head.lines >= ackedMax) exemptFrom = Infinity;
+      if (head.lines >= ackedMax) { exemptFrom = Infinity; rollbackActive = false; }
       try { const v = await s.verify(V(1)); if (!v.ok) { ev('verify-notok'); verifyOk = false; } } catch { ev('verify-threw'); verifyOk = false; }
     } else {
       for (let i = evictedMax; i < ackedMax; i++) if (!present(canon[i], files)) { if (lossy) { ev('destroyed-version-unreadable'); break; } bad('line-absent-everywhere(version-unreadable)', { tag, line: i, state, rotted }); break; }
@@ -319,7 +319,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       if (then.length && snapClosed.get(sn) !== undefined && snapClosed.get(sn)! >= 0) {
         for (const p of here) fs.unlinkSync(path.join(root, p));
         for (const p of then) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), sn.get(p)!); }
-        rotted = true; lossy = true; rollbackDone = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax);
+        rotted = true; lossy = true; rollbackDone = true; rollbackActive = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax);
         log.push(`ROLLBACK to a snapshot with ${then.length} files; closedAckedMax=${closedAckedMax}`); ev('rot'); ev('rollback');
       }
     }
@@ -383,6 +383,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           // a fault in the OTHER chat's own files is not a fault of THIS chat: it must change nothing here, so it does not set the flags that excuse anything
           const otherChat = !legacy && (rel.includes(`versions/${key2}/`) || rel.includes(`aside/${key2}-`));
           if (/^highwater\//.test(rel)) { hwFaulted = true; if (rollbackDone) exemptFrom = 0; }
+          if (rollbackActive && !otherChat) exemptFrom = 0;   // a second fault in the folder that was just rolled back is two faults on top of a lost state: only the first report is promised
           if (!otherChat) { rotted = true; if (destroys && SINGLE_COPY.test(rel)) lossy = true; faultsSinceClean++; faultNote = `${kind} ${rel}`; }
           else ev('fault-in-other-chat');
           const tm = /tails\/([0-9a-f]+)\.(tail|done)$/.exec(rel); if (tm) tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1);
