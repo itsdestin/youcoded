@@ -35,6 +35,9 @@ export function isDiskFull(e: unknown): boolean {
   return code === 'ENOSPC' || code === 'EDQUOT';
 }
 
+/** A valid file that is not THIS version's tail for THIS id. `elsewhere`: it IS a tail for this id, sealed for another version (filed under the wrong version folder). */
+export class ForeignTail extends StoreError { constructor(detail: string, readonly elsewhere: boolean) { super('corrupt', detail); } }
+
 export interface TailFile { fromLine: number; fromHash: string; fromConv: string; headHash: string; headConv: string; lines: Buffer[]; replyEnds: number[]; pending: number | null }
 
 /**
@@ -50,7 +53,7 @@ export function encodeTailFile(key: string, takeoverId: string, header: unknown,
 /** Throws `corrupt` for a damaged file AND for a valid one that is not THIS version's tail for THIS takeover id (nothing is moved or deleted). */
 export function decodeTailFile(b: Buffer, key: string, takeoverId: string): TailFile {
   const r = openEnv(b, { role: 'tail', version: key, id: takeoverId });
-  if (r.kind === 'foreign') throw new StoreError('corrupt', `tail file is not this takeover's tail (${r.why})`);
+  if (r.kind === 'foreign') throw new ForeignTail(`tail file is not this takeover's tail (${r.why})`, r.seen.role === 'tail' && r.seen.id === takeoverId);
   if (r.kind !== 'ok') throw new StoreError('corrupt', 'tail file');
   const p = r.payload;
   if (p.length < 4) throw new StoreError('corrupt', 'tail file header');

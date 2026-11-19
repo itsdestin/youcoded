@@ -115,3 +115,17 @@ export function inventoryRow(rel: string): string | null {
   for (const row of ROOT_ROWS) if (row.pattern.test(r)) return row.id;
   return null;
 }
+
+/**
+ * The FINE row id of a file: for a file inside a version folder (or a moved aside copy) the id of its version row ('parked', 'tails', 'marks.bin', ...), not just 'versions'.
+ * WHY (review 5): the generic sibling-swap test walks this to swap in a valid sibling of the SAME kind for every kind the scenario wrote, so a future file kind cannot skip the test.
+ */
+export function inventoryKind(rel: string): string | null {
+  const r = rel.split('\\').join('/');
+  const m = /^(?:versions\/[0-9a-f]{2,128}|aside\/[0-9a-f]+-q?\d+)\/(.+)$/.exec(r);
+  if (m) { for (const row of VERSION_ROWS) if (row.pattern.test(m[1])) return row.id; return null; }
+  return inventoryRow(r);
+}
+
+/** Every row id (version rows and root rows) a file can have. */
+export const ALL_KIND_IDS: string[] = [...VERSION_ROWS.map((r) => r.id), ...ROOT_ROWS.filter((r) => r.id !== 'versions' && r.id !== 'aside').map((r) => r.id)];

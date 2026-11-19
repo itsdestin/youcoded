@@ -67,7 +67,7 @@ import { MARKS_FILE, readMarksState, readPartial, readDamaged, setMarks } from '
 import { sealEnv, openEnv } from './envelope';
 import { HW_EVERY, readHw, raiseHw, lowerHw, rolledBack } from './highwater';
 import { Extras, bytesUnder } from './extras';
-import { asLine, decodeTailFile, encodeTailFile, isDiskFull, validateProofShape, type TailFile } from './storeutil';
+import { asLine, decodeTailFile, encodeTailFile, isDiskFull, validateProofShape, ForeignTail, type TailFile } from './storeutil';
 import { chainStep, crc32, defaultChainSeeds, hex, isHash64, unhex, versionTag, type ChainSeedFn, type ChainSeeds, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, frameLines, headerOk, headerStamp, indexHeader, recPos, unframeLines, type Rec } from './records';
@@ -1338,8 +1338,8 @@ export class ChatStore {
         const keys = only ? [only] : await this.fs.readdir(nodePath.join(this.root, 'versions'));
         for (const key of keys) {
           let t: TailFile | null;
-          // asked of ONE version: a file that is not that version's tail for this id throws `corrupt`. Looking across versions, a tail sealed for another version is simply not this version's: skipped
-          try { t = await this.readTailFile(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.tail`), key, takeoverId); } catch (e) { if (only || !(e instanceof StoreError && e.message.includes("not this takeover's tail"))) throw e; continue; }
+          // asked of ONE version: a file that is not that version's tail for this id throws `corrupt`. Looking across versions, a tail for THIS id sealed for another version is found under its own folder, so it is skipped here; any other file under this name is an overwritten tail and throws
+          try { t = await this.readTailFile(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.tail`), key, takeoverId); } catch (e) { if (only || !(e instanceof ForeignTail && e.elsewhere)) throw e; continue; }
           if (!t && await this.fs.exists(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.done`))) throw new StoreError('corrupt', 'the saved tail file is missing although the cut was marked done');
           if (t) return { version: unhex(key), fromLine: t.fromLine, fromHash: t.fromHash, fromConversationHash: t.fromConv, headHash: t.headHash, headConversationHash: t.headConv, lines: t.lines, replyEnds: t.replyEnds, pendingReplyEnd: t.pending };
         }

@@ -19,7 +19,7 @@ export interface EnvId { role: string; version: string; id?: string | number | n
 export type EnvRead =
   | { kind: 'absent' }
   | { kind: 'bad' }
-  | { kind: 'foreign'; why: string }
+  | { kind: 'foreign'; why: string; /** what the file says it is (inside its checksum), for callers that need to tell a misplaced file from an overwritten one */ seen: { role: string; version: string; id: string | number | null } }
   | { kind: 'ok'; payload: Buffer; fresh: number; id: string | number | null };
 
 /** Seal `payload` with the identity `id` inside the checksum. */
@@ -49,9 +49,10 @@ export function openEnv(b: Buffer | null, want: { role: string; version: string;
   let h: { r?: unknown; v?: unknown; i?: unknown; f?: unknown };
   try { h = JSON.parse(b.subarray(8, 8 + hl).toString('utf8')); } catch { return { kind: 'bad' }; }
   if (!h || typeof h !== 'object' || typeof h.r !== 'string' || typeof h.v !== 'string' || !Number.isSafeInteger(h.f)) return { kind: 'bad' };
-  if (h.r !== want.role) return { kind: 'foreign', why: `role ${h.r}, expected ${want.role}` };
-  if (h.v !== want.version) return { kind: 'foreign', why: 'belongs to another version or chat' };
-  if (want.id !== undefined && h.i !== want.id) return { kind: 'foreign', why: `stands for ${String(h.i)}, expected ${String(want.id)}` };
-  if (want.minFresh !== undefined && (h.f as number) < want.minFresh) return { kind: 'foreign', why: `older than ${want.minFresh}` };
+  const seen = { role: h.r, version: h.v, id: (h.i ?? null) as string | number | null };
+  if (h.r !== want.role) return { kind: 'foreign', why: `role ${h.r}, expected ${want.role}`, seen };
+  if (h.v !== want.version) return { kind: 'foreign', why: 'belongs to another version or chat', seen };
+  if (want.id !== undefined && h.i !== want.id) return { kind: 'foreign', why: `stands for ${String(h.i)}, expected ${String(want.id)}`, seen };
+  if (want.minFresh !== undefined && (h.f as number) < want.minFresh) return { kind: 'foreign', why: `older than ${want.minFresh}`, seen };
   return { kind: 'ok', payload: Buffer.from(b.subarray(12 + hl, end)), fresh: h.f as number, id: (h.i ?? null) as string | number | null };
 }

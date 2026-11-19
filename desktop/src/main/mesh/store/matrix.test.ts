@@ -11,12 +11,12 @@ import { createHash } from 'node:crypto';
 import { ChatStore } from './store';
 import { V, tmpRoot } from './testkit';
 import { nl } from './fixtures';
-import { inventoryRow } from './inventory';
+import { inventoryRow, inventoryKind, ALL_KIND_IDS } from './inventory';
 
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const CHAT_A = 'matrix:chat-a'; const CHAT_B = 'matrix:chat-b';
 const mk = (tag: string, n: number): Buffer[] => Array.from({ length: n }, (_, i) => nl({ type: i % 2 ? 'assistant' : 'user', uuid: `${tag}-${i}`, message: { role: i % 2 ? 'assistant' : 'user', id: `${tag}m${i >> 1}`, stop_reason: i % 2 ? 'end_turn' : null, content: `${tag} ${i} ${'y'.repeat(60 + (i % 7) * 9)}` } }));
-const A = mk('a', 48); const B = mk('b', 14);
+const AMAIN = mk('a', 48); const BMAIN = mk('b', 14); const A = AMAIN; const B = BMAIN;
 const vkey = (n: number) => V(n).toString('hex');
 const opts = { chunkBytes: 1000, proofVerifier: () => true };
 const ctl = (chat: string, i: number) => { const body = Buffer.from(`ctl-${chat}-${i}-${'c'.repeat(24)}`); return { id: sha(body), chat, seen: [] as string[], body }; };
@@ -26,7 +26,12 @@ function walk(d: string, out: string[] = []): string[] { for (const e of fs.read
 const snap = (root: string): Map<string, Buffer> => { const m = new Map<string, Buffer>(); for (const p of walk(root)) { const rel = path.relative(root, p); if (!/^LOCK/.test(rel)) m.set(rel, fs.readFileSync(p)); } return m; };
 
 /** Builds a folder that has seen most operations; returns the folder, a snapshot taken half way (the source of "older" copies) and what to expect. */
-async function build(root: string, evict: boolean): Promise<{ older: Map<string, Buffer> }> {
+interface Variant { chatA: string; chatB: string; chatC: string; tag: string }
+const MAIN: Variant = { chatA: CHAT_A, chatB: CHAT_B, chatC: 'matrix:chat-c', tag: '' };
+/** A second folder with the same version ids and tail id but other chats and other lines: the donor of "a valid file of the same kind from ANOTHER chat" (review 5, generic sibling swap). */
+const OTHER: Variant = { chatA: 'matrix:other-a', chatB: 'matrix:other-b', chatC: 'matrix:other-c', tag: 'z' };
+async function build(root: string, evict: boolean, vr: Variant = MAIN): Promise<{ older: Map<string, Buffer> }> {
+  const A = vr.tag ? mk(vr.tag, 48) : AMAIN; const B = vr.tag ? mk(vr.tag + 'b', 14) : BMAIN; const CHAT_A = vr.chatA; const CHAT_B = vr.chatB;
   const s = await ChatStore.open(root, opts);
   await s.registerVersion(V(1), { chatId: CHAT_A, runtime: 'claude-code' });
   await s.registerVersion(V(2), { chatId: CHAT_B, runtime: 'claude-code' });
@@ -50,15 +55,24 @@ async function build(root: string, evict: boolean): Promise<{ older: Map<string,
   // a rebuild (replaced-index/), and a third version set aside (aside/ with COMPLETE)
   const ix = path.join(root, 'versions', vkey(2), 'index.bin'); const ib = fs.readFileSync(ix); ib[36 + 116 * 3 + 5] ^= 1; fs.writeFileSync(ix, ib);
   const s3 = await ChatStore.open(root, opts);
-  await s3.registerVersion(V(3), { chatId: 'matrix:chat-c', runtime: 'claude-code' }); await s3.append(V(3), 0, 0, mk('c', 4)); await s3.setAsideDamaged(V(3)); await s3.append(V(3), 0, 0, mk('c', 4));
+  await s3.registerVersion(V(3), { chatId: vr.chatC, runtime: 'claude-code' }); await s3.append(V(3), 0, 0, mk('c' + vr.tag, 4)); await s3.setAsideDamaged(V(3)); await s3.append(V(3), 0, 0, mk('c' + vr.tag, 4));
   await s3.registerVersion(V(1), { chatId: CHAT_A, runtime: 'claude-code' }); await s3.registerVersion(V(2), { chatId: CHAT_B, runtime: 'claude-code' });
   await s3.head(V(2));
   await s3.close();
+  // a fourth version whose checkpoint comes back OLDER than a set-aside: the rebuild reports the lines it claimed as set aside, which writes marks.bin
+  const s4 = await ChatStore.open(root, opts); await s4.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s4.append(V(4), 0, 0, mk('d' + vr.tag, vr.tag ? 14 : 12)); await s4.close();
+  const ckp = path.join(root, 'versions', vkey(4), 'checkpoint.bin'); const ckBefore = fs.readFileSync(ckp);
+  const s5 = await ChatStore.open(root, opts); await s5.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s5.setAsideTail('feedfacecafe', V(4), vr.tag ? 5 : 6); await s5.close();
+  fs.writeFileSync(ckp, ckBefore);
+  const s6 = await ChatStore.open(root, opts); await s6.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s6.head(V(4)); await s6.close();
   return { older };
 }
 
-type Fault = 'rotted' | 'older' | 'foreign' | 'missing' | 'truncated';
-const FAULTS: Fault[] = ['rotted', 'older', 'foreign', 'missing', 'truncated'];
+// Review 5 added two faults, both "a valid file of the SAME KIND that is not this file" (the shape that hid F1 and F2):
+//   sibling     another file of the same inventory kind from the same folder or another version of it (another position, another id, another chunk)
+//   otherbuild  a file of the same kind from a differently-seeded folder (another chat, other lines)
+type Fault = 'rotted' | 'older' | 'foreign' | 'missing' | 'truncated' | 'sibling' | 'otherbuild';
+const FAULTS: Fault[] = ['rotted', 'older', 'foreign', 'missing', 'truncated', 'sibling', 'otherbuild'];
 
 function boundaries(rel: string, b: Buffer): number[] {
   const out: number[] = [];
@@ -81,8 +95,19 @@ function donor(root: string, rel: string): string | null {
   return null;
 }
 
-async function applyFault(root: string, rel: string, kind: Fault, older: Map<string, Buffer>): Promise<boolean> {
+/** A donor of the same fine inventory kind (inventory.ts inventoryKind): never the file itself, never a file with identical bytes (that would change nothing). */
+function sameKindDonor(root: string, donorRoot: string, rel: string, own: Buffer, kind: 'sibling' | 'otherbuild'): string | null {
+  const k = inventoryKind(rel);
+  const all = walk(donorRoot).map((p) => path.relative(donorRoot, p)).filter((r) => !/^LOCK/.test(r) && inventoryKind(r) === k && (kind === 'otherbuild' || r !== rel)).sort();
+  // prefer the one right after this file in sorted order (deterministic, and a different position/id for numbered kinds)
+  const ordered = [...all.filter((r) => r > rel), ...all.filter((r) => r < rel), ...all.filter((r) => r === rel)];
+  for (const r of ordered) { const b = fs.readFileSync(path.join(donorRoot, r)); if (!b.equals(own)) return path.join(donorRoot, r); }
+  return null;
+}
+
+async function applyFault(root: string, rel: string, kind: Fault, older: Map<string, Buffer>, other: string): Promise<boolean> {
   const f = path.join(root, rel); const b = fs.readFileSync(f);
+  if (kind === 'sibling' || kind === 'otherbuild') { const d = sameKindDonor(kind === 'sibling' ? root : other, kind === 'sibling' ? root : other, rel, b, kind); if (!d) return false; fs.copyFileSync(d, f); return true; }
   if (kind === 'rotted') { if (!b.length) return false; b[Math.floor(b.length / 2)] ^= 0x10; fs.writeFileSync(f, b); return true; }
   if (kind === 'missing') { fs.unlinkSync(f); return true; }
   if (kind === 'truncated') { const bs = boundaries(rel, b); if (!bs.length) return false; fs.truncateSync(f, bs[Math.floor(bs.length / 2)]); return true; }
@@ -105,6 +130,8 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
     const t = await tmpRoot('matrix-'); const golden = path.join(t.dir, 'golden');
     fs.mkdirSync(golden);
     const { older } = await build(golden, evict);
+    const otherRoot = path.join(t.dir, 'other-build'); fs.mkdirSync(otherRoot); await build(otherRoot, evict, OTHER);
+    const swapped = new Map<string, number>();
     const files = walk(golden).map((p) => path.relative(golden, p)).filter((r) => !/^LOCK/.test(r));
     // every file the scenario wrote is in the inventory (and the scenario reached the interesting ones)
     for (const f of files) expect(inventoryRow(f), f).not.toBeNull();
@@ -115,7 +142,8 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
       for (const kind of FAULTS) {
         const work = path.join(t.dir, `w${n++}`);
         fs.cpSync(golden, work, { recursive: true });
-        if (!(await applyFault(work, rel, kind, older))) { fs.rmSync(work, { recursive: true, force: true }); continue; }
+        if (!(await applyFault(work, rel, kind, older, otherRoot))) { fs.rmSync(work, { recursive: true, force: true }); continue; }
+        if (kind === 'sibling' || kind === 'otherbuild') swapped.set(inventoryKind(rel)!, (swapped.get(inventoryKind(rel)!) ?? 0) + 1);
         runs++;
         const where = `${kind} ${rel}`;
         const onlyCopy = ONLY_COPY.test(rel) && kind !== 'older' ? true : ONLY_COPY.test(rel);
@@ -166,6 +194,28 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
       }
     }
     expect(runs).toBeGreaterThan(files.length * 2);          // most (file, fault) pairs apply
+    // THE GENERIC GUARD (review 5): every file kind the inventory knows either got a valid same-kind file swapped in (and survived the checks above), or is named here with the reason it cannot.
+    // A new file kind therefore cannot skip this test: it has a row in inventory.ts, so it lands in one of the two lists or this fails.
+    const present = new Set(files.map((f) => inventoryKind(f)!));
+    const NO_DONOR: Record<string, string> = {
+      'meta.copy': 'identical bytes to meta.json by design (one registration), so no distinct sibling exists; meta.json/meta.copy swaps across versions are the otherbuild/foreign cases',
+      'extras-manifest': 'one manifest per root: its sibling is the other root\'s manifest (otherbuild) which is applied; kept for completeness',
+      FORMAT: 'a constant, identical in every root',
+      done: 'an existence-only marker whose bytes are identical in every instance, so no distinct sibling exists',
+    };
+    const NOT_WRITTEN_BY_SCENARIO: Record<string, string> = {
+      'meta.bad': 'created only after a damaged meta copy was healed', 'index.rebuild': 'scratch, exists only mid-rebuild', 'marks.bad': 'created only after an unreadable marks file was replaced',
+      'aside.intent': 'exists only while a set-aside is in flight', 'intent.bad': 'created only for a foreign note', tmp: 'swept at open', 'FORMAT.bad': 'created only after a damaged FORMAT', LOCK: 'excluded: the lock is the process\'s own',
+      'extras-tmp': 'swept at open', 'control-tmp': 'swept at open', 'control-kept': 'created only after a torn control write', 'aside-complete': 'covered through aside/ files',
+      rejected: 'created only when a park was rejected', 'extras-bad': 'created only after a rotted extra was read',
+      torn: 'created only after a torn write', 'control-parked': 'a parked control entry only exists while its cause is missing',
+    };
+    const missing: string[] = [];
+    for (const id of ALL_KIND_IDS) {
+      if (present.has(id)) { if (!swapped.get(id) && !NO_DONOR[id]) missing.push(`${id}: the scenario wrote it but no same-kind swap was applied`); }
+      else if (!NOT_WRITTEN_BY_SCENARIO[id] && !NO_DONOR[id]) missing.push(`${id}: not in the scenario and not named as exempt`);
+    }
+    expect(missing).toEqual([]);
     expect(problems).toEqual([]);
     await t.cleanup();
   }, 600_000);
