@@ -1,0 +1,6 @@
+{"type":"user_message","text":"Can you summarize the meeting notes in three bullets?"}
+{"type":"assistant_text","text":"- The launch moves to March 3.\n- Priya owns the pricing page.\n- Next check-in is Friday."}
+{"type":"turn_complete"}
+{"type":"user_message","text":"Now draft the follow-up email to the team."}
+{"type":"transcript_event","event":{"type":"assistant-text","data":{"text":"API Error: Unable to connect to API (ConnectionRefused)","model":"<synthetic>","apiError":"server_error"}}}
+{"type":"turn_complete"}

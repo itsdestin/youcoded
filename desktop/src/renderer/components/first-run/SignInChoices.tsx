@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button } from '../ui';
+import { Button, ErrorState } from '../ui';
 import { ProviderIcon } from '../ProviderIcon';
 import { deviceNoun } from '../../platform';
 
@@ -113,7 +113,14 @@ function Facts({ facts }: { facts: Group['facts'] }) {
 
 // WHY the Button primitive with brand classes: every control goes through its primitive;
 // `brand-way` (brand.css) gives the white, logo-led sign-in button its look.
-function Ways({ ways, onPick }: { ways: Group['ways']; onPick: (w: WayIn) => void }) {
+function Ways({ ways, onPick, offline, lastWay }: { ways: Group['ways']; onPick: (w: WayIn) => void; offline?: boolean; lastWay?: WayIn | null }) {
+  // Card #236 (review R-16): with no internet the login buttons are no use, so the notice
+  // takes their place — the guide's "a failed action replaces the buttons it came from".
+  // Try again repeats the sign-in that was pressed.
+  if (offline) {
+    const again = ways.find((w) => w.id === lastWay)?.id ?? ways[0].id;
+    return <ErrorState message="No internet connection. Connect, then try again." onRetry={() => onPick(again)} />;
+  }
   return (
     <div className="flex flex-col gap-2 max-sm:gap-1.5">
       {ways.map((w) => (
@@ -139,7 +146,7 @@ function Head({ g, big = false }: { g: Group; big?: boolean }) {
 }
 
 /** Pick a kind first, then its facts and buttons on a second page. */
-function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) => void; initial: Group['id'] | null }) {
+function Guided({ list, onPick, initial, offline, lastWay }: { list: Group[]; onPick: (w: WayIn) => void; initial: Group['id'] | null; offline?: boolean; lastWay?: WayIn | null }) {
   const [open, setOpen] = useState<Group['id'] | null>(initial);
   const g = list.find((x) => x.id === open);
   if (g) {
@@ -148,7 +155,7 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
         <button type="button" onClick={() => setOpen(null)} className="self-start text-sm text-fg-dim hover:text-fg transition-colors">‹ All options</button>
         <Head g={g} big />
         <Facts facts={g.facts} />
-        <Ways ways={g.ways} onPick={onPick} />
+        <Ways ways={g.ways} onPick={onPick} offline={offline} lastWay={lastWay} />
       </section>
     );
   }
@@ -172,7 +179,7 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
   );
 }
 
-export function SignInChoices({ chatGpt, onPick }: { chatGpt: boolean; onPick: (w: WayIn) => void }) {
+export function SignInChoices({ chatGpt, onPick, offline, lastWay }: { chatGpt: boolean; onPick: (w: WayIn) => void; offline?: boolean; lastWay?: WayIn | null }) {
   // WHY the local-model row is dropped on a phone: the phone cannot run a model (the old page spun on "Checking this
   // computer…" forever), so offering it only leads to a dead end (2026-11-01 test, #11). A phone paired to a computer
   // is not 'phone' here, so that case is unchanged.
@@ -180,5 +187,5 @@ export function SignInChoices({ chatGpt, onPick }: { chatGpt: boolean; onPick: (
   // app's address never carries it, so it always opens on the three rows.
   const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
   const list = groups(chatGpt).filter((g) => !(g.id === 'local' && deviceNoun() === 'phone'));
-  return <Guided list={list} onPick={onPick} initial={pick} />;
+  return <Guided list={list} onPick={onPick} initial={pick} offline={offline} lastWay={lastWay} />;
 }

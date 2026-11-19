@@ -126,6 +126,8 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         timestamp,
         // Per-message model, so the reducer can stamp turn.model on a turn's first text.
         model: ev.data.model,
+        // Claude Code's own error label (card #236) — the chat draws a sign-in card from it.
+        apiError: ev.data.apiError,
         // Native runtime: per-token delta id; the same partId merges into the last segment.
         partId: ev.data.partId,
         // The stamp routes a subagent's text into the parent's Agent card instead

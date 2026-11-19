@@ -217,7 +217,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     onBrowserDone: returnToApp,
     acceptKey: async (key) => {
       const check = await providerRegistry.testConnection('openrouter', key);
-      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);
+      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key, 'browser');
       return check;
     },
   });
@@ -290,6 +290,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // private like the continuation store: userData, never NativeHome.
   // (Resize workers are per-job; nothing to stop at quit.)
   const imagePreparer = new ImagePreparer(path.join(userDataDir, 'image-cache'), createResizeService().resize);
+  // WHY a startup sweep (card #66 f): copies were never deleted, up to 10 MB per provider switch.
+  void imagePreparer.sweepStale().catch(() => { /* best-effort cleanup */ });
   const nativeHost = new NativeSessionHost(
     new SessionStore(nativeHome),
     // Pass the per-turn opts (e.g. serialToolCalls for small local models) straight through.

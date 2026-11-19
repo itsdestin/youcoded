@@ -1333,6 +1333,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     chatgptPin === 'official' ? { state: 'signed-in', email: 'destin@example.com', plan: '', usage: null, route: 'official' }
     : chatgptPin === 'reauth' ? { state: 'signed-out', reauth: true }
     : chatgptPin === 'signed-out' ? { state: 'signed-out' }
+    : chatgptPin === 'expired' ? { state: 'signed-out', expired: true } // card #236
     : chatgptPin === 'waiting' ? { state: 'waiting' }
     : chatgptPin === 'blocked' ? { state: 'blocked', email: 'destin@example.com', reason: 'Your workspace admin has turned off Codex for this account.' }
     : chatgptPin === 'free' ? CHATGPT_SIGNED_IN_FREE
@@ -1410,8 +1411,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     : claudeCodePin === 'not-installed' ? { state: 'not-installed' }
     : claudeCodePin === 'unknown' ? { state: 'unknown' }
     : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
-    : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
+    // Card #236: a sign-in that has run out (the CLI still says loggedIn; replies fail).
+    : claudeCodePin === 'expired' ? { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false, expiresAt: '2026-11-16T08:29:49.037Z', expired: true }
+    : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false, expiresAt: '2026-11-23T08:29:49.037Z' };
+  // `?signIn=waiting` pins a started sign-in on "finish in your browser"; unpinned it
+  // finishes after 2.5 s, like the ChatGPT and OpenRouter fakes above.
+  const signInPin = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('signIn') : null;
+  let claudeSignInTimer: ReturnType<typeof setTimeout> | null = null;
   const claudeCode = { status: async () => claudeCodeStatus,
+    // Card #236 (MOCK_ONLY): the first-launch browser sign-in, offered again from the chat and Settings.
+    signIn: async () => {
+      if (claudeSignInTimer) clearTimeout(claudeSignInTimer);
+      if (signInPin !== 'waiting') {
+        claudeSignInTimer = setTimeout(() => { claudeCodeStatus = { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false, expiresAt: '2026-12-17T08:29:49.037Z' }; }, 2500);
+      }
+      return true;
+    },
+    cancelSignIn: async () => { if (claudeSignInTimer) clearTimeout(claudeSignInTimer); claudeSignInTimer = null; return true; },
     // First-run local models (F-5): a short wait, then installed but signed out —
     // what a real install leaves behind before the Claude sign-in.
     install: async () => {
@@ -1419,6 +1435,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       claudeCodeStatus = { state: 'signed-out' };
       return true;
     },
+  };
+
+  // Card #236 (MOCK_ONLY): the app's own connection check. `?online=0` = offline.
+  const network = {
+    check: async () => ({ online: typeof location === 'undefined' || new URLSearchParams(location.search).get('online') !== '0' }),
   };
 
   // Web search backends: two rows, neither keyed, as a fresh install has them.
@@ -3440,6 +3461,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
         : []),
       overallProgress: setupChecklist?.overallProgress ?? 100,
+      // Card #236: `?online=0` on the sign-in step = a sign-in button pressed with no internet.
+      ...(firstRunStep === 'AUTHENTICATE' && firstRunParams.get('online') === '0' ? { lastError: 'No internet connection. Connect, then try again.', lastErrorOffline: true } : {}),
       ...(prereqsPin === 'failed' ? { lastError: 'Error: HTTP 503 downloading https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0-64-bit.7z.exe' } : {}),
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
@@ -4170,6 +4193,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         return { ok: true as const, value: { id: v.id, hidden: v.hidden } };
       },
     },
+    // WHY only behind ?pastedPicture=1 (card #134): the phone-paste review screen needs a picture to land in the message box,
+    // and the workbench has no clipboard or file picker. Both routes answer with the same practice picture path.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('pastedPicture') === '1' ? { dialog: {
+      openFile: async () => ['/home/you/uploads/pasted-image.png'],
+      openFolder: async () => null, openSound: async () => null, readTranscriptMeta: async () => null,
+      saveClipboardImage: async () => '/home/you/uploads/pasted-image.png',
+    } } : {}),
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its
@@ -4180,7 +4210,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       store.getState().sessions.forEach((x: any, i: number) => { perSession[x.id] = { status: colours[i] ?? 'gray' }; });
       return { anyNeedsAttention: true, perSession };
     } } } : {}),
-    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
+    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, network, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),
     office: createOfficeMock(activeScenario === 'empty'),
@@ -4475,11 +4505,14 @@ function createPagesMock(scenario: string): PagesBridge {
         const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
         if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
           w.__shootInflight += 1;
-          w.__shootHoldUntil = performance.now() + 8000;
+          // WHY 30 s, not 8 (2026-11-18, load-flaky-tests): at load 58-149 the house's first answer took longer than 8 s, the hold
+          // gave up and `page-home` was shot "Loading your rooms…", tripping the look-alike check. The hold ends the moment the
+          // answer lands (homeFirstAnswer, +250 ms), so the longer cap costs nothing on a quiet machine (same reasoning as below).
+          w.__shootHoldUntil = performance.now() + 30000;
           let held = true;
           const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
           homeFirstAnswer = () => { setTimeout(release, 250); };
-          setTimeout(release, 8000);
+          setTimeout(release, 30000);
         }
       }
       // WHY (2026-10-21, `shoot --check` failed once under heavy load, then passed): the `#menu-open` screen opens the

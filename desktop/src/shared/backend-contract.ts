@@ -573,13 +573,20 @@ export const IPC = {
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   // ---- Claude Code's own sign-in, read LIVE (2026-09-09) ----
   // → ClaudeAccountStatus (shared/claude-account-types.ts). Payload
-  // `{refresh?: true}` drops the cache first. There is no sign-in/sign-out verb
-  // here on purpose: Claude Code owns its login, and the app has never had a
-  // way to clear it (the card says to use /logout in a terminal).
+  // `{refresh?: true}` drops the cache first. There is no sign-OUT verb on purpose:
+  // Claude Code owns its login and the app cannot clear it (the card says to use
+  // /logout in a terminal). Sign-IN exists since card #236: CLAUDE_CODE_SIGN_IN below.
   CLAUDE_CODE_STATUS: 'claude-code:status',
   // Install Claude Code on demand (first-run local models, F-5): setup no longer
   // installs it for everyone, so Settings offers it. Desktop and remote desktop only.
   CLAUDE_CODE_INSTALL: 'claude-code:install',
+  // Sign in to Claude Code again (card #236): opens the browser through `claude auth login`
+  // and answers true once it is open (a THROWN sentence when no link appeared); cancel stops it.
+  // The end of the sign-in is read from CLAUDE_CODE_STATUS, like the other providers.
+  CLAUDE_CODE_SIGN_IN: 'claude-code:sign-in',
+  CLAUDE_CODE_CANCEL_SIGN_IN: 'claude-code:cancel-sign-in',
+  // The app's own "is this computer online?" check (card #236) -> { online }.
+  NETWORK_CHECK: 'network:check',
   // ---- WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades ----
   // list = the fixed upgradeable-backend rows (hasKey flags); set/remove-key
   // manage the encrypted key; test = never-throws connectivity check.
@@ -1180,10 +1187,12 @@ interface ClaudeApi {
   on: BridgeListeners;
   dialog: {
     openFile: () => Promise<string[]>;
+    /** Desktop only: a dropped file's on-disk path (Electron removed File.path). Absent on remote/Android. */
+    pathForFile?: (file: File) => string;
     openFolder: () => Promise<string | null>;
     openSound: () => Promise<string | null>;
     readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;
-    saveClipboardImage: () => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = phone can't paste (SILENT, owner to decide)
+    saveClipboardImage: (pasted?: File) => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = nothing to attach (SILENT). `pasted` = the picture from the paste event: only remote/phone uses it (desktop reads its own clipboard)
   };
   shell: {
     openChangelog: () => Promise<void>;

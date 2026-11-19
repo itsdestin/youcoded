@@ -8,6 +8,13 @@ import MarkdownContent from './MarkdownContent';
 import { MarkdownView } from './artifact-views/MarkdownView';
 import { PROGRESSIVE_BATCH_CHARS, PROGRESSIVE_FIRST_CHARS, PROGRESSIVE_MIN_CHARS, canDrawInSlices, nextSliceEnd, sliceCuts } from './markdown-blocks';
 import { MARKDOWN_STREAM_CORPUS } from '../../../tests/helpers/markdown-stream-corpus';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from '../../../tests/helpers/cpu-budget';
+
+// WHY CPU budget, not wall time (2026-11-18): every test here is pure CPU work (whole big documents drawn and compared,
+// no timers or I/O). The 30 s wall limit (and a 120 s one on the heaviest test) measured the machine: at load 58-149
+// they failed while passing alone in seconds. cpu-budget.ts says why; a wide wall limit stays only against a hang.
+vi.setConfig({ testTimeout: CPU_BOUND_WALL_LIMIT_MS });
+budgetCpuPerTest();
 
 // Every source handed to react-markdown, to bound the work of each slice.
 const renders = vi.hoisted(() => [] as string[]);
@@ -58,7 +65,7 @@ describe('progressive markdown draw', () => {
     // Footnotes number across the whole text, so they are drawn whole (tested below); the rest are cut into slices.
     const joined = MARKDOWN_STREAM_CORPUS.filter((c) => !c.md.includes('[^')).map((c) => c.md).join('\n\n');
     check('all together', big(joined, PROGRESSIVE_FIRST_CHARS * 2 + 2000));
-  }, 120_000);
+  });
 
   it('keeps link definitions that come after their use, and footnotes', () => {
     const refs = big('See [the docs][d] and [again][e].\n\n[d]: https://example.com/docs\n\nMore prose here.\n\n[e]: https://example.com/e\n', 36_000);

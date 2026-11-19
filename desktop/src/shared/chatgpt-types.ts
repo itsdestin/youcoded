@@ -46,7 +46,9 @@ export type ChatGptRouteName = 'codex' | 'official';
 export type ChatGptAccountStatus =
   /** `reauth`: a sign-in exists but was made on the other route, so it cannot
    *  be used — the card asks for one fresh sign-in (questions deck Q-2). */
-  | { state: 'signed-out'; reauth?: boolean }
+  /** `expired` (card #236): the app deleted a sign-in OpenAI refused to renew, so the
+   *  card can say "expired" instead of "Not signed in" and offer Sign in again. */
+  | { state: 'signed-out'; reauth?: boolean; expired?: boolean }
   /** The browser tab is open; we are waiting for OpenAI's callback. */
   | { state: 'waiting' }
   | {

@@ -818,6 +818,107 @@ describe('docx-comments write — delete (whole thread) leaves a document Word o
   });
 });
 
+// Review M-4a: a reply written by real Word carries its OWN range/reference
+// marks in document.xml. Deleting the thread must remove those too, or Word is
+// left with reference marks pointing at no comment.
+async function buildWordReplyAnchorDocx(): Promise<Buffer> {
+  const W15 = 'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"';
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/></Types>`
+  );
+  zip.file(
+    '_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
+  );
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>`
+  );
+  const ref = (id: number) => `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${id}"/></w:r>`;
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} ${W14}><w:body><w:p w14:paraId="E0000001"><w:commentRangeStart w:id="0"/><w:commentRangeStart w:id="1"/><w:r><w:t xml:space="preserve">Anchored text.</w:t></w:r><w:commentRangeEnd w:id="0"/>${ref(0)}<w:commentRangeEnd w:id="1"/>${ref(1)}</w:p><w:p w14:paraId="E0000002"><w:r><w:t xml:space="preserve">Other text.</w:t></w:r></w:p></w:body></w:document>`
+  );
+  zip.file(
+    'word/comments.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W} ${W14}><w:comment w:id="0" w:author="Priya Shah" w:date="2026-09-26T09:00:00Z"><w:p w14:paraId="F0000001"><w:r><w:t>Root.</w:t></w:r></w:p></w:comment><w:comment w:id="1" w:author="Sam Lee" w:date="2026-09-26T09:05:00Z"><w:p w14:paraId="F0000002"><w:r><w:t>Reply.</w:t></w:r></w:p></w:comment></w:comments>`
+  );
+  zip.file(
+    'word/commentsExtended.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx ${W15}><w15:commentEx w15:paraId="F0000001" w15:done="0"/><w15:commentEx w15:paraId="F0000002" w15:paraIdParent="F0000001" w15:done="0"/></w15:commentsEx>`
+  );
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+describe('docx-comments write — M-4a: deleting a thread also removes Word-made replies\' own document anchors', () => {
+  it('leaves no range/reference marks for the reply id in document.xml', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-replyanchor-'));
+    try {
+      const target = join(dir, 'reply-anchor.docx');
+      await writeFile(target, await buildWordReplyAnchorDocx());
+      const result = await deleteDocxComment({ absolutePath: target, path: 'reply-anchor.docx', id: 'w-0' });
+      expect(result).toEqual({ ok: true });
+      const zip = await JSZip.loadAsync(await readFile(target));
+      const documentXml = await zip.file('word/document.xml')!.async('string');
+      expect(documentXml).not.toMatch(/commentRangeStart|commentRangeEnd|commentReference/);
+      expect(documentXml).toContain('Anchored text.'); // the text itself survives
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('docx-comments write — deleting ONE Word-made reply removes its own document anchors', () => {
+  it('leaves no marks for the reply id in document.xml, keeps the root\'s marks and the text', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-onereplyanchor-'));
+    try {
+      const target = join(dir, 'reply-anchor.docx');
+      await writeFile(target, await buildWordReplyAnchorDocx());
+      const before = await readDocxComments(await readFile(target), 'reply-anchor.docx');
+      const replyId = before.ok ? before.comments.find((c) => c.id === 'w-0')?.replies[0]?.id : undefined;
+      expect(replyId).toBeDefined();
+      const result = await deleteDocxReply({ absolutePath: target, path: 'reply-anchor.docx', id: 'w-0', replyId: replyId! });
+      expect(result).toEqual({ ok: true });
+      const documentXml = await (await JSZip.loadAsync(await readFile(target))).file('word/document.xml')!.async('string');
+      expect(documentXml).not.toMatch(/w:id="1"/); // the reply's start/end/reference are gone
+      expect(documentXml).toMatch(/commentRangeStart w:id="0"/); // the root's anchor survives
+      expect(documentXml).toMatch(/commentReference w:id="0"/);
+      expect(documentXml).toContain('Anchored text.');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Review M-4b: the write path must use the same real-bytes decompression guard
+// as the read path. A part whose declared size is a lie (tiny) but which
+// inflates past the ceiling must be refused, and the file left untouched.
+describe('docx-comments write — M-4b: bounded decompression on the write path', () => {
+  it('refuses a part that inflates past the ceiling despite a small declared size, leaving the file byte-identical', async () => {
+    const fixture = await JSZip.loadAsync(await loadFixture('launch-brief.docx'));
+    const parts: Record<string, string> = {};
+    for (const name of Object.keys(fixture.files)) {
+      if (fixture.files[name].dir) continue;
+      parts[name] = await fixture.file(name)!.async('string');
+    }
+    // commentsIds.xml is read by the write path only; bomb it.
+    delete parts['word/commentsIds.xml'];
+    const bytes = await buildRealZipBomb(parts, 'word/commentsIds.xml', 201 * 1024 * 1024);
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-writebomb-'));
+    try {
+      const target = join(dir, 'bomb.docx');
+      await writeFile(target, bytes);
+      const result = await deleteDocxComment({ absolutePath: target, path: 'bomb.docx', id: 'w-0' });
+      expect(result).toEqual({ ok: false, error: 'archive-too-large' });
+      expect(await readFile(target)).toEqual(bytes);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, REAL_ZIP_BOMB_BUDGET_MS);
+});
+
 describe('docx-comments write — delete-reply', () => {
   it('removes ONE reply, leaving the root comment (and its document anchor) intact', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {

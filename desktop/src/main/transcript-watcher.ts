@@ -286,6 +286,10 @@ export function parseTranscriptLine(
   // --- Assistant messages ---
   const content = message.content;
   const messageModel: string | undefined = message.model;
+  // WHY (card #236): CC's own error replies ("Login expired · Please run /login") carry a
+  // stable label beside the words. Passed through so the chat can offer the fix as a
+  // button; the words themselves change between CC versions and are never matched.
+  const apiError: string | undefined = parsed.isApiErrorMessage === true && typeof parsed.error === 'string' ? parsed.error : undefined;
   if (Array.isArray(content)) {
     for (const block of content) {
       switch (block.type) {
@@ -297,7 +301,7 @@ export function parseTranscriptLine(
             sessionId,
             uuid,
             timestamp,
-            data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}) },
+            data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}), ...(apiError ? { apiError } : {}) },
           });
           break;
         }
@@ -343,7 +347,7 @@ export function parseTranscriptLine(
         sessionId,
         uuid,
         timestamp,
-        data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}) },
+        data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}), ...(apiError ? { apiError } : {}) },
       });
     }
   }

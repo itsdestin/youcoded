@@ -96,6 +96,7 @@ import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import { InitializingCover } from './components/InitializingCover';
+import { useExpiredSignIns } from './hooks/useExpiredSignIns';
 import { promptShowMeansStarted, composerDisabled, usePendingPromptActive, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import { readBuddyStyle } from './components/BuddyStyleRow';
@@ -2079,7 +2080,12 @@ function AppInner() {
 
       // Reload session list from the new server
       window.claude.session.list().then((list: any[]) => {
-        if (!list || list.length === 0) return;
+        if (!list || list.length === 0) {
+          // WHY: an empty list is still the computer's answer. Returning without deciding left placeDecidedRef false (reset above),
+          // so a phone reconnecting to a computer with no chats open never auto-focused a chat created afterwards.
+          if (isRemoteMode()) decideRemotePlace([]);
+          return;
+        }
         setSessions(list);
         for (const s of list) {
           dispatch({ type: 'SESSION_INIT', sessionId: s.id });
@@ -2206,9 +2212,10 @@ function AppInner() {
 
   // Red dot on the gear icon so the user can't miss a sync failure — from
   // either sync system.
+  const signInExpired = useExpiredSignIns(); // card #236: an expired sign-in lights it too (round 2 Q-dot)
   const settingsDangerBadge = useMemo(
-    () => spacesFailing || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
-    [spacesFailing, statusData.syncWarnings],
+    () => spacesFailing || signInExpired || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
+    [spacesFailing, signInExpired, statusData.syncWarnings],
   );
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {
