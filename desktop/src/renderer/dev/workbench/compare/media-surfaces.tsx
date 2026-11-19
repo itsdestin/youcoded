@@ -981,8 +981,8 @@ function ReadDownloadCard({ state }: { state: 'offer' | 'downloading' }) {
           <p className="text-2xs text-fg-2 leading-snug">
             Right-click a message and it is read out loud. The voice runs on this computer, so your messages never leave it.
           </p>
-          <p className="text-2xs text-fg-2 leading-snug mt-2">Understands English and 24 other European languages.</p>
-          <p className="text-2xs text-fg-muted mt-2">One-time download: about 400 MB.</p>
+          {/* WHY no size or language line: the built-in voice is not chosen yet, so any figure would be invented. The real card states its size. */}
+          <p className="text-2xs text-fg-muted mt-2">One-time download.</p>
           <div className="flex justify-end gap-2 mt-3">
             <Button variant="secondary" size="sm">Not now</Button>
             <Button variant="primary" size="sm">Download</Button>
@@ -992,7 +992,7 @@ function ReadDownloadCard({ state }: { state: 'offer' | 'downloading' }) {
         <>
           <p className="text-xs font-semibold text-fg mb-1.5">Getting the voice ready</p>
           <ProgressBar percent={42} showLabel aria-label="Voice download" />
-          <p className="text-2xs text-fg-muted mt-2">About 400 MB, once. It starts reading when it is done.</p>
+          <p className="text-2xs text-fg-muted mt-2">Once only. It starts reading when it is done.</p>
         </>
       )}
     </OverlayPanel>
@@ -1108,7 +1108,6 @@ function RecordingCard({ words }: { words?: string }) {
   );
 }
 const SAID = 'Please tidy the budget sheet and add a totals row.';
-const DeafNote = () => <p className="px-4 -mt-1 text-right text-2xs text-fg-muted">This model can’t hear sound, so it got your words. The recording stays here.</p>;
 /** One candidate shows the two situations one above the other. */
 function TwoCases({ hears, deaf }: { hears: React.ReactNode; deaf: React.ReactNode }) {
   return <div className="flex flex-col gap-5"><div><Cap>The chat’s model can hear sound</Cap>{hears}</div><div><Cap>The chat’s model can’t hear sound</Cap>{deaf}</div></div>;
@@ -1121,7 +1120,7 @@ function RecordChoiceAfter() {
       hears={<ReadComposer bubbles={<RecordingCard />}>
         <div className="px-3 pb-2"><StatusStrip tone="ok" action={<div className="flex gap-2">{typeBtn}<Button variant="primary" size="sm">Send recording</Button></div>}>Recorded · 0:07</StatusStrip></div>
       </ReadComposer>}
-      deaf={<ReadComposer bubbles={<><RecordingCard words={SAID} /><DeafNote /></>}>
+      deaf={<ReadComposer bubbles={<RecordingCard words={SAID} />}>
         <div className="px-3 pb-2"><StatusStrip tone="ok" detail="This model can’t hear sound, so it will get your typed words. The recording stays in your message."
           action={<div className="flex gap-2"><Button variant="secondary" size="sm">Discard</Button><Button variant="primary" size="sm">Send with words</Button></div>}>Recorded · 0:07</StatusStrip></div>
       </ReadComposer>}
@@ -1136,7 +1135,7 @@ function RecordHold() {
         <div className="px-3 pb-2"><StatusStrip tone="ok" detail="Let go to send it. Slide away to cancel."
           action={<Button variant="secondary" size="sm">Cancel</Button>}>Recording to send · 0:07</StatusStrip></div>
       </ReadComposer>}
-      deaf={<ReadComposer bubbles={<><RecordingCard words={SAID} /><DeafNote /></>}>
+      deaf={<ReadComposer bubbles={<RecordingCard words={SAID} />}>
         <div className="px-3 pb-2"><StatusStrip tone="ok" detail="This model can’t hear sound. Let go and it gets your words; the recording stays in your message."
           action={<Button variant="secondary" size="sm">Cancel</Button>}>Recording to send · 0:07</StatusStrip></div>
       </ReadComposer>}
@@ -1192,10 +1191,11 @@ function VideoDoneNarrow() {
   return (
     <NativeBox>
       <div className="flex items-center gap-2.5 p-2">
-        <img src={frameData} alt="First frame of the video" className="h-12 w-20 shrink-0 rounded-md object-cover" />
+        <img src={frameData} alt="First frame of the video" className="h-10 w-16 shrink-0 rounded-md object-cover" />
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-fg-2 truncate">ocean-loop.mp4</p>
-          <p className="text-2xs text-fg-muted">0:08 · Veo 4 · $0.80</p>
+          {/* WHY one truncated line: wrapping split "$0.80" onto its own line at phone width. */}
+          <p className="text-2xs text-fg-muted truncate">0:08 · Veo 4 · $0.80</p>
         </div>
         <div className="flex shrink-0 items-center"><Actions /></div>
       </div>
