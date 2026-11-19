@@ -13,7 +13,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { imageDimensions, withinImageLimits, patchCount, IMAGE_PATCH_PX, MAX_ATTACHMENT_BYTES } from './image-support';
+// IMAGE_CACHE_FILE_RE lives in image-support so its reader can tell our copies from a user's originals.
+import { imageDimensions, withinImageLimits, patchCount, IMAGE_PATCH_PX, MAX_ATTACHMENT_BYTES, IMAGE_CACHE_FILE_RE as CACHE_FILE_RE } from './image-support';
 import type { ImageLimits } from './capability-profile';
 
 /** Decoded pixels we are willing to hold at once: pngjs keeps width×height×4
@@ -31,13 +32,10 @@ const PREPARE_MARGIN = 0.9;
 /** Shrunk copies untouched this long are deleted by sweepStale (card #66 f).
  *  WHY 90 days: a resumed chat re-reads its pictures by the copy's path and a
  *  deleted copy becomes a named "[image no longer available: <name>]" note, so
- *  the window is long; a reused copy is touched on every cache hit, so anything
- *  still in play is far younger. Age, not total size: a size cap would delete
+ *  the window is long; a copy is touched on every cache hit AND every re-read
+ *  (image-support readImageFromDisk), so a chat still in use keeps its copies. Age, not total size: a size cap would delete
  *  recent copies a live chat is using. */
 export const IMAGE_CACHE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
-/** Only files this module could have written: derivativeName's shape, or its
- *  in-flight `.tmp`. Anything else in the folder is not ours to delete. */
-const CACHE_FILE_RE = /^[0-9a-f]{16}-.+\.(png|jpg)(\.\d+\.tmp)?$/;
 
 type ResizeFormat = 'png' | 'jpeg';
 /** WHY a discriminated result (not Buffer | null): one null used to stand for
