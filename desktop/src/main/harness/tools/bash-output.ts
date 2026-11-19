@@ -29,6 +29,8 @@ export const BashOutputTool = defineTool({
   permissionSubject: () => undefined,
   async execute(args, ctx) {
     const reg = ctx.shells;
+    // WHY (card #220): right after a chat reopens the saved list may still be loading; wait for it.
+    await reg?.restoreReady;
     if (!args.shell_id) {
       // WHY restored ones too (card #220): commands from before an app restart are
       // still this conversation's commands; leaving them out told the model "none".

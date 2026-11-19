@@ -409,6 +409,57 @@ describe('appendVersion — read semantics + artifact id', () => {
     expect(after.artifacts[0].lastModified).toBe(stamp);
     expect(after.artifacts[0].versions.at(-1)?.type).toBe('delivered');
   });
+
+  it('two outside files with the same name are two records, each found by its own location', async () => {
+    // External records store only the file NAME in `path`; matching on it made a click on
+    // /docs/b/REPORT.md add a version to an older /tmp/a/REPORT.md record and never record
+    // the clicked file, so the chat pill could not open it.
+    const old = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'REPORT.md', kind: 'external', absolutePath: '/tmp/a/REPORT.md',
+      sessionId: 's', type: 'read', author: 'user',
+    });
+    const clicked = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'REPORT.md', kind: 'external', absolutePath: '/docs/b/REPORT.md',
+      sessionId: 's2', type: 'read', author: 'user',
+    });
+    expect(clicked.artifactId).not.toBe(old.artifactId);
+    const again = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'REPORT.md', kind: 'external', absolutePath: '/tmp/a/REPORT.md',
+      sessionId: 's3', type: 'read', author: 'user',
+    });
+    expect(again.artifactId).toBe(old.artifactId);
+    const after = (await readSidecar(projectRoot)) as ProjectSidecar;
+    expect(after.artifacts.map((a) => a.absolutePath).sort()).toEqual(['/docs/b/REPORT.md', '/tmp/a/REPORT.md']);
+    expect(after.artifacts.find((a) => a.id === old.artifactId)?.versions).toHaveLength(2);
+  });
+
+  it('a replayed ../ write lands on the record already repaired to its full location', async () => {
+    // repairRelativeExternals rewrites "../x/play.html" to its absolute form on launch; a reopened
+    // conversation then replays the relative path, which must not make a second copy of the file.
+    const full = join(projectRoot, '..', 'x', 'play.html');
+    const repaired = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'play.html', kind: 'external', absolutePath: full,
+      sessionId: 's', type: 'create', author: 'agent', toolUseId: 'toolu_1',
+    });
+    const replay = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'play.html', kind: 'external', absolutePath: '../x/play.html',
+      sessionId: 's', type: 'create', author: 'agent', toolUseId: 'toolu_1',
+    });
+    expect(replay).toMatchObject({ artifactId: repaired.artifactId, deduped: true });
+    expect(((await readSidecar(projectRoot)) as ProjectSidecar).artifacts).toHaveLength(1);
+  });
+
+  it('an internal file and an outside file with the same name stay separate', async () => {
+    const inside = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'REPORT.md', kind: 'internal', absolutePath: null,
+      sessionId: 's', type: 'create', author: 'agent',
+    });
+    const outside = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'REPORT.md', kind: 'external', absolutePath: '/docs/b/REPORT.md',
+      sessionId: 's', type: 'read', author: 'user',
+    });
+    expect(outside.artifactId).not.toBe(inside.artifactId);
+  });
 });
 
 describe('removeArtifactRecord', () => {
