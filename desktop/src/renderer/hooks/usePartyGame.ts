@@ -184,8 +184,9 @@ export function usePartyGame(
                 turnSeat: 0,
               });
             } else {
-              // Opponent wants a rematch; we haven't agreed yet
-              dispatch({ type: 'REMATCH_REQUESTED' });
+              // Opponent wants a rematch; we haven't agreed yet. WHY a separate action:
+              // REMATCH_REQUESTED means "we asked" and would disable our Accept button.
+              dispatch({ type: 'OPPONENT_REMATCH_REQUESTED' });
             }
             break;
           }
@@ -264,10 +265,27 @@ export function usePartyGame(
 
   const requestRematch = useCallback(() => {
     if (!clientRef.current || !playerName) return;
-    rematchRequestedRef.current = true;
     clientRef.current.send({ type: 'rematch', username: playerName });
+    if (state.opponentWantsRematch && opponentRef.current) {
+      // The opponent asked first and is already waiting, so our message is the "yes" on
+      // their side. WHY start here too: the relay only forwards to the OTHER player, so
+      // we never hear our own message; without this the accepter would sit waiting.
+      const board = createBoard();
+      boardRef.current = board;
+      myColorRef.current = myColorRef.current === 'red' ? 'yellow' : 'red';
+      turnRef.current = 'red';
+      dispatch({
+        type: 'GAME_START',
+        seat: seatOf(myColorRef.current),
+        opponent: opponentRef.current,
+        play: playOf(board, null),
+        turnSeat: 0,
+      });
+      return;
+    }
+    rematchRequestedRef.current = true;
     dispatch({ type: 'REMATCH_REQUESTED' });
-  }, [playerName, dispatch]);
+  }, [playerName, dispatch, state.opponentWantsRematch]);
 
   const leaveGame = useCallback(() => {
     if (clientRef.current && playerName) {
