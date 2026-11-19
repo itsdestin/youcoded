@@ -1,0 +1,4 @@
+{"type": "assistant_text", "text": "Drafted from your notes: summary, budget, workshop dates. Opening it.", "delay": 400}
+{"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "Garden plan.docx"}, "delay": 700}
+{"type": "tool_result", "tool_use_id": "t1", "content": "Wrote Garden plan.docx", "delay": 900}
+{"type": "turn_complete", "delay": 300}

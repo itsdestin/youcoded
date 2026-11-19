@@ -58,7 +58,12 @@ export function resolvePermission(requestId: string): boolean {
 
 let counter = 0;
 const uid = () => `wb-ev-${++counter}`;
-const stamp = () => FIXTURE_BASE + counter * 1000;
+// WHY `?replyClock=now` (opt-in, 2026-11-18): a message TYPED in the practice app is stamped by the page's
+// clock (8:00 AM) while a scripted reply is stamped from the fixture base (7:40 AM), so on film the answer
+// read twenty minutes EARLIER than its question. With the switch, replies are stamped no earlier than the
+// page's clock. Off by default, so every existing picture and replay keeps its byte-identical stamps.
+const liveClock = typeof location !== 'undefined' && new URLSearchParams(location.search).get('replyClock') === 'now';
+const stamp = () => (liveClock ? Math.max(FIXTURE_BASE + counter * 1000, Date.now()) : FIXTURE_BASE + counter * 1000);
 
 /** One scripted event, typed: `type` and `data` must belong together, exactly as
  *  the real producers' emitEvent<T> demands (M5). The cast is the one place a

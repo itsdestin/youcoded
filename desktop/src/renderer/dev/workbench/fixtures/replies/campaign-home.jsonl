@@ -1,0 +1,7 @@
+{"type": "assistant_text", "text": "Lights, thermostat, TV, every room, on one page. Building it.", "delay": 400}
+{"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "pages/home/page.json"}, "delay": 600}
+{"type": "tool_result", "tool_use_id": "t1", "content": "Wrote page.json", "delay": 700}
+{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "pages/home/index.html"}, "delay": 500}
+{"type": "tool_result", "tool_use_id": "t2", "content": "Wrote index.html", "delay": 800}
+{"type": "assistant_text", "text": "Home is ready. It's pinned to the top bar.", "delay": 600}
+{"type": "turn_complete", "delay": 300}
