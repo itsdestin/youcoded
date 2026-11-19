@@ -42,7 +42,8 @@ export class ClaudeQueueRuntime {
  private service?: Promise<{ queue: ClaudeQueue; transport: ClaudeQueueTransport }>;
  private readonly bindings = new Map<string, Binding>();
  private closed = false;
- private readonly issues = new Map<string,{ message: string; queueItemId?: string }>();
+ /** `sendNow`: the note says why Send now could not send yet; it is re-read on every publish (see publish). */
+ private readonly issues = new Map<string,{ message: string; queueItemId?: string; sendNow?: true }>();
  private readonly composerBusy = new Set<string>();
  private readonly republishTimers = new Map<string, ReturnType<typeof setTimeout>>();
  private readonly onReady: (id: string, incarnation: string) => void;
@@ -137,6 +138,9 @@ export class ClaudeQueueRuntime {
   // A problem belongs to one message; once that message has left the queue, its note goes too.
   const issue = this.issues.get(id);
   if (issue?.queueItemId && !r.items.some(i => i.queueItemId === issue.queueItemId)) this.issues.delete(id);
+  // WHY re-read (review of #278): a Send now note states a reason that can lift without the message leaving (the question
+  // answered while the turn still runs). Read the reason again on every publish and drop the note once nothing blocks.
+  else if (issue?.sendNow) { const live = SEND_NOW_WAITING[this.options.inputBlock?.(id) ?? 'none']; if (live) issue.message = live; else this.issues.delete(id); }
   let nextReveal = Infinity;
   // WHY: immediate readiness is a classification, not a hide timer. Unknown and genuinely
   // waiting work remains visible; an accepted receipt is tracked internally until its UUID arrives.
@@ -153,7 +157,8 @@ export class ClaudeQueueRuntime {
   const firstWaiting = visible.find(i => i.status === 'waiting' && (!r.paused || i.pauseBypass));
   const noticeOf = (i: QueueJournal['items'][number]): string | undefined => {
    const current = this.issues.get(id);
-   if (current && (current.queueItemId ? current.queueItemId === i.queueItemId : i === visible[0])) return current.message;
+   // Text left in the terminal's own box is the more useful thing to say than a Send now reason.
+   if (current && !(current.sendNow && this.composerBusy.has(id)) && (current.queueItemId ? current.queueItemId === i.queueItemId : i === visible[0])) return current.message;
    if (this.composerBusy.has(id) && i === firstWaiting) return 'Waiting for the message box in the terminal to be empty.';
    return undefined;
   };
@@ -169,7 +174,15 @@ export class ClaudeQueueRuntime {
   }
  }
  /** Wake only after authoritative parsed terminal changes/reconnect, never from a guessed timer. */
- wake(id: string): void { if (this.service && this.options.inputSafe(id)) void this.service.then(s => s.transport.requestIdle(id)).catch(() => {}); }
+ wake(id: string): void {
+  if (!this.service || !this.options.inputSafe(id)) return;
+  void this.service.then(s => {
+   // The input just became safe: a Send now note naming what blocked it is stale now (publish drops it).
+   const root = this.bindings.get(id)?.queueId;
+   if (this.issues.get(id)?.sendNow && root) this.publish(id, s.queue.snapshot(root));
+   s.transport.requestIdle(id);
+  }).catch(() => {});
+ }
  async identityChanged(id: string, source: string, conversationId: string): Promise<void> {
   const b = this.bindings.get(id); if (!b) return;
   // WHY: hooks, Clear receipts and raw state share this chain. Checking identity
@@ -259,7 +272,7 @@ export class ClaudeQueueRuntime {
     // WHY (card #278): Send now used to ask again silently; when the same check refused, nothing on screen changed and the
     // button looked broken. Say on that message why it still waits. A passing reason (bytes mid-parse) says nothing.
     const why = SEND_NOW_WAITING[this.options.inputBlock?.(id) ?? 'none'];
-    if (why) { this.issues.set(id,{ message: why, queueItemId: action.itemId }); this.publish(id,queue.snapshot(root)); }
+    if (why) { this.issues.set(id,{ message: why, queueItemId: action.itemId, sendNow: true }); this.publish(id,queue.snapshot(root)); }
     transport.requestIdle(id); return { status: 'done' };
    }
    if (action.kind === 'clear') {

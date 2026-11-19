@@ -473,6 +473,19 @@ describe('what the computer reads a session\'s screen for', () => {
     expect(r.screenNeed(S)!.holdsMessageBox).toBe(true);
   });
 
+  it('a helper agent\'s question holds the message box once its hook closes, and whenever a turn is running', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'hook:event', hook('PermissionRequest', 'agent-ask', { tool_name: 'Bash', agent_id: 'a1' }));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(false); // idle, the app's hook still holds it: Claude Code draws no menu
+    r.note(S, 'hook:event', hook('PermissionExpired', 'agent-ask', { _reason: 'hook-closed' }));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(true);  // kept: Claude Code now draws its menu over the box
+    r.note(S, 'hook:event', hook('PermissionResolved', 'agent-ask'));
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'um-h', timestamp: 3, data: { text: 'go' } });
+    r.note(S, 'hook:event', hook('PermissionRequest', 'agent-ask-2', { tool_name: 'Bash', agent_id: 'a2' }));
+    expect(r.screenNeed(S)).toMatchObject({ working: true, holdsMessageBox: true }); // mid-turn the helper may be a foreground one
+  });
+
   it('a tool running is a started tool-use without its result, never a helper\'s inner tool, and the turn ending clears them all', () => {
     const r = new SessionRecords();
     r.begin(S);

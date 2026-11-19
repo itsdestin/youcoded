@@ -307,11 +307,15 @@ export class SessionRecords {
   }
 
   /** A question of the conversation's OWN is open (live or kept), or a password ask: Claude Code's menu for it may own the
-   *  message box, so nothing automated may type. A helper agent's question is not counted (card #278): it never replaced
-   *  the box (the person typed straight into it while one waited), and the screen check still refuses if a menu is drawn. */
+   *  message box, so nothing automated may type.
+   *  A helper agent's question is let through ONLY while the app's hook still holds it (not kept) AND no turn runs (card #278):
+   *  measured on CLI 2.1.327, Claude Code draws no menu for a background helper's ask while a hook holds it, so the box stays
+   *  live and the person typed straight into it. A KEPT helper ask (hook closed) is drawn over the box at once, and during a
+   *  turn the helper may be a foreground one (not measured) — both still hold, so the safety never rests on the screen
+   *  reading alone in the instant before a newly drawn menu is parsed (review of #278). */
   private holdsMessageBox(rec: Rec): boolean {
     if (rec.passwordAsks.size > 0) return true;
-    for (const a of rec.asks.values()) if (!a.fromAgent) return true;
+    for (const a of rec.asks.values()) if (!a.fromAgent || a.expired || rec.facts.working) return true;
     return false;
   }
 
@@ -331,7 +335,8 @@ export class SessionRecords {
    *  - `cards`: prompt cards open;
    *  - `permissionCard`: a permission/question/plan ask is open for this turn, LIVE OR KEPT (Claude Code closed its hook but its menu may still wait). A
    *    pop-up nobody named gets a generic card only when this is false: the menu on screen belongs to the permission card (master's popups rule).
-   *  - `holdsMessageBox`: a question of the conversation's own (live or kept) or a password ask is open; a helper agent's is not counted. The queue
+   *  - `holdsMessageBox`: a question of the conversation's own (live or kept) or a password ask is open; a helper agent's counts only once kept or
+   *    while a turn runs (holdsMessageBox — why). The queue
    *    reads this, not `asking`/`permissionCard` (card #278: a background helper's question held every queued message until the next turn ended).
    * The stuck check runs only while `working && !toolRunning && !asking` — the same gate the renderer's hook used.
    */

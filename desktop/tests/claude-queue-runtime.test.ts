@@ -106,6 +106,19 @@ describe('instance-owned Claude queue runtime', () => {
   expect(rows().every(r=>r.notice===undefined)).toBe(true);
   await f.runtime.close();
  });
+ it('a Send now note goes away once what blocked it is gone, while the message still waits', async () => {
+  let block: QueueInputBlock | null = 'question';
+  const f=await fixture({ inputBlock: () => block });const identity=await f.runtime.action('s',{kind:'identity'});if(identity.status!=='identity')throw Error('identity');
+  const q=await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'held',originalText:'held',attachments:[],displayContent:'held'}});if(q.status!=='queued')throw Error('enqueue');
+  const rows=()=>(f.publish.mock.lastCall?.[1] as {queue:{queueId:string;notice?:string}[]}).queue;
+  await f.runtime.action('s',{kind:'send-now',itemId:q.itemId});
+  expect(rows()[0].notice).toMatch(/your answer/);
+  block=null;f.safe();          // the question is answered: the screen check now passes
+  f.runtime.wake('s');
+  await vi.waitFor(()=>expect(rows()[0].notice).toBeUndefined());
+  expect(rows()[0].queueId).toBe(q.itemId); // still queued, just no longer claiming a reason that has gone
+  await f.runtime.close();
+ });
  it('is lazy, receives actual identity and notes durable enqueue without a premature transcript bubble', async () => {
   const f = await fixture(); const identity = await f.runtime.action('s', { kind: 'identity' }); if (identity.status !== 'identity') throw Error('identity');
   const p = { sendEpoch: identity.identity.sendEpoch, sendId: 'one', originalText: 'exact @file', attachments: [], displayContent: 'display' };
