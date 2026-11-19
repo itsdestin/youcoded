@@ -573,9 +573,9 @@ export const IPC = {
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   // ---- Claude Code's own sign-in, read LIVE (2026-09-09) ----
   // → ClaudeAccountStatus (shared/claude-account-types.ts). Payload
-  // `{refresh?: true}` drops the cache first. There is no sign-in/sign-out verb
-  // here on purpose: Claude Code owns its login, and the app has never had a
-  // way to clear it (the card says to use /logout in a terminal).
+  // `{refresh?: true}` drops the cache first. There is no sign-OUT verb on purpose:
+  // Claude Code owns its login and the app cannot clear it (the card says to use
+  // /logout in a terminal). Sign-IN exists since card #236: CLAUDE_CODE_SIGN_IN below.
   CLAUDE_CODE_STATUS: 'claude-code:status',
   // Install Claude Code on demand (first-run local models, F-5): setup no longer
   // installs it for everyone, so Settings offers it. Desktop and remote desktop only.
@@ -1187,10 +1187,12 @@ interface ClaudeApi {
   on: BridgeListeners;
   dialog: {
     openFile: () => Promise<string[]>;
+    /** Desktop only: a dropped file's on-disk path (Electron removed File.path). Absent on remote/Android. */
+    pathForFile?: (file: File) => string;
     openFolder: () => Promise<string | null>;
     openSound: () => Promise<string | null>;
     readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;
-    saveClipboardImage: () => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = phone can't paste (SILENT, owner to decide)
+    saveClipboardImage: (pasted?: File) => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = nothing to attach (SILENT). `pasted` = the picture from the paste event: only remote/phone uses it (desktop reads its own clipboard)
   };
   shell: {
     openChangelog: () => Promise<void>;
