@@ -164,6 +164,10 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
   useEscClose(open, onClose);
   const [fast, setFast] = useState(false);
   const [effort, setEffort] = useState<EffortLevel>('auto');
+  // WHY latest-value refs (review of R-1 batch 1): a save that fails late must only undo ITS OWN change. If the
+  // person flipped the switch again meanwhile, rolling back would overwrite their newer choice.
+  const latestFast = useRef(false);
+  const latestEffort = useRef<EffortLevel>('auto');
   const [loaded, setLoaded] = useState(false);
   // Enabling fast mode is a paid action (API billing, not Pro/Max subscription) —
   // gate behind an explicit confirmation popup so it can't be flipped accidentally.
@@ -271,8 +275,10 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
       return;
     }
     api.get().then((m: { fast?: boolean; effort?: string }) => {
+      latestFast.current = !!m?.fast;
       setFast(!!m?.fast);
       if (m?.effort && (EFFORT_LEVELS as readonly string[]).includes(m.effort)) {
+        latestEffort.current = m.effort as EffortLevel;
         setEffort(m.effort as EffortLevel);
       }
       setLoaded(true);
@@ -379,12 +385,17 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
     // state writes keeps the toggle truthful when the command never reached
     // CC. Mirrors the guarded /model path in App.onSelectModel.
     if (sessionId && !sendPtyCommand(`/fast ${v ? 'on' : 'off'}\r`)) return;
+    latestFast.current = v;
     setFast(v);
     const api = (window.claude as any).modes;
     // WHY roll back + say so (R-1, Destin H-3: on/off settings snap back to the real value with a message): the
     // switch used to flip and a failed save was swallowed, so it read ON until the next launch put it back to OFF.
     Promise.resolve(api?.set({ fast: v })).catch((cause: unknown) => {
-      setFast(!v);
+      if (latestFast.current === v) {
+        latestFast.current = !v; setFast(!v);
+        // WHY tell Claude Code too: it already got `/fast <v>`, so without this the switch says one thing and Claude Code does another.
+        if (sessionId) sendPtyCommand(`/fast ${v ? 'off' : 'on'}\r`);
+      }
       reportFailure({ what: 'save Fast mode', cause, where: 'ModelPickerPopup.applyFast', show: 'toast' });
     });
   };
@@ -404,11 +415,16 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
     // prompt, and don't record a level CC never received.
     if (sessionId && !sendPtyCommand(`/effort ${level}\r`)) return;
     const before = effort;
+    latestEffort.current = level;
     setEffort(level);
     const api = (window.claude as any).modes;
     // WHY roll back + say so: same as applyFast (R-1, Destin H-3).
     Promise.resolve(api?.set({ effort: level })).catch((cause: unknown) => {
-      setEffort(before);
+      if (latestEffort.current === level) {
+        latestEffort.current = before; setEffort(before);
+        // WHY: same as applyFast — put Claude Code back on the level the screen now shows.
+        if (sessionId) sendPtyCommand(`/effort ${before}\r`);
+      }
       reportFailure({ what: 'save the effort level', cause, where: 'ModelPickerPopup.updateEffort', show: 'toast' });
     });
   };
