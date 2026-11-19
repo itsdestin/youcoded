@@ -34,6 +34,9 @@ const requireCjs = createRequire(import.meta.url);
 //
 // 120s is a HANG detector, not a performance assertion. Nothing in this file has
 // ever been caught by a timeout that was not simply a busy machine.
+// WHY no per-test budgets below (2026-11-18): 17 tests still ended with `}, 15_000)` / `30_000` / `60_000`, which
+// OVERRIDES this file-wide 120s and puts the wall-clock detector back. Two of them (15s, spawning a worker) failed at
+// load 58-149 while passing alone. Every test in this file now takes the one budget above.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 /**
@@ -696,7 +699,7 @@ describe('runCell refuses to run a cell it cannot run honestly', () => {
     // rather than nothing: a config with no prompt is refused by the worker
     // BEFORE it ever tries the dist import, with a different message.
     expect(result.error).not.toContain('has no "prompt"');
-  }, 15_000);
+  });
 });
 
 describe('expandPlan carries the instruction arm file onto every cell', () => {
@@ -876,7 +879,7 @@ describe('two instruction arms produce two different CLAUDE.md bodies reaching t
     expect(tightenedPrompt).toContain('ALWAYS_SAY_KUMQUAT');
     expect(tightenedPrompt).not.toContain('ALWAYS_SAY_BANANA');
     expect(draftPrompt).not.toBe(tightenedPrompt);
-  }, 30_000);
+  });
 });
 
 describe('worker stderr is redacted before it can reach a transcript', () => {
@@ -928,7 +931,7 @@ describe('worker stderr is redacted before it can reach a transcript', () => {
     expect(result.error).toContain('could not load the harness under test');
     expect(result.error).toContain('[REDACTED credential]');
     expect(result.error).not.toContain(key);
-  }, 15_000);
+  });
 
   it('is a no-op when there is no key, so --dry-run takes the same path', async () => {
     const { redactKey } = await import('../test-engine/harness-eval.mjs');
@@ -1596,7 +1599,7 @@ globalThis.fetch = async (url) => {
     } finally {
       restore();
     }
-  }, 60_000);
+  });
 
   it('--max-spend actually reaches runMatrix — the flag stops a real run, not just an injected one', () => {
     // Fix pass 1 (2026-08-12 review, IMPORTANT 3). Delete `maxSpendUsd` from the
@@ -1633,7 +1636,7 @@ globalThis.fetch = async (url) => {
     } finally {
       restore();
     }
-  }, 60_000);
+  });
 
   it('both arms reach the worker with their OWN instructions text', () => {
     // Task 8c, end to end through the real CLI: plan file → loadInstructionTexts
@@ -1679,7 +1682,7 @@ globalThis.fetch = async (url) => {
     } finally {
       restore();
     }
-  }, 60_000);
+  });
 
   /** A "dist under test" whose runCase returns a run complete enough to be
    *  GRADED: real metrics, a written answer, and a tool list that makes the
@@ -1748,7 +1751,7 @@ export const runCase = async (c) => ({
     } finally {
       restore();
     }
-  }, 60_000);
+  });
 
   it('writes the transcript BEFORE grading, and a grading failure neither stops the run nor loses the conversation', () => {
     // fastDist's run has no `metrics`, so collectRunFacts throws inside the
@@ -1803,7 +1806,7 @@ export const runCase = async (c) => ({
     } finally {
       restore();
     }
-  }, 60_000);
+  });
 
   it('prints the judge calls the estimate does not price, with the figure and not after it', () => {
     // Fix pass 1 (2026-08-12 review, IMPORTANT 1). printEstimate prices CELLS —
@@ -1827,7 +1830,7 @@ export const runCase = async (c) => ({
     expect(block).toContain('$2.00/M output');
     // And no invented dollar total for the judging itself.
     expect(block).toMatch(/no dollar figure for it is invented/);
-  }, 60_000);
+  });
 
   it('says plainly when a plan grades nothing, so the figure is known to be whole', () => {
     const stub = fetchStub([0]);
@@ -1836,7 +1839,7 @@ export const runCase = async (c) => ({
     const block = stdout.slice(stdout.indexOf('Estimated cost'));
     expect(block).toMatch(/names no judge/);
     expect(block).not.toContain('NOT IN THE TOTAL');
-  }, 60_000);
+  });
 
   it('refuses a plan whose instruction file cannot be read, before spawning or spending anything', () => {
     // The failure this task exists to prevent is discovering a typo'd path after
@@ -1857,7 +1860,7 @@ export const runCase = async (c) => ({
     // runs directory line, so no result file and no summary can exist either.
     expect(stdout).not.toContain('[1/2]');
     expect(stdout).not.toContain('Running 2 cells');
-  }, 60_000);
+  });
 
   it('--dry-run validates the instruction files too, with no key anywhere', () => {
     // A dry run's whole job is "tell me what this would do". Reporting a clean
@@ -1874,7 +1877,7 @@ export const runCase = async (c) => ({
     expect(stderr).toContain('ENOENT');
     // And it did NOT reach the "this would have worked" ending.
     expect(stdout).not.toContain('nothing was spawned and nothing was spent');
-  }, 60_000);
+  });
 
   it('--dry-run still succeeds, with no key anywhere, when the instruction files are real', () => {
     const stub = fetchStub([0]);
@@ -1885,7 +1888,7 @@ export const runCase = async (c) => ({
     const { status, stdout } = runCliStubbed(stub, ['--plan', plan, '--dry-run']);
     expect(status).toBe(0);
     expect(stdout).toContain('(dry run: nothing was spawned and nothing was spent)');
-  }, 60_000);
+  });
 
   it('restores a pre-existing file the run OVERWRITES, not just entries it created', () => {
     // Defect 3 (coordinator-flagged, 2026-08-13): running this suite against
@@ -1944,7 +1947,7 @@ export const runCase = async (c) => ({
       if (trulyExisted) fs.writeFileSync(sentinelPath, trulyOriginal!);
       else fs.rmSync(sentinelPath, { force: true });
     }
-  }, 60_000);
+  });
 });
 
 describe('fetchKeyUsage never reports an unreadable answer as zero spend', () => {
@@ -2026,7 +2029,7 @@ describe('a wedged worker is killed and labelled, not left to hang', () => {
     expect(result.error).toContain('--timeout');
     // NOT reported as a signal death — the caller stopped it on purpose.
     expect(result.error).not.toContain('was killed by SIGTERM');
-  }, 30_000);
+  });
 
   it('defaults to a backstop well above run-case.ts\'s own 20-minute deadline', async () => {
     const { DEFAULT_CELL_TIMEOUT_MS } = await import('../test-engine/harness-eval.mjs');

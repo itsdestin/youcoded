@@ -4505,11 +4505,14 @@ function createPagesMock(scenario: string): PagesBridge {
         const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
         if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
           w.__shootInflight += 1;
-          w.__shootHoldUntil = performance.now() + 8000;
+          // WHY 30 s, not 8 (2026-11-18, load-flaky-tests): at load 58-149 the house's first answer took longer than 8 s, the hold
+          // gave up and `page-home` was shot "Loading your rooms…", tripping the look-alike check. The hold ends the moment the
+          // answer lands (homeFirstAnswer, +250 ms), so the longer cap costs nothing on a quiet machine (same reasoning as below).
+          w.__shootHoldUntil = performance.now() + 30000;
           let held = true;
           const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
           homeFirstAnswer = () => { setTimeout(release, 250); };
-          setTimeout(release, 8000);
+          setTimeout(release, 30000);
         }
       }
       // WHY (2026-10-21, `shoot --check` failed once under heavy load, then passed): the `#menu-open` screen opens the
