@@ -11,6 +11,9 @@ import { nl } from './fixtures';
 import { sealEnv, openEnv } from './envelope';
 import { frameLines } from './records';
 import { HW_EVERY, hwPath } from './highwater';
+import { readCheckpoint, readCheckpointState, writeCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
+import { crc32 } from './chain';
+import { realFs } from './fsio';
 
 const mk = (tag: string, n: number) => Array.from({ length: n }, (_, i) => nl({ type: 'user', uuid: `${tag}${i}`, message: { role: 'user', content: `${tag} ${'x'.repeat(40)} ${i}` } }));
 const opts = { chunkBytes: 700, proofVerifier: () => true };
@@ -380,5 +383,72 @@ describe('the high-water record names its own points', () => {
     const h = await s.head(V(1));
     expect(h.lines).toBe(280); expect(h.rolledBack).toBeNull();                                  // the point at 256 does not match: not the same history, so no claim
     await s.close(); await t.cleanup();
+  });
+});
+
+describe('each identity check can be killed on its own (the second layer that also catches the fault does not hide the first)', () => {
+  it('a park with the SAME lines at ANOTHER position is rejected by its sealed id alone (the line hash in the name still matches)', async () => {
+    const t = await tmpRoot('r5-iso1-');
+    const same = mk('SAME', 2);
+    let s = await open(t.dir); await s.append(V(1), 0, 0, mk('b', 5)); await s.append(V(1), 0, 8, same); await s.append(V(1), 0, 20, same);   // identical lines, two positions
+    await s.close();
+    const pd = path.join(vdir(t.dir), 'parked'); const [n8, n20] = parkFiles(t.dir);
+    fs.copyFileSync(path.join(pd, n8), path.join(pd, n20));        // the position-20 park now says "position 8" inside, with a valid checksum and a matching line hash
+    s = await open(t.dir);
+    await s.append(V(1), 0, 5, mk('fill', 3)); await s.append(V(1), 0, 10, mk('g', 10));       // head 20: the file named 20 is reached
+    expect((await s.head(V(1))).lines).toBe(20);
+    expect((await s.rejectedList(V(1))).length).toBe(1);
+    await s.close(); await t.cleanup();
+  });
+  it('an index of ANOTHER version in an EMPTY version is refused by its header tag alone (the checkpoint says 0 lines and cannot contradict it)', async () => {
+    const t = await tmpRoot('r5-iso2-');
+    let s = await open(t.dir, opts, V(2)); await s.append(V(2), 0, 0, mk('o', 6)); await s.close();
+    s = await open(t.dir); await s.close();                                                   // version 1: registered, no lines
+    fs.copyFileSync(path.join(vdir(t.dir, V(2)), 'index.bin'), path.join(vdir(t.dir), 'index.bin'));
+    s = await open(t.dir);
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(0); expect(h.damagedFromLine).toBeNull();
+    await s.append(V(1), 0, 0, mk('mine', 3)); expect((await s.head(V(1))).lines).toBe(3);
+    await s.close(); await t.cleanup();
+  });
+  it('a checkpoint statement that contradicts itself (more lines evicted than the head holds) is no evidence: the index and bodies stand on their own and nothing is rebuilt', async () => {
+    const t = await tmpRoot('r5-iso3-');
+    const L = mk('c', 12);
+    let s = await open(t.dir); for (let i = 0; i < 12; i += 3) await s.append(V(1), 0, i, L.slice(i, i + 3)); await s.close();
+    const st = await readCheckpointState(realFs, vdir(t.dir)); const cur = st.ck!;
+    await writeCheckpoint(realFs, vdir(t.dir), { ...cur, evLines: 20, evBytes: 99999, boundary: { h: cur.h, c: cur.c, convCount: 0, candN: -1, candId: null }, lostRecs: 0 }, st);   // a statement of 20 evicted lines with 12 in the head
+    s = await open(t.dir);
+    expect((await s.head(V(1))).lines).toBe(12);
+    expect(fs.existsSync(path.join(vdir(t.dir), 'replaced-index'))).toBe(false);            // no rebuild: the contradictory slot was simply not believed
+    await s.close(); await t.cleanup();
+  });
+  it('a checkpoint slot whose boundary flag contradicts its eviction count is not believed (checksum fixed up, so only the contradiction can catch it)', async () => {
+    const t = await tmpRoot('r5-iso4-');
+    const L = mk('d', 21);
+    const s = await open(t.dir); for (let i = 0; i < 21; i += 3) await s.append(V(1), 0, i, L.slice(i, i + 3)); await evict(s, 12); await s.close();
+    const cp = path.join(vdir(t.dir), 'checkpoint.bin'); const b = fs.readFileSync(cp);
+    const st0 = await readCheckpointState(realFs, vdir(t.dir));
+    const newest = st0.next === 0 ? 1 : 0;                                                     // `next` is the slot that would be overwritten: the other one is the newest
+    const at = newest * CHECKPOINT_SLOT;
+    b.writeUInt32BE(0, at + 228);                                                              // the "a boundary is present" flag cleared while 12 lines are evicted
+    b.writeUInt32BE(crc32(b, at, at + CHECKPOINT_SLOT - 4), at + CHECKPOINT_SLOT - 4);
+    fs.writeFileSync(cp, b);
+    const st1 = await readCheckpointState(realFs, vdir(t.dir));
+    expect(st1.slotsOk).toBe(1);                                                               // only the other slot is evidence
+    await t.cleanup();
+  });
+  it('a boundary in the checkpoint that disagrees with the index record at the eviction point is repaired by a rebuild (the checkpoint\'s boundary ends up equal to the true chain)', async () => {
+    const t = await tmpRoot('r5-iso5-');
+    const L = mk('e', 21);
+    let s = await open(t.dir); for (let i = 0; i < 21; i += 3) await s.append(V(1), 0, i, L.slice(i, i + 3)); await evict(s, 12);
+    const truth = await s.hashAt(V(1), 0, 12); await s.close();
+    const st = await readCheckpointState(realFs, vdir(t.dir)); const cur = st.ck!;
+    await writeCheckpoint(realFs, vdir(t.dir), { ...cur, boundary: { ...cur.boundary!, h: Buffer.alloc(32, 7) } }, st);     // a VALID statement with a wrong boundary
+    s = await open(t.dir);
+    expect((await s.head(V(1))).lines).toBe(21);
+    await s.close();
+    const after = await readCheckpoint(realFs, vdir(t.dir));
+    expect(after!.boundary!.h.toString('hex')).toBe(truth);
+    await t.cleanup();
   });
 });
