@@ -15,7 +15,6 @@ import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, head
 const MIB = 1024 * 1024;
 /** Verify only the window a crash could have damaged (the last this-many records); the rolling scrub walks the older part. */
 const VERIFY_WINDOW = 4096;
-const SCAN_BATCH = 4096;
 /**
  * Cap on kept files in torn/ per version. WHY a cap that REFUSES and no pruning (N2/N17): torn/ holds bytes
  * nobody proved redundant (an unacknowledged tail can be a lost acknowledged one after a second fault), so

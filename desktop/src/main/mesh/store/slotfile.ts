@@ -7,7 +7,7 @@ import * as nodePath from 'node:path';
 import type { Fs } from './fsio';
 import { openEnv, sealEnv } from './envelope';
 
-export const SLOT_BYTES = 1024;
+const SLOT_BYTES = 1024;
 
 export interface SlotState<T> {
   /** absent: no file; bad: a file with no valid slot of this role and version; ok: the newest valid slot's value */
@@ -51,12 +51,4 @@ async function putSlot(fs: Fs, path: string, role: string, key: string, slot: 0 
 export async function writeSlot<T>(fs: Fs, path: string, role: string, key: string, st: SlotState<T>, value: T): Promise<void> {
   await putSlot(fs, path, role, key, st.next, st.seq + 1, value);
   st.kind = 'ok'; st.value = value; st.seq += 1; st.next = (1 - st.next) as 0 | 1; st.slotsOk = Math.min(2, st.slotsOk + 1);
-}
-
-/** Write BOTH slots (used when a lower or different statement must not be undone by a stale higher slot coming back after a fault in the newest). */
-export async function writeBothSlots<T>(fs: Fs, path: string, role: string, key: string, st: SlotState<T>, value: T): Promise<void> {
-  const first = st.next;
-  await putSlot(fs, path, role, key, first, st.seq + 1, value);
-  await putSlot(fs, path, role, key, (1 - first) as 0 | 1, st.seq + 2, value);
-  st.kind = 'ok'; st.value = value; st.seq += 2; st.next = first; st.slotsOk = 2;
 }

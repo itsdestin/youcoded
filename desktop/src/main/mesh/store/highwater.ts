@@ -15,13 +15,17 @@ import * as nodePath from 'node:path';
 import type { Fs } from './fsio';
 import { mkdirDurable } from './fsio';
 import { readSlots, writeSlot, type SlotState } from './slotfile';
+import { isDiskFull } from './storeutil';
+import { StoreError } from './errors';
+import { hex } from './chain';
+import type { VState } from './vstate';
 
 export const HW_EVERY = 256;
 const LADDER_MAX = 12;
 const ROLE = 'highwater';
 
 /** `ladder`: [line count, first 16 hex digits of the raw chain value there], ascending; the first entry is always count 0 (the seed). */
-export interface HwValue { count: number; ladder: [number, string][]; evLines: number; evBytes: number }
+interface HwValue { count: number; ladder: [number, string][]; evLines: number; evBytes: number }
 export interface HighWater { st: SlotState<HwValue>; /** the head count this process last wrote or read */ noted: number }
 
 export const hwPath = (root: string, key: string): string => nodePath.join(root, 'highwater', `${key}.hw`);
@@ -36,7 +40,7 @@ export async function readHw(fs: Fs, root: string, key: string): Promise<HighWat
 }
 
 /** Raise the record to `count` (never lower it). `h16` is the first 16 hex digits of the chain value at `count`. */
-export async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, count: number, h16: string, seed16: string, ev: { lines: number; bytes: number }): Promise<void> {
+async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, count: number, h16: string, seed16: string, ev: { lines: number; bytes: number }): Promise<void> {
   const cur = hw.st.value;
   const base: HwValue = cur ?? { count: 0, ladder: [[0, seed16]], evLines: 0, evBytes: 0 };
   const next: HwValue = { count: Math.max(base.count, count), ladder: base.ladder.slice(), evLines: ev.lines, evBytes: ev.bytes };
@@ -49,7 +53,7 @@ export async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, 
 }
 
 /** The store itself shortened this version on purpose (a set-aside tail, a quarantine): write the LOWER truth so it is not reported as a rollback. */
-export async function lowerHw(fs: Fs, root: string, key: string, hw: HighWater, count: number, seed16: string, ladderAt: (n: number) => Promise<string | null>): Promise<void> {
+async function lowerHw(fs: Fs, root: string, key: string, hw: HighWater, count: number, seed16: string, ladderAt: (n: number) => Promise<string | null>): Promise<void> {
   const cur = hw.st.value;
   const ladder: [number, string][] = [[0, seed16]];
   for (const [n, h] of cur?.ladder ?? []) if (n > 0 && n < count) ladder.push([n, h]);
@@ -64,7 +68,7 @@ export async function lowerHw(fs: Fs, root: string, key: string, hw: HighWater, 
  * Was this version rolled back? `chainAt(n)` gives the chain value the folder holds at n lines (n <= head). Reported only when the head is behind the record AND the record's nearest point at
  * or below the head matches the folder's own chain (the same history, just shorter): a head that merely differs is not called a rollback.
  */
-export async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: number) => Promise<string | null>): Promise<{ from: number; had: number } | null> {
+async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: number) => Promise<string | null>): Promise<{ from: number; had: number } | null> {
   const v = hw.st.value;
   if (!v || v.count <= headCount) return null;
   let pick: [number, string] | null = null;
@@ -72,4 +76,44 @@ export async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: 
   if (!pick) return null;
   const mine = await chainAt(pick[0]);
   return mine !== null && mine.slice(0, 16) === pick[1] ? { from: headCount, had: v.count } : null;
+}
+
+// ---- what the store does with the record (ChatStore forwards to these) -------------------------------
+
+/**
+ * WHY (review 5): the high-water record is advisory, so a full disk or an unreadable file only means less evidence. Anything else (an injected crash in the tests, a real I/O failure) still
+ * surfaces: a failing disk must not be swallowed, and the crash sweeps need every operation to be able to kill the run.
+ */
+function advisoryFailed(e: unknown): void {
+  if (isDiskFull(e) || e instanceof StoreError || (e as { code?: string } | null)?.code === 'ENOENT') return;
+  throw e;
+}
+export interface HwEnv { fs: Fs; root: string; /** the chain value (hex) after n lines of st's index, or null when the record is unreadable */ readRecordHash: (st: VState, n: number) => Promise<string | null> }
+
+const chainAt = async (e: HwEnv, st: VState, n: number): Promise<string | null> => {
+  if (n === 0) return hex(st.seeds.raw);
+  if (n > st.count || (st.evictedLines > 0 && n < st.lostRecs)) return null;
+  return e.readRecordHash(st, n);
+};
+/** Compare the head with the record; a head behind it with the same history is REPORTED, never repaired or cut (F3). */
+export async function checkRollback(e: HwEnv, st: VState): Promise<void> {
+  try { st.rolledBack = await rolledBack(st.hw, st.count, (n) => chainAt(e, st, n)); } catch (err) { advisoryFailed(err); st.rolledBack = null; }   // the record can only under-report
+}
+/** Raise the record to the head (advisory). Never lowers it. */
+export async function noteHw(e: HwEnv, st: VState, force = false): Promise<void> {
+  if (!force && st.count - st.hw.noted < HW_EVERY) return;
+  if (st.rolledBack && st.count < st.rolledBack.had) return;   // a rolled-back head must not lower the mark it was compared with
+  try { const h = await chainAt(e, st, st.count); if (h) await raiseHw(e.fs, e.root, st.key, st.hw, st.count, h.slice(0, 16), hex(st.seeds.raw).slice(0, 16), { lines: st.evictedLines, bytes: st.evictedBytes }); } catch (err) { advisoryFailed(err); }
+}
+/** The store shortened the version itself (a set-aside tail): state the lower truth so it is not mistaken for a rollback. */
+export async function lowerHwTo(e: HwEnv, st: VState, count: number): Promise<void> {
+  try { await lowerHw(e.fs, e.root, st.key, st.hw, count, hex(st.seeds.raw).slice(0, 16), async (n) => (await e.readRecordHash(st, n))?.slice(0, 16) ?? null); } catch (err) { advisoryFailed(err); }
+}
+/** A quarantine or set-aside emptied the version on purpose. `seedHex` gives the version's seed (null: its registration is unreadable). */
+export async function resetHw(e: HwEnv, key: string, seedHex: () => Promise<string | null>): Promise<void> {
+  try {
+    const seed = await seedHex(); if (!seed) return;
+    const hw = await readHw(e.fs, e.root, key);
+    if (hw.st.value && hw.st.value.count > 0) await lowerHw(e.fs, e.root, key, hw, 0, seed.slice(0, 16), async () => null);
+  } catch (err) { advisoryFailed(err); }
 }

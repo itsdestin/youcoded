@@ -300,7 +300,7 @@ describe('F9 version id length is limited and documented', () => {
     await s.registerVersion(id, { chatId: 'c64', runtime: 'claude-code' });
     expect(await s.append(id, 0, 0, lines(3))).toBe('ok');
     // the quarantine name is the longest name the store makes: it must fit
-    await expect((s as any).quarantine(id.toString('hex'), 'test')).rejects.toMatchObject({ code: 'damaged' });
+    await expect((s as any).asides.quarantineOrReport(id.toString('hex'), 'test')).rejects.toMatchObject({ code: 'damaged' });
     await expect(s.head(id)).rejects.toMatchObject({ code: 'damaged' });
     expect((await s.setAsideDamaged(id)).asideName).toMatch(/-q1$/);
     expect(await s.append(id, 0, 0, lines(3))).toBe('ok');
@@ -454,7 +454,7 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
 
   it('deleting the quarantine marker file does not make the emptied chat look healthy: it is still reported damaged (the quarantined copy aside says so)', async () => {
     const { t, s, root } = await fresh(10);
-    await expect((s as any).quarantine(keyOfV(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
+    await expect((s as any).asides.quarantineOrReport(keyOfV(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
     await s.close();
     fs.rmSync(path.join(vdir(root), 'marks.bin'));
     const s2 = await reopen(root);

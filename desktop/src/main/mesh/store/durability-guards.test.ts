@@ -265,7 +265,7 @@ describe('guards for the identity, freshness and hole mechanisms', () => {
 
   it('an older damaged marker (marks.bin) next to a live index is ignored and cleared by a newer statement, the healthy chat is served', async () => {
     const { t, s, root } = await freshStore(10);
-    await expect((s as any).quarantine(keyOf(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
+    await expect((s as any).asides.quarantineOrReport(keyOf(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
     const marker = fs.readFileSync(path.join(vdir(root), 'marks.bin'));
     await s.setAsideDamaged(V(1));                                                           // clears the marker
     expect(await s.append(V(1), 0, 0, rows(5))).toBe('ok'); await s.close();
