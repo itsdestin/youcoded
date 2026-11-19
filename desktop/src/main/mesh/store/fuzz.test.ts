@@ -296,19 +296,20 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       if (e instanceof InjectedCrash) crashed = true;
       else { ev('episode-throw-' + e?.code); log.push(`episode threw ${e?.code}`); }
     }
-    if (!crashed && s && !full) closedAckedMax = Math.max(closedAckedMax, ackedMax);   // (the close below raises the high-water record to what was acknowledged)
-    if (!crashed && s && ffs) { try { await s.close(); s = null; } catch (e: any) { if (e instanceof InjectedCrash) crashed = true; else { ev('episode-close-failed-' + e?.code); log.push('CLOSEFAIL ' + String(e?.message).slice(0, 120)); if (!full || e?.code !== 'disk-full') bad('close-threw', { code: e?.code, msg: String(e?.message).slice(0, 150) }); } } }
+    let closedOk = false;   // the close below finished (it raises the high-water record to what was acknowledged); a close that is itself killed raises nothing
+    if (!crashed && s && ffs) { try { await s.close(); s = null; closedOk = true; } catch (e: any) { if (e instanceof InjectedCrash) crashed = true; else { ev('episode-close-failed-' + e?.code); log.push('CLOSEFAIL ' + String(e?.message).slice(0, 120)); if (!full || e?.code !== 'disk-full') bad('close-threw', { code: e?.code, msg: String(e?.message).slice(0, 150) }); } } }
     if (crashed && ffs) {
       await ffs.applyPowerLoss();
       const lp = path.join(root, 'LOCK');
       if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' }));
       ev('crash');
-    } else if (s) { await s.close().catch((e: any) => { ev('episode-close-failed-' + e?.code); log.push('CLOSEFAIL ' + String(e?.message).slice(0, 160)); if (!full || e?.code !== 'disk-full') bad('close-threw', { code: e?.code, msg: String(e?.message).slice(0, 150) }); }); }
+    } else if (s) { await s.close().then(() => { closedOk = true; }).catch((e: any) => { ev('episode-close-failed-' + e?.code); log.push('CLOSEFAIL ' + String(e?.message).slice(0, 160)); if (!full || e?.code !== 'disk-full') bad('close-threw', { code: e?.code, msg: String(e?.message).slice(0, 150) }); }); }
     if (shadow) await shadow.cleanup();
+    if (closedOk && !full) closedAckedMax = Math.max(closedAckedMax, ackedMax);
     // A snapshot of the whole folder as it is NOW (before any fault of this episode): the source of "older copy" faults in later episodes
     const snapshotRoot = (): Map<string, Buffer> => { const m = new Map<string, Buffer>(); for (const p of walk(root)) { const rel = path.relative(root, p); if (!/^LOCK/.test(rel)) m.set(rel, fs.readFileSync(p)); } return m; };
     // (taken BEFORE this episode's fault, so an "older copy" is a true earlier state; the newest one equals the present and is skipped)
-    if (!legacy && r() < 0.6) { const sn = snapshotRoot(); snaps.push(sn); snapClosed.set(sn, crashed ? -1 : ackedMax); if (snaps.length > 3) snaps.shift(); }
+    if (!legacy && r() < 0.6) { const sn = snapshotRoot(); snaps.push(sn); snapClosed.set(sn, closedOk && !full ? ackedMax : -1); if (snaps.length > 3) snaps.shift(); }
     // WHOLE-FOLDER ROLLBACK (review 5, F3): chat 1's folder is replaced by its state at an earlier clean close. Only snapshots taken after a clean close count (the high-water record is raised there).
     if (!legacy && !big && snaps.length && r() < 0.05) {
       const sn = snaps[Math.floor(r() * snaps.length)];
