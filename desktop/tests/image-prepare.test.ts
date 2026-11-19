@@ -233,7 +233,8 @@ describe('ImagePreparer', () => {
       age(r.path, 120);
       expect(readImageFromDisk(r.path).ok).toBe(true);
       expect(readImageFromDisk(p).ok).toBe(true);
-      await new Promise((res) => setTimeout(res, 50));   // the touch is asynchronous
+      // The touch is asynchronous: wait for it (up to 2 s) rather than a fixed sleep a loaded machine can outrun.
+      for (let i = 0; i < 200 && Date.now() - fs.statSync(r.path).mtimeMs > DAY; i++) await new Promise((res) => setTimeout(res, 10));
       expect(await new ImagePreparer(real, resize).sweepStale()).toBe(0);
       expect(fs.existsSync(r.path)).toBe(true);
       expect(Date.now() - fs.statSync(p).mtimeMs).toBeGreaterThan(150 * DAY);   // the user's original keeps its date

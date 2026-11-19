@@ -1150,8 +1150,8 @@ export class SyncService extends EventEmitter {
   /**
    * Reachability probe behind the OFFLINE warning. Its own method so the
    * periodic re-check has one thing to stub in tests (matching how
-   * autoDetectBackend is stubbed) — an inline `await import('dns')` is
-   * awkward to control from a suite.
+   * autoDetectBackend is stubbed) — the real check makes HTTPS requests
+   * (network-check.ts), which a suite must never make.
    */
   private async probeInternet(): Promise<boolean> {
     // WHY delegated (card #236): the check now lives in network-check.ts so the sign-in
@@ -1180,7 +1180,7 @@ export class SyncService extends EventEmitter {
 
     // 0. Internet connectivity.
     //
-    // Two strikes before we say "No internet". One DNS lookup is a noisy
+    // Two strikes before we say "No internet". One probe is a noisy
     // oracle — it fails during the few seconds between Electron starting and
     // the WiFi associating, and on any resolver hiccup — and that single
     // sample is what put a red "No internet" card under an "All synced · 1m
