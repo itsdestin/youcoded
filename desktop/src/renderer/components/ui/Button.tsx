@@ -14,7 +14,7 @@ import { Tooltip } from './Tooltip';
  * don't get reintroduced as "improvements".
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'on-accent-solid' | 'on-accent-outline' | 'raised' | 'toggle';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'raised' | 'toggle';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
@@ -95,11 +95,6 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   // black-on-black. Both roles derive from --on-accent instead, so the whole
   // control tracks whatever a theme pack sets the accent to.
   'on-accent': 'text-on-accent/80 hover:text-on-accent hover:bg-on-accent/15 active:bg-on-accent/25',
-  // The filled and outlined pair for buttons INSIDE an accent-filled surface (the sent message bubble's "Not sure this was sent" strip).
-  // Added 2026-11-18 (Destin, pinned-bubbles-review-2#N-1: "dark send again on the right side with light dismiss on left"): primary there
-  // is accent on accent (invisible) and secondary's border/text are panel colours. Both derive from --on-accent, so they follow any theme.
-  'on-accent-solid': 'border border-transparent bg-on-accent text-accent hover:bg-on-accent/90 active:bg-on-accent/80',
-  'on-accent-outline': 'border border-on-accent/40 text-on-accent hover:bg-on-accent/10 active:bg-on-accent/20',
   // A small control that sits ON a picture or chip (the × on an attachment
   // thumbnail): a solid panel fill and outline so it stays visible over any image.
   // Added 2026-09-16 — the attachment chip hand-restyled a ghost button into this.
