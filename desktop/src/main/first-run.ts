@@ -150,7 +150,9 @@ export function markSetupCompleted(): Promise<void> {
           return;
         }
       }
-      if (raw !== null) {
+      // Same rule as the backup code's readers (review F3): a zero-byte or blank file is "empty, first run" (the usual
+      // leftover of the old non-atomic write); only a NON-empty file that fails to parse is damaged and left alone.
+      if (raw !== null && raw.trim() !== '') {
         try {
           const parsed = JSON.parse(raw);
           if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');

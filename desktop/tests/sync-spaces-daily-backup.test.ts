@@ -331,6 +331,31 @@ describe('DailyBackup.runNow', () => {
     expect(calls).toBe(2); // the duplicate joined the first run instead of copying again
   });
 
+  // Review M4: a manual run that arrives while the hourly timer is mid-copy waits for it; they never copy at once.
+  it('a "Back up now" tapped while the hourly timer is copying waits for the timer to finish', async () => {
+    const { space, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let first = true;
+    vi.spyOn(job as any, 'copySpace').mockImplementation(async () => {
+      const who = first ? 'timer' : 'manual'; first = false;
+      events.push(`${who} start`);
+      if (who === 'timer') await gate;
+      events.push(`${who} end`);
+    });
+    const target = { type: 'icloud' as const, base };
+    const timer = job.runIfDue([space], [target], () => {});
+    await new Promise(r => setTimeout(r, 10)); // the timer is now inside its copy
+    const manual = job.runNow([space], [target], () => {});
+    await new Promise(r => setTimeout(r, 30));
+    expect(events).toEqual(['timer start']); // the manual run has not started
+    release();
+    await Promise.all([timer, manual]);
+    expect(events).toEqual(['timer start', 'timer end', 'manual start', 'manual end']);
+  });
+
   it('the hourly timer cannot start a second copy on top of itself either', async () => {
     const { space, base, markerPath } = setup();
     const job = new DailyBackup({ markerPath });

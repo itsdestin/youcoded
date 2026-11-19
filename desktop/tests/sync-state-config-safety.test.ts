@@ -36,6 +36,27 @@ describe('a damaged settings file', () => {
   });
 });
 
+// Review F3: "empty" means the same thing to every reader of config.json.
+describe.each([['zero-byte', ''], ['whitespace-only', '  \n']])('a %s settings file', (_n, content) => {
+  it('is the normal first run: it reads as no backups and the first backup can be added', async () => {
+    fs.writeFileSync(cfg, content);
+    expect((await state.getSyncStatus()).backends).toEqual([]);
+    const b = await state.addBackend({ type: 'drive', label: 'My Drive', syncEnabled: true, config: {} });
+    expect(JSON.parse(fs.readFileSync(cfg, 'utf8')).storage_backends[0].id).toBe(b.id);
+  });
+});
+
+// Review M11: a settings file that cannot be READ (not just one that cannot be parsed) is never treated as empty.
+describe('a settings file that cannot be read at all (a folder where the file should be)', () => {
+  beforeEach(() => { fs.mkdirSync(cfg); });
+  it('reads as no backups, and every write refuses with the plain reason', async () => {
+    expect((await state.getSyncStatus()).backends).toEqual([]);
+    await expect(state.addBackend({ type: 'drive', label: 'x', syncEnabled: true, config: {} })).rejects.toThrow(/couldn't be read/);
+    await expect(state.setSyncConfig({ backends: [] })).rejects.toThrow(/couldn't be read/);
+    expect(fs.statSync(cfg).isDirectory()).toBe(true);
+  });
+});
+
 describe('a missing settings file', () => {
   it('is the normal first run: the first backup can be added', async () => {
     const b = await state.addBackend({ type: 'drive', label: 'My Drive', syncEnabled: true, config: {} });

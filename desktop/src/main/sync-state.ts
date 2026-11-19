@@ -77,6 +77,9 @@ export interface SyncWarning {
   dismissible: boolean;
   stderr?: string;
   createdEpoch: number;
+  /** Which half of a backup raised it. 'spaces' = the conversations-and-project-files copy of "Back up now"; absent =
+   *  the settings-and-skills half. Each half clears only its own (backup fixes 2026-11-18, review F7). */
+  source?: 'spaces';
 }
 
 export type SyncFixAction =
@@ -422,16 +425,18 @@ export async function writeWarnings(warnings: SyncWarning[]): Promise<void> {
 export async function addOrReplaceWarning(w: SyncWarning): Promise<void> {
   const all = await readWarnings();
   const filtered = all.filter(
-    (x) => !(x.code === w.code && x.backendId === w.backendId),
+    (x) => !(x.code === w.code && x.backendId === w.backendId && x.source === w.source),
   );
   filtered.push(w);
   await writeWarnings(filtered);
 }
 
-/** Remove all warnings with a given backendId (e.g., on successful push). */
-export async function clearWarningsByBackend(backendId: string): Promise<void> {
+/** Remove warnings with a given backendId (e.g., on successful push). `half` limits it to one half of a backup: 'personal' =
+ *  the settings-and-skills half, 'spaces' = the conversations half; omitted (removing a backup) clears both. */
+export async function clearWarningsByBackend(backendId: string, half?: 'personal' | 'spaces'): Promise<void> {
   const all = await readWarnings();
-  const filtered = all.filter((x) => x.backendId !== backendId);
+  const mine = (x: SyncWarning) => half === undefined || (half === 'spaces' ? x.source === 'spaces' : x.source !== 'spaces');
+  const filtered = all.filter((x) => !(x.backendId === backendId && mine(x)));
   if (filtered.length !== all.length) await writeWarnings(filtered);
 }
 
@@ -605,6 +610,10 @@ export async function setSyncConfig(
 export async function addBackend(
   instance: Omit<BackendInstance, 'id'>
 ): Promise<BackendInstance> {
+  // WHY here and not only in the screens (backup fixes 2026-11-18, review F2): this is reachable from a phone and a remote
+  // browser, so "offered nowhere" has to hold in the backend. Same plain words the rest of the fix uses.
+  if (instance.type === 'github') throw new Error('GitHub backups are no longer supported.');
+  if (instance.type === 'drive' && isRunningOnPhone()) throw new Error("Google Drive backup isn't available on this phone.");
   const config = await configForWrite();
   const backends: BackendInstance[] = config.storage_backends || migrateConfigToV2(config);
 
@@ -692,7 +701,11 @@ async function copySpacesTo(pairs: Array<{ backend: BackendInstance; target: Bac
   const res = await syncSpacesBackupNow(pairs.map((p) => p.target));
   for (const f of res.failures) {
     const hit = pairs.find((p) => p.target.type === f.target.type && p.target.base === f.target.base);
-    if (hit) await addOrReplaceWarning(classifyPushError(f.message, hit.backend.type, hit.backend));
+    if (hit) await addOrReplaceWarning({ ...classifyPushError(f.message, hit.backend.type, hit.backend), source: 'spaces' });
+  }
+  // This half succeeded for these destinations: only now does its own earlier warning go away.
+  for (const p of pairs) {
+    if (!res.failures.some((f) => f.target.type === p.target.type && f.target.base === p.target.base)) await clearWarningsByBackend(p.backend.id, 'spaces');
   }
   return res.ok;
 }
@@ -720,6 +733,12 @@ export async function forceSync(): Promise<{
     const backends = await readBackendInstances();
     const pairs = backends.filter((b) => b.syncEnabled).map(pairFor).filter((p): p is NonNullable<typeof p> => p !== null);
     const spacesOk = await copySpacesTo(pairs);
+    // WHY (backup fixes 2026-11-18, review F6): when every switched-on backup is one that cannot run on this device
+    // (GitHub; Google Drive on a phone) nothing is copied, and that must not read as success.
+    const enabled = backends.filter((b) => b.syncEnabled);
+    if (enabled.length > 0 && pairs.length === 0 && result.backends.length === 0 && result.success) {
+      return { success: false, output: '', error: 'Nothing was copied.' };
+    }
     return {
       success: result.success && spacesOk,
       output: result.backends.join(', ') || 'No backends configured',

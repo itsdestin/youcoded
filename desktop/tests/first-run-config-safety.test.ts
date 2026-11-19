@@ -54,6 +54,13 @@ describe('markSetupCompleted keeps the settings file whole', () => {
     expect(readFileSync(CONFIG, 'utf8')).toBe(damaged);
   });
 
+  it.each([['zero-byte', ''], ['whitespace-only', ' \n  ']])('a %s file counts as empty (first run) and gets the flag', async (_name, content) => {
+    writeFileSync(CONFIG, content);
+    const mod = await load();
+    await mod.markSetupCompleted();
+    expect(JSON.parse(readFileSync(CONFIG, 'utf8'))).toEqual({ setup_completed: true });
+  });
+
   it('leaves a file it cannot read exactly as it was (a folder where the file should be)', async () => {
     rmSync(CONFIG, { force: true });
     mkdirSync(CONFIG); // reading it fails with EISDIR, not ENOENT

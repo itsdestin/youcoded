@@ -80,6 +80,22 @@ describe('forceSync ("Back up all now")', () => {
     expect(backupNow).not.toHaveBeenCalled();
   });
 
+  // Review F6: never "finished" when every switched-on entry is one that cannot run on this device.
+  it('answers "nothing was copied" when the only switched-on backups cannot run here (GitHub; Drive on a phone)', async () => {
+    writeBackends([github]);
+    push.mockResolvedValue({ success: true, errors: 0, backends: [] });
+    expect(await state.forceSync()).toMatchObject({ success: false, error: 'Nothing was copied.' });
+    writeBackends([drive]);
+    setRunningOnPhone(true);
+    expect(await state.forceSync()).toMatchObject({ success: false, error: 'Nothing was copied.' });
+  });
+
+  it('with no backups switched on at all, keeps its earlier plain answer', async () => {
+    writeBackends([{ ...drive, syncEnabled: false }]);
+    push.mockResolvedValue({ success: true, errors: 0, backends: [] });
+    expect(await state.forceSync()).toMatchObject({ success: true, output: 'No backends configured' });
+  });
+
   it('on a phone leaves Drive out of the conversations copy', async () => {
     writeBackends([drive]);
     setRunningOnPhone(true);
@@ -147,5 +163,40 @@ describe('pushBackend ("Upload now" on one row)', () => {
     writeBackends([drive]);
     push.mockResolvedValue({ success: false, errors: 0, backends: [] });
     expect(await state.pushBackend('drive-1')).toEqual({ success: false, error: '' });
+  });
+});
+
+// Review F7: a warning from the conversations/project-files half is cleared only when THAT half next succeeds — not by the
+// settings half succeeding. (Failures of the daily timer's own run still only go to the log: no new warning.)
+describe('warnings raised by the conversations half of "Back up now"', () => {
+  const fail = { ok: false, failures: [{ target: { type: 'drive', base: 'gdrive:Claude' }, message: 'quotaExceeded: storage full' }] };
+
+  it('survive a later success of the settings half', async () => {
+    writeBackends([drive]);
+    backupNow.mockResolvedValue(fail);
+    await state.forceSync();
+    expect((await warnings()).map((w) => w.backendId)).toEqual(['drive-1']);
+    // What SyncService does when its own half succeeds:
+    await state.clearWarningsByBackend('drive-1', 'personal');
+    expect((await warnings()).map((w) => w.backendId)).toEqual(['drive-1']);
+  });
+
+  it('go away when the conversations half next succeeds', async () => {
+    writeBackends([drive]);
+    backupNow.mockResolvedValue(fail);
+    await state.forceSync();
+    backupNow.mockResolvedValue({ ok: true, failures: [] });
+    await state.forceSync();
+    expect(await warnings()).toEqual([]);
+  });
+
+  it('stay a single warning while that half keeps failing, and do not hide a failure of the settings half', async () => {
+    writeBackends([drive]);
+    backupNow.mockResolvedValue(fail);
+    await state.forceSync(); await state.forceSync();
+    expect(await warnings()).toHaveLength(1);
+    await state.addOrReplaceWarning({ code: 'UNKNOWN', level: 'danger', backendId: 'drive-1', title: 'personal', body: '', dismissible: false, createdEpoch: 1 });
+    await state.clearWarningsByBackend('drive-1', 'spaces');
+    expect((await warnings()).map((w) => w.title)).toEqual(['personal']);
   });
 });

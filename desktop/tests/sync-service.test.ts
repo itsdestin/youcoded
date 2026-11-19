@@ -551,6 +551,17 @@ describe('SyncService backup lock', () => {
     expect(await acquire(new SyncService(tmpHome))).toBe(true);
   });
 
+  it('a successful settings push does not clear a warning that came from the conversations half (review F7)', async () => {
+    const svc = new SyncService(tmpHome) as any;
+    await writeWarnings([
+      { code: 'TIMEOUT', level: 'danger', backendId: 'drive-1', source: 'spaces', title: 'spaces', body: '', dismissible: false, createdEpoch: 1 },
+      { code: 'UNKNOWN', level: 'danger', backendId: 'drive-1', title: 'personal', body: '', dismissible: false, createdEpoch: 1 },
+    ] as any);
+    await svc.clearBackendFailures('drive-1');
+    expect((await readWarnings()).map((w: any) => w.title)).toEqual(['spaces']);
+    await writeWarnings([]);
+  });
+
   it('reclaims a lock that carries this very process id but is not held by this service (a recycled id after a restart)', async () => {
     leave(process.pid, 60_000);
     expect(await acquire(new SyncService(tmpHome))).toBe(true);
@@ -602,6 +613,29 @@ describe('SyncService backup lock', () => {
     svc.stop();
     await new Promise((r) => setTimeout(r, 30));
     expect(fs.existsSync(lockDir)).toBe(true);
+  });
+
+  // Review F1: two processes judge the same leftover lock stale; the slower one must not delete the faster one's NEW lock.
+  it('a second process that also judged the lock stale backs off instead of deleting the first one\'s new live lock', async () => {
+    leave(deadPid(), 60_000);
+    const slow = new SyncService(tmpHome) as any;
+    const fast = new SyncService(tmpHome) as any;
+    // `slow` has looked at the leftover lock (stale) and is paused just before it moves it aside.
+    let reached!: () => void; const paused = new Promise<void>((r) => { reached = r; });
+    let go!: () => void; const gate = new Promise<void>((r) => { go = r; });
+    const real = slow.lockIsStale.bind(slow);
+    slow.lockIsStale = async () => { const verdict = await real(); reached(); await gate; return verdict; };
+    const slowResult = slow.acquireLock();
+    await paused;
+    // `fast` takes the leftover lock over completely and now holds a live lock of its own.
+    expect(await fast.acquireLock()).toBe(true);
+    const ownerBefore = fs.readFileSync(path.join(lockDir, 'owner'), 'utf8');
+    go();
+    expect(await slowResult).toBe(false);
+    // fast's lock is still there, still its own, and fast can still release it.
+    expect(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')).toBe(ownerBefore);
+    await fast.releaseLock();
+    expect(fs.existsSync(lockDir)).toBe(false);
   });
 
   it('knows a live process from a dead one on Windows without the language-dependent tasklist', () => {
@@ -679,6 +713,21 @@ describe('SyncService never wipes the saved backups after a failed read', () => 
     vi.spyOn(svc as any, 'autoDetectBackend').mockResolvedValue('drive');
     await svc.runHealthCheck();
     expect(fs.readFileSync(cfg(), 'utf8')).toBe(damaged);
+  });
+
+  it.each([['zero-byte', ''], ['whitespace-only', ' \n']])('a %s settings file is "empty, first run": no backups, no complaint, and the file may be written', (_n, content) => {
+    fs.writeFileSync(cfg(), content);
+    const svc = new SyncService(tmpHome) as any;
+    expect(svc.getBackendInstances()).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(cfg(), 'utf8')).storage_backends).toEqual([]); // the first-run migration wrote it
+  });
+
+  // Review M11: a file that cannot be READ is damaged, never empty.
+  it('a settings file that cannot be read at all (a folder in its place) reads as no backups and is never written over', () => {
+    fs.mkdirSync(cfg());
+    const svc = new SyncService(tmpHome) as any;
+    expect(svc.getBackendInstances()).toEqual([]); // no exception: nothing tried to write
+    expect(fs.statSync(cfg()).isDirectory()).toBe(true);
   });
 
   it('a missing settings file is still the normal "no backups yet" and is created', () => {

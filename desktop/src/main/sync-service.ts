@@ -429,7 +429,8 @@ export class SyncService extends EventEmitter {
 
   /** Clear all push-failure warnings for a backend (call on successful push). */
   private async clearBackendFailures(backendId: string): Promise<void> {
-    await clearWarningsByBackend(backendId);
+    // Only this (settings-and-skills) half's own warnings: one raised by the conversations half stays until that half succeeds.
+    await clearWarningsByBackend(backendId, 'personal');
   }
 
   /**
@@ -501,22 +502,36 @@ export class SyncService extends EventEmitter {
   // when it is older than LOCK_STALE_MS; and release removes only the lock this service took.
   private lockToken: string | null = null;
 
-  /** Is the existing lock leftover (safe to take over)? */
-  private async lockIsStale(): Promise<boolean> {
+  /** A fingerprint of the lock folder as it is right now: its inode plus what its owner wrote. A brand-new lock made
+   *  after this one was inspected can never match it (new folder, new inode). */
+  private async lockFingerprint(dir: string): Promise<string> {
+    const read = async (name: string) => { try { return (await fs.promises.readFile(path.join(dir, name), 'utf8')).trim(); } catch { return ''; } };
+    let ino = '';
+    try { ino = String((await fs.promises.stat(dir)).ino); } catch { /* gone */ }
+    return `${ino}|${await read('pid')}|${await read('started')}|${await read('owner')}`;
+  }
+
+  /** Is the existing lock leftover (safe to take over)? Answers with the fingerprint of what was inspected, so the
+   *  take-over can prove it moved aside THAT lock and not a newer one. */
+  private async lockIsStale(): Promise<{ stale: boolean; fingerprint: string }> {
+    const fingerprint = await this.lockFingerprint(this.lockDir);
     const read = async (name: string) => { try { return (await fs.promises.readFile(path.join(this.lockDir, name), 'utf8')).trim(); } catch { return ''; } };
-    const pid = parseInt(await read('pid'), 10);
-    let startedAt = parseInt(await read('started'), 10);
-    if (!(startedAt > 0)) {
-      try { startedAt = (await fs.promises.stat(this.lockDir)).mtimeMs; } catch { return false; } // vanished: the next try finds it free
-    }
-    const tooOld = Date.now() - startedAt > LOCK_STALE_MS;
-    if (!(pid > 0)) return tooOld; // no readable owner: a fresh folder may be a push that is about to write its id
-    if (pid === process.pid) {
-      // Ours only if THIS service took it; otherwise this id was recycled after a restart.
-      return !(this.lockToken && (await read('owner')) === this.lockToken);
-    }
-    if (!this.isPidAlive(pid)) return true;
-    return tooOld;
+    const verdict = async (): Promise<boolean> => {
+      const pid = parseInt(await read('pid'), 10);
+      let startedAt = parseInt(await read('started'), 10);
+      if (!(startedAt > 0)) {
+        try { startedAt = (await fs.promises.stat(this.lockDir)).mtimeMs; } catch { return false; } // vanished: the next try finds it free
+      }
+      const tooOld = Date.now() - startedAt > LOCK_STALE_MS;
+      if (!(pid > 0)) return tooOld; // no readable owner: a fresh folder may be a push that is about to write its id
+      if (pid === process.pid) {
+        // Ours only if THIS service took it; otherwise this id was recycled after a restart.
+        return !(this.lockToken && (await read('owner')) === this.lockToken);
+      }
+      if (!this.isPidAlive(pid)) return true;
+      return tooOld;
+    };
+    return { stale: await verdict(), fingerprint };
   }
 
   /** Acquire sync lock. Returns true if acquired, false if another sync is running. */
@@ -525,10 +540,19 @@ export class SyncService extends EventEmitter {
       await fs.promises.mkdir(this.lockDir, { recursive: false });
     } catch (e: any) {
       if (e.code !== 'EEXIST') return false;
-      if (!(await this.lockIsStale())) return false; // Another sync is genuinely running
-      // Stale lock. Move it aside in one step (only one process can win that), then remove it and retry.
+      const { stale, fingerprint } = await this.lockIsStale();
+      if (!stale) return false; // Another sync is genuinely running
+      // Stale lock. Move it aside, then CHECK what was moved is the lock that was inspected.
+      // WHY the check (backup fixes 2026-11-18, review F1): a rename is atomic, but two processes can both judge the
+      // same lock stale; the first renames it away and makes its own NEW lock, and the second's rename then moved
+      // that live lock aside and deleted it — both pushes ran at once. Now the second finds the folder it moved is
+      // not the one it inspected, puts it back and backs off.
       const aside = `${this.lockDir}.stale.${process.pid}.${Date.now()}`;
       try { await fs.promises.rename(this.lockDir, aside); } catch { return false; }
+      if ((await this.lockFingerprint(aside)) !== fingerprint) {
+        try { await fs.promises.rename(aside, this.lockDir); } catch { /* the lock was already remade; the live owner still releases by its own token */ }
+        return false;
+      }
       await fs.promises.rm(aside, { recursive: true, force: true }).catch(() => {});
       try { await fs.promises.mkdir(this.lockDir, { recursive: false }); } catch { return false; }
       this.logBackup('INFO', 'Took over a leftover backup lock', 'sync.lock');
@@ -656,7 +680,11 @@ export class SyncService extends EventEmitter {
   // `throwOnError`: callers that will WRITE the file back must tell "missing" (ENOENT) from "unreadable" — see readConfigStrict.
   private readJson(filePath: string, throwOnError = false): any {
     try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const raw = fs.readFileSync(filePath, 'utf8');
+      // A zero-byte or blank file is "empty, first run" — the same rule every reader of config.json follows (review F3);
+      // only a NON-empty file that fails to parse is "damaged".
+      if (throwOnError && !raw.trim()) return {};
+      return JSON.parse(raw);
     } catch (e) {
       if (throwOnError) throw e;
       return null;
