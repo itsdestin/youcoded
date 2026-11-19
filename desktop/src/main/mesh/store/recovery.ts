@@ -327,6 +327,18 @@ export class BodyTools {
       }
       let include = Math.max(lastValid + 1, ckpt ? ckpt.count : 0, evLines);
       const cursor = new BodyCursor(this.fs, dir, layout, handles);
+      // WHY the checkpoint as arbiter (review 5, found by the reviewer's fuzz: an OLDER index.bin whose records describe a history that a set-aside tail later replaced): old records that
+      // disagree with the bodies were being trusted as "the truth about a rotted line", which forked the head and cost every line after them. When the bodies, hashed from the start state, reach
+      // EXACTLY the checkpoint's chain value at its count, nothing is rotted and the checkpoint (a separate, current file) says the bodies are right: the old records are not used at all and
+      // every line is derived from its body, confirmed by that same value. (Only when no valid record lies beyond the checkpoint: those would be a crash between index and checkpoint.)
+      let pure = false;
+      if (ckpt && ckpt.count > evLines && lastValid + 1 <= ckpt.count) {
+        const pc = new BodyCursor(this.fs, dir, layout, handles);
+        let hh: Buffer = Buffer.from(start.h); let at = start.off; let ok = true;
+        for (let i = evLines; i < ckpt.count; i++) { const ln = await pc.takeLine(at); if (!ln) { ok = false; break; } hh = chainStep(hh, ln); at += ln.length; }
+        pure = ok && hh.equals(ckpt.h);
+        if (pure) include = ckpt.count;
+      }
       const s: BatchState = { ...start };
       const sum: SumFacts = { title: null, model: null, cwd: null };
       let gapStart = -1;                 // first slot of the current run of derived-only records, or -1
@@ -338,7 +350,7 @@ export class BodyTools {
       const out: Buffer[] = []; let outFrom = evLines;
       const flush = async (to: number) => { if (out.length) { await nf.write(Buffer.concat(out), recPos(outFrom)); out.length = 0; } outFrom = to; };
       for (let i = evLines; i < include; i++) {
-        const o = await refRec(i);
+        const o = pure ? null : await refRec(i);
         let line: Buffer | null;
         if (o) {
           if (o.rec.offset !== pos) { if (gapStart >= 0) { ambiguous = true; stopAt = gapStart; break; } throw new Damaged(`record ${i} says its line starts at byte ${o.rec.offset}, the body is at ${pos}`); }
