@@ -22,11 +22,19 @@ export type MenuIconName =
   | 'save'
   // The Browser panel's "Stop for this chat" (2026-10-13).
   | 'stop'
+  // Card #267: "Read aloud" on a message. A speaker with sound waves, the same mark the sound boxes use.
+  | 'speak'
   // Office Home's "Remove from Recent": takes a row off a list, never deletes a file — so a
   // minus in a circle, not the bin (design guide: a bin means the thing itself goes).
   | 'remove';
 
 const PATHS: Record<MenuIconName, React.ReactNode> = {
+  speak: (
+    <>
+      <path d="M11 5 6 9H2v6h4l5 4V5Z" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" />
+    </>
+  ),
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   remove: (
     <>

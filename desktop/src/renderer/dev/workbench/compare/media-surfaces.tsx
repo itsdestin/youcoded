@@ -13,9 +13,14 @@
 import React from 'react';
 import type { CompareSurface } from './types';
 import {
-  Button, Callout, Chip, ProgressBar, Select, CARD_LEVEL_2,
-  Menu, MenuItem, MenuRadioItem,
+  Button, Callout, Chip, ProgressBar, Select, CARD_LEVEL_1, CARD_LEVEL_2,
+  Menu, MenuItem, MenuRadioItem, SegmentedTabs, SettingRow, StatusStrip,
 } from '../../../components/ui';
+import { OverlayPanel } from '../../../components/overlays/Overlay';
+import InputBar from '../../../components/InputBar';
+import { ChatProvider } from '../../../state/chat-context';
+import { SkillProvider } from '../../../state/skill-context';
+import { createVoiceMock } from '../mock-shim';
 import ToolCard from '../../../components/ToolCard';
 import { PendingAskBubble } from '../../../components/PendingAskBubble';
 import { DeliverablesCard } from '../../../components/DeliverablesCard';
@@ -728,7 +733,7 @@ const Cap = ({ children }: { children: React.ReactNode }) => <p className="px-4 
 // ROUND 3 (Destin's picks: approval b-header, picture row, limit ask-slim; no orange; the same two icon actions on every box)
 // ═════════════════════════════════════════════════════════════════════════════════════
 /** Approval, b-header, in its final states. No orange: the generic ask's own pills (see ToolCard's money branch). */
-function Approval3({ state }: { state: 'normal' | 'edit' | 'chatgpt-only' | 'no-provider' }) {
+function Approval3({ state, narrow = false }: { state: 'normal' | 'edit' | 'chatgpt-only' | 'no-provider'; narrow?: boolean }) {
   const { id, setId, maker } = useMaker();
   const tool = React.useMemo<ToolCallState>(() => ({
     toolUseId: 'media-ask-3', toolName: 'MediaAsk', input: {}, status: 'awaiting-approval', requestId: 'native-media-3', permissionMode: 'ask',
@@ -747,14 +752,18 @@ function Approval3({ state }: { state: 'normal' | 'edit' | 'chatgpt-only' | 'no-
     const edit = state === 'edit';
     return {
       label: edit ? 'Changing a picture' : 'Making a picture',
-      detail: <span className="flex items-center gap-1.5"><span>·</span><Select size="sm" options={MAKER_OPTIONS} value={id} onChange={setId} className="w-80" aria-label="Who makes it" /></span>,
+      // WHY narrow (phone, 390px): the picker is 320px wide and ran past the card's edge; below the question it gets the full width.
+      detail: narrow ? undefined : <span className="flex items-center gap-1.5"><span>·</span><Select size="sm" options={MAKER_OPTIONS} value={id} onChange={setId} className="w-80" aria-label="Who makes it" /></span>,
       question: `“${edit ? EDIT_PROMPT : PROMPT}”`,
-      body: edit ? <img src={attachedData} alt="The picture to change" className="h-14 w-auto self-start rounded-md border border-edge-dim" /> : undefined,
+      body: (edit || narrow) ? <div className="flex flex-col gap-2">
+        {edit && <img src={attachedData} alt="The picture to change" className="h-14 w-auto self-start rounded-md border border-edge-dim" />}
+        {narrow && <Select size="sm" options={MAKER_OPTIONS} value={id} onChange={setId} aria-label="Who makes it" />}
+      </div> : undefined,
       note: `It costs ${maker.price}, charged to your ${maker.provider} account. “Allow for this chat” covers more pictures up to this chat’s $5.00 limit.`,
       money: { approve: 'Approve', decline: 'Decline', chat: 'Allow for this chat' },
       answer: async () => true,
     };
-  }, [id, maker, state, setId]);
+  }, [id, maker, state, setId, narrow]);
   return <PendingAskBubble><div className="w-[580px] max-w-full"><ToolCard tool={tool} sessionId="workbench" ask={ask} /></div></PendingAskBubble>;
 }
 
@@ -776,13 +785,14 @@ function Limit3() {
 const Actions = () => <><OpenBtn /><FolderBtn /></>;
 
 /** Sound (a): one box, info line on top (icon | name · maker · cost, actions), a tight player line under it. */
-function SoundA({ playing, progress }: { playing: boolean; progress: number }) {
+function SoundA({ playing, progress, narrow = false }: { playing: boolean; progress: number; narrow?: boolean }) {
   return (
     <NativeBox>
       <NativeHeader icon={<SoundGlyph />} label="Rain on a tin roof" detail="Lyria 3 · $0.04" right={<Actions />} />
       <div className="flex items-center gap-2 px-3 pb-1.5">
         <Play playing={playing} />
-        <Waveform progress={progress} height={18} />
+        {/* WHY narrow: 56 bars at 2px plus gaps are wider than a phone's box, so the time ran over them; fewer bars fit. */}
+        <Waveform progress={progress} height={18} count={narrow ? 22 : undefined} />
         <Time now={playing ? '0:12' : '0:00'} total="0:31" />
       </div>
     </NativeBox>
@@ -855,6 +865,371 @@ function VideoDone4() {
         <div className="flex shrink-0 items-center"><Actions /></div>
       </div>
     </NativeBox>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════
+// DESIGN ROUND 5 (card #267): read aloud, the voice setting, sending a recording, phone width.
+// Everything is the app's own part: the real chat menu (build-menu), the voice-typing download card's frame
+// (OverlayPanel) and words, StatusStrip (the band above the message box), the real InputBar, SegmentedTabs +
+// Select + SettingRow (as Session naming and the Assistant settings rows draw them) and the approved boxes.
+// New: the "speak" menu mark, the playing / stop arrangements, the voice picker's rows and the recording choices.
+// ═════════════════════════════════════════════════════════════════════════════════════
+const READ_TEXT = 'Here is the plan: first I tidy the budget sheet, then add a totals row, and last I check every formula.';
+const StopSquare = () => <G><rect x="6" y="6" width="12" height="12" rx="2" /></G>;
+
+/** The user's own bubble, with the classes UserMessage draws it with. */
+function UserBubble({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex justify-end px-4 py-2">
+      <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent">{children}</div>
+    </div>
+  );
+}
+
+// ── 1a. the message menu: the real one, with Read aloud added after "Ask about this" ───
+function ReadAloudMenu() {
+  const wrap = React.useRef<HTMLDivElement>(null);
+  const [state, setState] = React.useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  React.useEffect(() => {
+    const el = wrap.current?.querySelector<HTMLElement>('[data-read-target]');
+    if (!el) return;
+    const base = buildContextMenu(el) ?? [];
+    const at = base.findIndex((e) => e.type === 'item' && e.id === 'ask');
+    const read: MenuEntry = { type: 'item', id: 'read-aloud', label: 'Read aloud', icon: 'speak', run: () => {} };
+    const entries = [...base.slice(0, at + 1), read, ...base.slice(at + 1)];
+    const r = el.getBoundingClientRect();
+    setState({ x: r.left + r.width * 0.35, y: r.top + r.height * 0.55, entries });
+  }, []);
+  return (
+    <div ref={wrap} className="chat-scroll" style={{ minHeight: 330 }}>
+      <UserBubble><p>Please tidy the budget sheet.</p></UserBubble>
+      <Reply text="">
+        <span data-read-target>{READ_TEXT}</span>
+      </Reply>
+      {state && <ContextMenu x={state.x} y={state.y} entries={state.entries} onClose={() => setState(null)} />}
+    </div>
+  );
+}
+
+// ── 1b. playing / stop ──────────────────────────────────────────────────────────────
+/** A: a box under the message, in the same frame as the made-thing boxes; Stop at the right. */
+function ReadingBox() {
+  return (
+    <div>
+      <Cap>While it reads</Cap>
+      <Reply text={READ_TEXT}>
+        <NativeBox>
+          <NativeHeader icon={<SoundGlyph />} label="Reading aloud" detail="Built-in voice" right={<StopButton />} />
+        </NativeBox>
+      </Reply>
+    </div>
+  );
+}
+/** B: the band above the message box (where "Listening" shows while the mic is open); Stop at the right. */
+function ReadingPinned() {
+  return (
+    <ReadComposer>
+      <div className="px-3 pb-2">
+        <StatusStrip tone="busy" detail="“Here is the plan: first I tidy the budget sheet…” · Built-in voice"
+          action={<Button variant="secondary" size="sm">Stop</Button>}>Reading aloud</StatusStrip>
+      </div>
+    </ReadComposer>
+  );
+}
+/** C: no box; a quiet line at the foot of the message with a small Stop icon button. */
+function ReadingCorner() {
+  return (
+    <div>
+      <Cap>While it reads</Cap>
+      <Reply text={READ_TEXT}>
+        <div className="mt-1.5 flex items-center justify-end gap-1 text-2xs text-fg-muted select-none">
+          <span className="inline-flex text-fg-dim"><SoundGlyph /></span>
+          <span>Reading aloud</span>
+          <PanelIconButton title="Stop" onClick={() => {}} glyph={<StopSquare />} />
+        </div>
+      </Reply>
+    </div>
+  );
+}
+
+/** The real message box under a short chat, with a fake voice so its mic is the real mic. */
+function ReadComposer({ children, bubbles }: { children?: React.ReactNode; bubbles?: React.ReactNode }) {
+  const mock = React.useRef<ReturnType<typeof createVoiceMock> | null>(null);
+  if (!mock.current) mock.current = createVoiceMock('ready');
+  window.claude.voice = mock.current;
+  return (
+    <ChatProvider>
+      <SkillProvider>
+        <div className="flex flex-col gap-2">
+          {bubbles ?? <Reply text={READ_TEXT}><span /></Reply>}
+          {children}
+          <InputBar sessionId="read-demo" compact />
+        </div>
+      </SkillProvider>
+    </ChatProvider>
+  );
+}
+
+// ── 1c. first-time download: the voice-typing card's own frame and words ────────────
+function ReadDownloadCard({ state }: { state: 'offer' | 'downloading' }) {
+  return (
+    <OverlayPanel layer={4} role="dialog" aria-label="Voice" className="relative p-3 text-left w-72 max-w-full">
+      {state === 'offer' ? (
+        <>
+          <p className="text-xs font-semibold text-fg mb-1.5">Read messages aloud</p>
+          <p className="text-2xs text-fg-2 leading-snug">
+            Right-click a message and it is read out loud. The voice runs on this computer, so your messages never leave it.
+          </p>
+          <p className="text-2xs text-fg-2 leading-snug mt-2">Understands English and 24 other European languages.</p>
+          <p className="text-2xs text-fg-muted mt-2">One-time download: about 400 MB.</p>
+          <div className="flex justify-end gap-2 mt-3">
+            <Button variant="secondary" size="sm">Not now</Button>
+            <Button variant="primary" size="sm">Download</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-xs font-semibold text-fg mb-1.5">Getting the voice ready</p>
+          <ProgressBar percent={42} showLabel aria-label="Voice download" />
+          <p className="text-2xs text-fg-muted mt-2">About 400 MB, once. It starts reading when it is done.</p>
+        </>
+      )}
+    </OverlayPanel>
+  );
+}
+function ReadFirstTime() {
+  return (
+    <div>
+      <Cap>First time: after choosing Read aloud</Cap>
+      <Reply text={READ_TEXT}><span /></Reply>
+      <div className="px-4 pt-1"><ReadDownloadCard state="offer" /></div>
+      <Cap>While it downloads</Cap>
+      <div className="px-4 pt-1"><ReadDownloadCard state="downloading" /></div>
+    </div>
+  );
+}
+
+// ── 2. choosing the voice ───────────────────────────────────────────────────────────
+const SERVICES = [
+  { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'google', label: 'Google' },
+];
+const VOICES: Record<string, { value: string; label: string }[]> = {
+  openrouter: [{ value: 'alloy', label: 'Alloy' }, { value: 'sage', label: 'Sage' }, { value: 'ember', label: 'Ember' }],
+  openai: [{ value: 'nova', label: 'Nova' }, { value: 'onyx', label: 'Onyx' }, { value: 'shimmer', label: 'Shimmer' }],
+  google: [{ value: 'kore', label: 'Kore' }, { value: 'puck', label: 'Puck' }, { value: 'charon', label: 'Charon' }],
+};
+const SERVICE_NAME: Record<string, string> = { openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google' };
+
+function useVoicePick(initialMode: 'builtin' | 'cloud' = 'cloud') {
+  const [mode, setMode] = React.useState<'builtin' | 'cloud'>(initialMode);
+  const [service, setService] = React.useState('openai');
+  const [voice, setVoice] = React.useState('nova');
+  const pick = (s: string) => { setService(s); setVoice(VOICES[s][0].value); };
+  return { mode, setMode, service, pick, voice, setVoice };
+}
+/** The pickers and the sample button, shared by both homes. */
+function VoicePickers({ p }: { p: ReturnType<typeof useVoicePick> }) {
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-fg">Service</p>
+        <Select size="sm" options={SERVICES} value={p.service} onChange={p.pick} aria-label="Service that reads aloud" />
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-fg">Voice</p>
+        <Select size="sm" options={VOICES[p.service]} value={p.voice} onChange={p.setVoice} aria-label="Voice" />
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-0.5">
+        <p className="text-2xs text-fg-muted min-w-0">Charged to your {SERVICE_NAME[p.service]} account.</p>
+        <Button variant="secondary" size="sm" className="shrink-0"><PlayMark /> Play a sample</Button>
+      </div>
+    </div>
+  );
+}
+const VOICE_MODE_TEXT = {
+  builtin: 'Reads on this computer with a free voice. Nothing is sent anywhere.',
+  cloud: 'Uses a more natural voice from a service you have connected. It costs a little each time.',
+};
+/** A: one card in Assistant settings beside Session naming: the same strip of choices, the same grey line, pickers below. */
+function VoiceCard({ initial = 'cloud' }: { initial?: 'builtin' | 'cloud' }) {
+  const p = useVoicePick(initial);
+  return (
+    <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`} aria-label="Read-aloud voice">
+      <h3 className="text-xs font-medium text-fg">Read-aloud voice</h3>
+      <div className="space-y-3">
+        <SegmentedTabs aria-label="Read-aloud voice" variant="nested" value={p.mode}
+          tabs={[{ id: 'builtin', label: 'Built-in' }, { id: 'cloud', label: 'Cloud' }]}
+          onChange={(m) => p.setMode(m as 'builtin' | 'cloud')} />
+        <p className="text-xs text-fg-2 leading-relaxed">{VOICE_MODE_TEXT[p.mode]}</p>
+        {p.mode === 'cloud' && <VoicePickers p={p} />}
+      </div>
+    </section>
+  );
+}
+/** B: one row in the settings list that opens a small popup; the popup holds the same choices. */
+function VoiceRowPopup() {
+  const p = useVoicePick('cloud');
+  return (
+    <div className="space-y-4">
+      <SettingRow variant="nav" title="Read-aloud voice"
+        description={p.mode === 'builtin' ? 'Built-in voice' : `${SERVICE_NAME[p.service]} · ${VOICES[p.service].find((v) => v.value === p.voice)!.label}`}
+        onClick={() => {}} />
+      <Cap>After tapping the row</Cap>
+      <OverlayPanel layer={3} role="dialog" aria-label="Read-aloud voice" className="relative w-[420px] max-w-full p-4 space-y-3">
+        <h2 className="text-sm font-medium text-fg">Read-aloud voice</h2>
+        <SegmentedTabs aria-label="Read-aloud voice" variant="contained" value={p.mode}
+          tabs={[{ id: 'builtin', label: 'Built-in' }, { id: 'cloud', label: 'Cloud' }]}
+          onChange={(m) => p.setMode(m as 'builtin' | 'cloud')} />
+        <p className="text-xs text-fg-2 leading-relaxed">{VOICE_MODE_TEXT[p.mode]}</p>
+        {p.mode === 'cloud' && <VoicePickers p={p} />}
+        <div className="flex justify-end pt-1"><Button variant="primary" size="sm">Done</Button></div>
+      </OverlayPanel>
+    </div>
+  );
+}
+
+// ── 3. voice typing vs sending the recording ────────────────────────────────────────
+function RecordingCard({ words }: { words?: string }) {
+  return (
+    <UserBubble>
+      <NativeBox>
+        <NativeHeader icon={<SoundGlyph />} label="Your recording" detail="0:07" right={<Actions />} />
+        <div className="flex items-center gap-2 px-3 pb-1.5 text-fg">
+          <Play playing={false} />
+          <Waveform progress={0} height={18} count={40} />
+          <Time now="0:00" total="0:07" />
+        </div>
+      </NativeBox>
+      {words && <p className="mt-2">{words}</p>}
+    </UserBubble>
+  );
+}
+const SAID = 'Please tidy the budget sheet and add a totals row.';
+const DeafNote = () => <p className="px-4 -mt-1 text-right text-2xs text-fg-muted">This model can’t hear sound, so it got your words. The recording stays here.</p>;
+/** One candidate shows the two situations one above the other. */
+function TwoCases({ hears, deaf }: { hears: React.ReactNode; deaf: React.ReactNode }) {
+  return <div className="flex flex-col gap-5"><div><Cap>The chat’s model can hear sound</Cap>{hears}</div><div><Cap>The chat’s model can’t hear sound</Cap>{deaf}</div></div>;
+}
+/** A: tap the mic and talk as today; after Stop the band offers both. */
+function RecordChoiceAfter() {
+  const typeBtn = <Button variant="secondary" size="sm">Type it out</Button>;
+  return (
+    <TwoCases
+      hears={<ReadComposer bubbles={<RecordingCard />}>
+        <div className="px-3 pb-2"><StatusStrip tone="ok" action={<div className="flex gap-2">{typeBtn}<Button variant="primary" size="sm">Send recording</Button></div>}>Recorded · 0:07</StatusStrip></div>
+      </ReadComposer>}
+      deaf={<ReadComposer bubbles={<><RecordingCard words={SAID} /><DeafNote /></>}>
+        <div className="px-3 pb-2"><StatusStrip tone="ok" detail="This model can’t hear sound, so it will get your typed words. The recording stays in your message."
+          action={<div className="flex gap-2"><Button variant="secondary" size="sm">Discard</Button><Button variant="primary" size="sm">Send with words</Button></div>}>Recorded · 0:07</StatusStrip></div>
+      </ReadComposer>}
+    />
+  );
+}
+/** B: tap the mic types (as today); hold it to record a message to send. */
+function RecordHold() {
+  return (
+    <TwoCases
+      hears={<ReadComposer bubbles={<RecordingCard />}>
+        <div className="px-3 pb-2"><StatusStrip tone="ok" detail="Let go to send it. Slide away to cancel."
+          action={<Button variant="secondary" size="sm">Cancel</Button>}>Recording to send · 0:07</StatusStrip></div>
+      </ReadComposer>}
+      deaf={<ReadComposer bubbles={<><RecordingCard words={SAID} /><DeafNote /></>}>
+        <div className="px-3 pb-2"><StatusStrip tone="ok" detail="This model can’t hear sound. Let go and it gets your words; the recording stays in your message."
+          action={<Button variant="secondary" size="sm">Cancel</Button>}>Recording to send · 0:07</StatusStrip></div>
+      </ReadComposer>}
+    />
+  );
+}
+/** C: a small menu on the mic (right-click, or long-press on touch) chooses what this recording does. */
+function MicMenu({ deaf }: { deaf: boolean }) {
+  const wrap = React.useRef<HTMLDivElement>(null);
+  const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [open, setOpen] = React.useState(true);
+  React.useEffect(() => {
+    const t = window.setTimeout(() => {
+      const mic = wrap.current?.querySelector('[aria-label="Speak your message"]');
+      const r = mic?.getBoundingClientRect();
+      if (r) setPos({ x: r.left - 120, y: r.top - 92 });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, []);
+  const entries: MenuEntry[] = [
+    { type: 'item', id: 'type', label: 'Type what I say', icon: 'rename', primary: true, run: () => {} },
+    { type: 'item', id: 'send', label: deaf ? 'Send my recording (not for this model)' : 'Send my recording', icon: 'speak', disabled: deaf, run: () => {} },
+  ];
+  return (
+    <div ref={wrap}>
+      <ReadComposer bubbles={<UserBubble><p>{SAID}</p></UserBubble>} />
+      {open && pos && <ContextMenu x={pos.x} y={pos.y} entries={entries} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+// ── 4. phone width ──────────────────────────────────────────────────────────────────
+/** Phone fixes: a header line that cannot hold name + maker + cost + two buttons puts the maker and cost on a second line. */
+function PictureRowNarrow() {
+  return (
+    <Reply text="Here’s your picture.">
+      <MadePicture />
+      <NativeBox>
+        <div className="flex items-center gap-2 px-3 py-1.5">
+          <BoxIcon><ImageGlyph /></BoxIcon>
+          <span aria-hidden className="w-px h-6 bg-edge shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-fg-2 truncate">{PICTURE_NAME}</p>
+            <p className="text-2xs text-fg-muted truncate">{META}</p>
+          </div>
+          <Actions />
+        </div>
+      </NativeBox>
+    </Reply>
+  );
+}
+function VideoDoneNarrow() {
+  return (
+    <NativeBox>
+      <div className="flex items-center gap-2.5 p-2">
+        <img src={frameData} alt="First frame of the video" className="h-12 w-20 shrink-0 rounded-md object-cover" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-fg-2 truncate">ocean-loop.mp4</p>
+          <p className="text-2xs text-fg-muted">0:08 · Veo 4 · $0.80</p>
+        </div>
+        <div className="flex shrink-0 items-center"><Actions /></div>
+      </div>
+    </NativeBox>
+  );
+}
+function PhoneCards({ adjusted = false }: { adjusted?: boolean }) {
+  if (adjusted) return (
+    <div className="flex flex-col gap-2" style={{ width: 390 }}>
+      <Cap>Approval</Cap>
+      <Approval3 state="normal" narrow />
+      <Cap>Picture</Cap>
+      <PictureRowNarrow />
+      <Cap>Sound</Cap>
+      <Reply text="Here’s your sound."><SoundA playing progress={0.4} narrow /></Reply>
+      <Cap>Video, finished</Cap>
+      <Reply text="Your video is ready."><VideoDoneNarrow /></Reply>
+      <Cap>Spending limit</Cap>
+      <Limit3 />
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-2" style={{ width: 390 }}>
+      <Cap>Approval</Cap>
+      <Approval3 state="normal" />
+      <Cap>Picture</Cap>
+      <PictureRow />
+      <Cap>Sound</Cap>
+      <Reply text="Here’s your sound."><SoundA playing progress={0.4} /></Reply>
+      <Cap>Video, finished</Cap>
+      <Reply text="Your video is ready."><VideoDone4 /></Reply>
+      <Cap>Spending limit</Cap>
+      <Limit3 />
+    </div>
   );
 }
 
@@ -988,5 +1363,46 @@ export const MEDIA_SURFACES: CompareSurface[] = [
         { id: 'ask-slim', label: 'Ask frame, slimmest', note: 'His sentence; the raise-to list, Stop and Continue on one line at the right.', render: () => <Limit3 /> },
       ] },
     ],
+  },
+  {
+    id: 'media-read-aloud', label: 'Read aloud from a message',
+    question: 'How does a message get read aloud, and how do you stop it?',
+    frame: 'canvas', paneWidth: 620,
+    rounds: [{ n: 1, basis: 'Approved: Read aloud is in the right-click menu of any message (yours or the assistant\u2019s). The built-in voice downloads once, like voice typing.', candidates: [
+      { id: 'menu', label: 'The message menu', note: 'The real chat menu with Read aloud added under Ask about this. Same on your messages.', render: () => <ReadAloudMenu /> },
+      { id: 'playing-box', label: 'Stop box under the message', note: 'A box in the same frame as the picture, sound and video boxes: Reading aloud, the voice, Stop at the right.', render: () => <ReadingBox /> },
+      { id: 'playing-pinned', label: 'Band above the message box', note: 'The band where Listening shows for voice typing: Reading aloud, the start of the message, Stop. Stays while you scroll.', render: () => <ReadingPinned /> },
+      { id: 'playing-corner', label: 'Quiet line with a Stop icon', note: 'No box: a small line at the foot of the message, ending in a Stop icon button.', render: () => <ReadingCorner /> },
+      { id: 'first-time', label: 'First time: the download', note: 'Voice typing\u2019s own download card (offer, then progress bar) with Read aloud\u2019s words.', render: () => <ReadFirstTime /> },
+    ] }],
+  },
+  {
+    id: 'media-voice-setting', label: 'Choosing the read-aloud voice',
+    question: 'Where do you switch from the free built-in voice to a cloud voice, and pick which one?',
+    frame: 'panel', paneWidth: 480,
+    rounds: [{ n: 1, basis: 'Approved: free built-in voice by default; a setting switches to a cloud voice paid by an existing key. Mirrors Session naming (strip of choices, one grey line, pickers appear when the second choice is on).', candidates: [
+      { id: 'card', label: 'A card beside Session naming', note: 'Same card and strip of choices as Session naming; Service, Voice and Play a sample appear for Cloud.', render: () => <VoiceCard /> },
+      { id: 'row-popup', label: 'A row that opens a popup', note: 'One Settings row showing the current voice; the popup holds the same choices.', render: () => <VoiceRowPopup /> },
+    ] }],
+  },
+  {
+    id: 'media-send-recording', label: 'Voice typing or sending the recording',
+    question: 'How do you choose between typing what you say and sending the recording, and what if the model can\u2019t hear?',
+    frame: 'canvas', paneWidth: 640,
+    rounds: [{ n: 1, basis: 'Today the mic only types what you say. New: the recording itself can be sent; it shows as a sound box in your own bubble.', candidates: [
+      { id: 'choose-after', label: 'Choose after you stop', note: 'Talk as today. When you stop, the band offers Type it out or Send recording. A model that can\u2019t hear gets one choice: Send with words.', render: () => <RecordChoiceAfter /> },
+      { id: 'hold-to-send', label: 'Tap types, hold sends', note: 'Tap the mic: as today. Hold it: records a message to send. A model that can\u2019t hear still gets the words.', render: () => <RecordHold /> },
+      { id: 'mic-menu', label: 'A menu on the mic', note: 'Right-click or long-press the mic: Type what I say, or Send my recording (greyed, with its reason, for a model that can\u2019t hear).', render: () => <MicMenu deaf={false} /> },
+      { id: 'mic-menu-deaf', label: 'A menu on the mic, model can\u2019t hear', note: 'The same menu; the send choice is greyed.', render: () => <MicMenu deaf /> },
+    ] }],
+  },
+  {
+    id: 'media-phone', label: 'Made-thing cards at phone width',
+    question: 'Do the approved cards fit a 390px screen?',
+    frame: 'canvas', paneWidth: 390,
+    rounds: [{ n: 1, basis: 'The approved approval, picture, sound, finished video and limit cards at 390px, unchanged.', candidates: [
+      { id: 'as-is', label: 'As approved', note: 'All five cards in a 390px column. Breaks: the maker picker runs past the approval card; the sound time sits on top of the waveform; picture and video names are cut to a few letters.', render: () => <PhoneCards /> },
+      { id: 'adjusted', label: 'Phone fixes', note: 'Maker picker moves under the question; fewer waveform bars; picture and video put the maker and cost on a second line. Limit and the rest unchanged.', render: () => <PhoneCards adjusted /> },
+    ] }],
   },
 ];
