@@ -644,6 +644,11 @@ export class ShellRegistry extends EventEmitter {
     }, urgent);
   }
 
+  /** WHY (card #220 item 3): the saved list loads in the background right after a chat reopens. The
+   *  assistant's BashOutput/KillShell lookups await this first, so a question asked in that first moment
+   *  sees the saved commands instead of answering "No background command". Resolved (never rejects). */
+  restoreReady: Promise<void> = Promise.resolve();
+
   private restoredView(r: RestoredRun): ShellRunView { return persistedToView(r.rec); }
 
   /** Views of commands carried over from a previous run (see restoreFrom). */
