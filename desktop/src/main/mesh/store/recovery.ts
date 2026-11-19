@@ -519,6 +519,8 @@ export class BodyTools {
       if (headerStamp(hdr) !== stamp) throw new NeedsRebuild('classifier stamp changed');
       let count = Math.floor((size - HDR) / REC);
       const partial = size - HDR - count * REC;
+      // WHY (review 5, fuzz seed 27188): an index shorter than the stand-in record the checkpoint says it holds (an older copy) cannot be walked from there: re-derive it
+      if (lostRecs > 0 && count < lostRecs) throw new NeedsRebuild('the index is shorter than the evicted prefix the checkpoint describes');
       // Verify only the window a crash could have damaged (the last VERIFY_WINDOW records); the rolling
       // scrub (scrubSome) walks the older part a bounded amount per open.
       // WHY the lostRecs floor (review 5, F4): the slots before the stand-in record hold no real record by design; they are not damage

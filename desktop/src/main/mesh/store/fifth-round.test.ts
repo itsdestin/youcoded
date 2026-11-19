@@ -470,3 +470,19 @@ describe('the rebuild past the checkpoint', () => {
   });
 });
 
+describe('an older, SHORTER index after the whole index was lost once', () => {
+  it('an index with fewer records than the stand-in position the checkpoint names is re-derived, not walked (found by fuzz seed 27188: an untyped RangeError)', async () => {
+    const t = await tmpRoot('r5-short-');
+    const L = mk('y', 21);
+    let s = await open(t.dir); await s.append(V(1), 0, 0, L.slice(0, 6)); await s.close();
+    const ix = path.join(vdir(t.dir), 'index.bin'); const old = fs.readFileSync(ix);              // 6 records
+    s = await open(t.dir); for (let i = 6; i < 21; i += 3) await s.append(V(1), 0, i, L.slice(i, i + 3)); await evict(s, 12); await s.close();
+    fs.unlinkSync(ix); s = await open(t.dir); await s.head(V(1)); await s.close();                // the index is lost once: the stand-in at slot 11, lostRecs 12
+    fs.writeFileSync(ix, old);                                                                    // and an OLDER, shorter index (6 records) comes back
+    s = await open(t.dir);
+    expect((await s.head(V(1))).lines).toBe(21);
+    expect(await readAll(s, L)).toBe('E'.repeat(12) + '.'.repeat(9));
+    await s.close(); await t.cleanup();
+  });
+});
+
