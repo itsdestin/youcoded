@@ -16,6 +16,8 @@ export const KillShellTool = defineTool({
   permissionSubject: () => undefined,
   async execute(args, ctx) {
     const reg = ctx.shells;
+    // WHY (card #220): right after a chat reopens the saved list may still be loading; wait for it.
+    await reg?.restoreReady;
     const run = reg?.get(args.shell_id);
     // WHY (card #220): a command from before an app restart is not in `get()` but is a
     // real command — say its true state, and stop it if it is verifiably still alive.

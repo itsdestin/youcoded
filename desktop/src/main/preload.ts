@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame, webUtils } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
@@ -1504,6 +1504,11 @@ contextBridge.exposeInMainWorld('claude', {
   dialog: {
     openFile: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE),
+    // WHY: Electron removed File.path (v32), so a dropped file's real location can only be read
+    // here, in the preload, via webUtils. Synchronous, no IPC. Returns '' if the file has no path.
+    pathForFile: (file: File): string => {
+      try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
+    },
     openFolder: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER),
     openSound: (): Promise<string | null> =>
@@ -2238,8 +2243,8 @@ contextBridge.exposeInMainWorld('claude', {
     cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_CANCEL_SIGN_IN)),
   },
   // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
-  // Read-only on purpose — the other three verbs have no equivalent here,
-  // because Claude Code owns its login and the app cannot clear it.
+  // No sign-out verb on purpose: Claude Code owns its login and the app cannot clear it. Sign-in
+  // exists since card #236: signIn/cancelSignIn rerun the first-launch `claude auth login`.
   // `refresh: true` drops main's 60s cache first; the Cloud providers page
   // passes it so opening Settings always shows today's answer.
   claudeCode: {

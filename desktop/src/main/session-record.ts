@@ -152,7 +152,13 @@ export type ResumeDecision =
 /** An open prompt card, as the `session:live` event that raised it (so a screen that opens later is handed the same event). */
 type OpenPrompt = Extract<SessionLive, { kind: 'prompt-show' }>;
 
-interface OpenAsk { event: unknown; /** Claude Code closed its hook but its own menu may still wait. */ expired: boolean }
+interface OpenAsk {
+  event: unknown;
+  /** Claude Code closed its hook but its own menu may still wait. */
+  expired: boolean;
+  /** Asked from inside a helper agent (the hook payload carries `agent_id`), not by the conversation itself. */
+  fromAgent: boolean;
+}
 
 /** One entry of the fill tail: a recent push, with a streaming part's deltas merged. */
 interface TailEntry { type: string; payload: unknown; bytes: number; /** true once `payload` is this file's own clone (safe to grow). */ owned: boolean }
@@ -297,7 +303,20 @@ export class SessionRecords {
   }
 
   private screenNeedKey(rec: Rec): string {
-    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}|${rec.asks.size > 0 ? 1 : 0}`;
+    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}|${rec.asks.size > 0 ? 1 : 0}|${this.holdsMessageBox(rec) ? 1 : 0}`;
+  }
+
+  /** A question of the conversation's OWN is open (live or kept), or a password ask: Claude Code's menu for it may own the
+   *  message box, so nothing automated may type.
+   *  A helper agent's question is let through ONLY while the app's hook still holds it (not kept) AND no turn runs (card #278):
+   *  measured on CLI 2.1.327, Claude Code draws no menu for a background helper's ask while a hook holds it, so the box stays
+   *  live and the person typed straight into it. A KEPT helper ask (hook closed) is drawn over the box at once, and during a
+   *  turn the helper may be a foreground one (not measured) — both still hold, so the safety never rests on the screen
+   *  reading alone in the instant before a newly drawn menu is parsed (review of #278). */
+  private holdsMessageBox(rec: Rec): boolean {
+    if (rec.passwordAsks.size > 0) return true;
+    for (const a of rec.asks.values()) if (!a.fromAgent || a.expired || rec.facts.working) return true;
+    return false;
   }
 
   /** Asks that are really waiting on the person: a kept ask (Claude Code closed its hook) is not, the card the screen draws is a separate matter. */
@@ -316,12 +335,15 @@ export class SessionRecords {
    *  - `cards`: prompt cards open;
    *  - `permissionCard`: a permission/question/plan ask is open for this turn, LIVE OR KEPT (Claude Code closed its hook but its menu may still wait). A
    *    pop-up nobody named gets a generic card only when this is false: the menu on screen belongs to the permission card (master's popups rule).
+   *  - `holdsMessageBox`: a question of the conversation's own (live or kept) or a password ask is open; a helper agent's counts only once kept or
+   *    while a turn runs (holdsMessageBox — why). The queue
+   *    reads this, not `asking`/`permissionCard` (card #278: a background helper's question held every queued message until the next turn ended).
    * The stuck check runs only while `working && !toolRunning && !asking` — the same gate the renderer's hook used.
    */
-  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number; permissionCard: boolean } | null {
+  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number; permissionCard: boolean; holdsMessageBox: boolean } | null {
     const rec = this.records.get(sessionId);
     if (!rec) return null;
-    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size, permissionCard: rec.asks.size > 0 };
+    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size, permissionCard: rec.asks.size > 0, holdsMessageBox: this.holdsMessageBox(rec) };
   }
 
   /** Called whenever what `screenNeed` reports changes for a session (and once when the session is dropped). One listener: main/session-screens.ts. */
@@ -948,7 +970,10 @@ export class SessionRecords {
     switch (ev.type) {
       case 'PermissionRequest':
         if (rec.asks.size >= OPEN_ASKS_MAX && !rec.asks.has(id)) return;
-        rec.asks.set(id, { event: ev, expired: false });
+        // WHY fromAgent (card #278): Claude Code stamps `agent_id` on a hook only when it fires inside a helper agent
+        // (cc-dependencies.md). A background helper's question does not take the conversation's message box, so the queue
+        // must not wait on it; screenNeed reports it apart from the conversation's own questions.
+        rec.asks.set(id, { event: ev, expired: false, fromAgent: typeof asObject(ev.payload).agent_id === 'string' && asObject(ev.payload).agent_id !== '' });
         rec.facts.attention = 'ok'; // the reducer's PERMISSION_REQUEST writes ok
         return;
       case 'PasswordRequest':

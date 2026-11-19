@@ -2078,7 +2078,12 @@ function AppInner() {
 
       // Reload session list from the new server
       window.claude.session.list().then((list: any[]) => {
-        if (!list || list.length === 0) return;
+        if (!list || list.length === 0) {
+          // WHY: an empty list is still the computer's answer. Returning without deciding left placeDecidedRef false (reset above),
+          // so a phone reconnecting to a computer with no chats open never auto-focused a chat created afterwards.
+          if (isRemoteMode()) decideRemotePlace([]);
+          return;
+        }
         setSessions(list);
         for (const s of list) {
           dispatch({ type: 'SESSION_INIT', sessionId: s.id });
