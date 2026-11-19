@@ -3,8 +3,9 @@
 // aside (torn/) instead of deleting them. Pure helpers over the Fs door; they hold no store state.
 import * as nodePath from 'node:path';
 import { writeFileAtomic, mkdirDurable, type Fs, type FileLike } from './fsio';
-import { readCheckpoint, writeCheckpoint, CHECKPOINT_FILE } from './checkpoint';
+import { readCheckpoint, writeCheckpoint, CHECKPOINT_FILE, type Boundary } from './checkpoint';
 import { writeSideFor } from './sidefile';
+import { setMarks } from './marks';
 import { StoreError } from './errors';
 import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
@@ -21,27 +22,6 @@ const SCAN_BATCH = 4096;
  * deleting the oldest to make room is deleting data. At the cap the version reports `limit` and stays as it is.
  */
 const MAX_TORN_FILES = 4096;
-/** Marker file: the conversation chain of the lines after the evicted prefix was derived from a prefix written by another classifier (N4). */
-export const STALE_CONV_FILE = 'stale-conv.json';
-/** Marker file: lines from `fromLine` were set aside by a rebuild because their bodies did not match the chain (N7). */
-export const PARTIAL_FILE = 'partial.json';
-/** The second copy of damaged.json (see readDamaged in versionfiles.ts for why there are two). */
-export const DAMAGED_COPY = 'damaged.copy';
-/** Write the quarantine marker twice, one copy at a time. */
-export async function writeDamaged(fs: Fs, dir: string, value: { asideName: string; reason: string; atMs: number }): Promise<void> {
-  const key = nodePath.basename(dir);
-  await writeSideFor(fs, nodePath.join(dir, 'damaged.json'), key, value); // DESTRUCTIVE-OK(hint): the marker that says where the copy went
-  await writeSideFor(fs, nodePath.join(dir, DAMAGED_COPY), key, value); // DESTRUCTIVE-OK(hint): the second copy of the same marker
-}
-/** The second copy of partial.json (review 4): the marker is the ONLY record that a rebuild set lines aside, so one deleted or damaged file must not silence the report. */
-export const PARTIAL_COPY = 'partial.copy';
-/** Write the marker twice, one copy at a time (a kill leaves at least one intact). */
-export async function writePartial(fs: Fs, dir: string, value: { fromLine: number; lost: number; atMs: number }): Promise<void> {
-  const key = nodePath.basename(dir);
-  await writeSideFor(fs, nodePath.join(dir, PARTIAL_FILE), key, value); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
-  await writeSideFor(fs, nodePath.join(dir, PARTIAL_COPY), key, value); // DESTRUCTIVE-OK(hint): the second copy of the same marker
-}
-
 /** Internal: the index can be repaired by re-deriving it from the body. */
 export class NeedsRebuild extends Error { constructor(readonly reason: string) { super(reason); } }
 /** Internal: not repairable; the store quarantines the version. */
@@ -240,21 +220,24 @@ export class BodyTools {
    * left as surplus for the next load to keep aside; when no checkpoint exists they are possibly acknowledged and are also marked partial.
    * Nothing vouching at all (no valid record, no checkpoint) for a body with whole lines is refused as damaged (quarantine, bytes kept).
    */
-  async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, evIn: { hint: { lines: number; bytes: number } | null }, stamp: number, opts: { convStale?: boolean } = {}): Promise<RebuildResult> {
+  async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, stamp: number): Promise<RebuildResult> {
     // WHY the lenient layout (review 4): a crash in the middle of a cut leaves a truncated chunk next to chunk files that were about to be removed, a hole beyond the
     // lines the rebuild needs. Only a hole INSIDE the lines it has to read matters, and the cursor below reports exactly that (Damaged); the strict check refused the whole version.
     const layout = await this.layout(dir);
     // eviction: the CHECKPOINT's record of it (hint) is the only candidate, and only when a prefix of valid records ends exactly there. WHY not "the first chunk file's
     // start" any more (review 4, F4): a deleted first chunk looks exactly like an eviction, and must be reported as damage, never relabelled as one.
     const candidates: { lines: number | null; bytes: number }[] = [];
-    if (evIn.hint && evIn.hint.bytes > 0) candidates.push(evIn.hint);
+    const ckpt = await readCheckpoint(this.fs, dir);
+    // the checkpoint's record of the eviction is the only candidate; its boundary state (review 5, F4) lets the prefix be synthesized when no copy of the prefix records survives
+    if (ckpt && ckpt.evLines > 0) candidates.push({ lines: ckpt.evLines, bytes: ckpt.evBytes });
+    // a stale-conversation-chain bit in the checkpoint's stamp (replaces stale-conv.json)
+    const convStale = ckpt !== null && ckpt.stamp === ((stamp ^ 0x80000000) >>> 0);
     // The checkpoint's record can be STALE (an older copy, written before a restore): when the bodies it says are gone are in fact there (a chunk file starts at 0), the
     // prefix records can be derived from them like any others, so a prefix nothing else supplies is not a reason to quarantine.
     let ev: { lines: number | null; bytes: number } = { lines: 0, bytes: 0 };
     const oldPath = nodePath.join(dir, 'index.bin');
     const tmpPath = nodePath.join(dir, 'index.rebuild');
     const hadOld = await this.fs.exists(oldPath);
-    const ckpt = await readCheckpoint(this.fs, dir);
     const handles: FileLike[] = [];
     // WHY every handle is opened INSIDE the try and closed in the one finally (N10)
     try {
@@ -268,7 +251,7 @@ export class BodyTools {
         const hdrOk = hdr.length >= HDR && headerOk(hdr);
         if (hdrOk && !headerTag(hdr).equals(myTag)) return null;
         // WHY three states: a damaged header cannot say which classifier wrote the records, so it is "unknown" and decided by the records themselves
-        const ref: Ref = { f, slots: size >= HDR ? Math.ceil((size - HDR) / REC) : 0, size, mode: opts.convStale ? 'changed' : hdrOk ? (headerStamp(hdr) === stamp ? 'same' : 'changed') : 'unknown', cache: new Map() };
+        const ref: Ref = { f, slots: size >= HDR ? Math.ceil((size - HDR) / REC) : 0, size, mode: convStale ? 'changed' : hdrOk ? (headerStamp(hdr) === stamp ? 'same' : 'changed') : 'unknown', cache: new Map() };
         refs.push(ref); return ref;
       };
       const primary = hadOld ? await addRef(oldPath) : null;
@@ -284,7 +267,7 @@ export class BodyTools {
           let buf = r.cache.get(first);
           if (!buf) { r.cache.clear(); buf = await r.f.read(recPos(first), Math.min(1024, r.slots - first) * REC); r.cache.set(first, buf); }
           const d = decodeRecord(buf, (slot - first) * REC);
-          if (d) return { rec: d, ref: r, raw: buf.subarray((slot - first) * REC, (slot - first + 1) * REC) };
+          if (d && !d.standIn) return { rec: d, ref: r, raw: buf.subarray((slot - first) * REC, (slot - first + 1) * REC) };
         }
         return null;
       };
@@ -292,10 +275,10 @@ export class BodyTools {
       let lastValid = -1;
       for (const r of refs) for (let first = 0; first < r.slots; first += 1024) {
         const buf = await r.f.read(recPos(first), Math.min(1024, r.slots - first) * REC);
-        for (let i = Math.min(1024, r.slots - first) - 1; i >= 0; i--) if (decodeRecord(buf, i * REC)) { lastValid = Math.max(lastValid, first + i); break; }
+        for (let i = Math.min(1024, r.slots - first) - 1; i >= 0; i--) { const d = decodeRecord(buf, i * REC); if (d && !d.standIn) { lastValid = Math.max(lastValid, first + i); break; } }
       }
       // WHY before the scratch file exists: refusing needs no free space, so a version nothing can vouch for is quarantined (typed `damaged`) even on a full disk
-      if (lastValid < 0 && !ckpt && !evIn.hint && (await this.countWholeLines(dir, 0)) > 0) throw new Damaged('nothing stored vouches for the body (no valid index record and no checkpoint): refusing to accept it');
+      if (lastValid < 0 && !ckpt && !candidates.length && (await this.countWholeLines(dir, 0)) > 0) throw new Damaged('nothing stored vouches for the body (no valid index record and no checkpoint): refusing to accept it');
       const nf = await open(tmpPath, true);
       // DESTRUCTIVE-OK(scratch): index.rebuild is a scratch file derived from the body and the old index; it is never the only copy of anything
       await nf.truncate(0);
@@ -303,7 +286,7 @@ export class BodyTools {
       let start: BatchState = { count: 0, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation), convCount: 0, off: 0, rs: initialReplyState() };
       let staleOut = false;
       let prefixBuf: Buffer | null = null;
-      let evLines = 0;
+      let evLines = 0; let synthesized = false;
       if (candidates.length) {
         // evicted bodies cannot be re-derived: their records come from the first copy of the index that has them all intact
         let src: Ref | null = null;
@@ -322,8 +305,19 @@ export class BodyTools {
           if (src) break;
         }
         if (!src || !prefixBuf) {
-          if (!(layout.chunks.length > 0 && layout.chunks[0] === 0)) throw new Damaged('the index records of the evicted lines are damaged and no other copy of them exists');
-          ev = { lines: 0, bytes: 0 }; evLines = 0;   // derived from the bodies below; the rebuilt checkpoint forgets the stale eviction record
+          if (layout.chunks.length > 0 && layout.chunks[0] === 0) { ev = { lines: 0, bytes: 0 }; evLines = 0; }   // derived from the bodies below; the rebuilt checkpoint forgets the stale eviction record
+          else if (ckpt && ckpt.boundary && ckpt.evBytes < 0xffffffff) {
+            // WHY (review 5, F4): no copy of the evicted lines' index records survives (one deleted index.bin after an eviction). The checkpoint kept the chain state AT the boundary, so the
+            // KEPT lines can be re-derived from their bodies and confirmed against the checkpoint's head. The evicted lines' own chain values are gone for good (peers hold the lines): the
+            // slots before the boundary are zeros and slot evLines-1 is a stand-in carrying the boundary (`lostRecs` in the new checkpoint says so); nothing kept is hidden.
+            const bd = ckpt.boundary;
+            prefixBuf = Buffer.alloc(ckpt.evLines * REC);
+            encodeRecord({ offset: ckpt.evBytes - 1, len: 1, conversation: false, fact: false, standIn: true, kind: 'bookkeeping', confirms: NONE, candN: bd.candN < 0 ? NONE : bd.candN, candId: bd.candId, convCount: bd.convCount, h: bd.h, c: bd.c }, prefixBuf, (ckpt.evLines - 1) * REC);
+            evLines = ckpt.evLines; ev = candidates[0]; synthesized = true;
+            staleOut = ckpt.stamp !== stamp;
+            await nf.write(prefixBuf, recPos(0));
+            start = { count: evLines, h: Buffer.from(bd.h), c: Buffer.from(bd.c), convCount: bd.convCount, off: ckpt.evBytes, rs: { cand: bd.candN < 0 ? null : { n: bd.candN, id: bd.candId } } };
+          } else throw new Damaged('the index records of the evicted lines are damaged and no other copy of them exists');
         } else {
           staleOut = src.mode === 'changed';
           await nf.write(prefixBuf, recPos(0));
@@ -452,18 +446,17 @@ export class BodyTools {
           try { if (old) await this.keepBytes(dir, 'checkpoint', old); }
           catch (e) { if (isDiskFull(e) || (e instanceof StoreError && e.code === 'limit')) throw new Damaged('the old checkpoint statement could not be kept (the keep-area or the disk is full)'); throw e; }
         }
-        await writePartial(this.fs, dir, { fromLine: partial.fromLine, lost: partial.lost, atMs: Date.now() }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
+        await setMarks(this.fs, dir, { partial: { fromLine: partial.fromLine, lost: partial.lost } }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
       }
       const evBytesOut = evLines > 0 ? ev.bytes : 0;
-      if (partial || !ckpt || ckpt.count !== count || ckpt.stamp !== ckStamp || ckpt.evLines !== evLines || ckpt.evBytes !== evBytesOut) {
-        // DESTRUCTIVE-OK(verified-record): the new statement is the chain value of a verified record; an older, higher statement was copied to torn/ above whenever it is being lowered
-        await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, evLines, evBytes: evBytesOut, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
-      }
-      if (convStaleNow) await writeSideFor(this.fs, nodePath.join(dir, STALE_CONV_FILE), keyOfDir(dir), { through: evLines, bad: firstBad }); // DESTRUCTIVE-OK(hint): existence-only marker; `bad` names the unhealed rotted line, if that is why
+      // the boundary is read back from the new index (a real record or the stand-in), so the checkpoint and the index agree by construction
+      let boundary: Boundary | null = null;
+      if (evLines > 0) { const br = await this.recFromFile(nf, evLines - 1); if (br) boundary = { h: Buffer.from(br.h), c: Buffer.from(br.c), convCount: br.convCount, candN: br.candN, candId: br.candId }; }
+      // DESTRUCTIVE-OK(verified-record): the new statement is the chain value of a verified record; an older, higher statement was copied to torn/ above whenever it is being lowered
+      await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, evLines: boundary ? evLines : 0, evBytes: boundary ? evBytesOut : 0, boundary, lostRecs: boundary && synthesized ? evLines : 0, staleBad: convStaleNow ? firstBad : null, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
       await finishSwap();
       // scrub.json: the old mark described the old index. Point the scrub at the first bad line so the next open reports it at once.
-      await writeSideFor(this.fs, nodePath.join(dir, 'scrub.json'), keyOfDir(dir), { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint
-      if (!convStaleNow && evLines === 0) { await this.fs.unlink(nodePath.join(dir, STALE_CONV_FILE)); await this.fs.fsyncDir(dir); } // DESTRUCTIVE-OK(hint): existence-only marker, recomputed from full bodies just now
+      await writeSideFor(this.fs, nodePath.join(dir, 'scrub.json'), { role: 'scrub', key: keyOfDir(dir) }, { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint
       return { count, firstBad, partial, staleConv: convStaleNow };
     } finally { for (const f of handles) await f.close().catch(() => undefined); }
   }
@@ -480,7 +473,7 @@ export class BodyTools {
    * and loadOnce decides, from the checkpoint, whether the body lines after it were acknowledged. `tailDamaged` says there was such a region.
    * When the cut cannot be made (the keep-area is full or the disk is full) the index file is left alone and `tailDeferred` says so.
    */
-  async settleIndex(dir: string, ev: { lines: number; bytes: number }, layout: { chunks: number[]; phys: number }, stamp: number): Promise<{ count: number; last: Rec | null; tailDamaged: boolean; tailDeferred: boolean; needsInit?: boolean }> {
+  async settleIndex(dir: string, ev: { lines: number; bytes: number }, layout: { chunks: number[]; phys: number }, stamp: number, lostRecs = 0): Promise<{ count: number; last: Rec | null; tailDamaged: boolean; tailDeferred: boolean; needsInit?: boolean }> {
     const ip = nodePath.join(dir, 'index.bin');
     const hasBodies = layout.chunks.length > 0 && layout.phys > ev.bytes;
     const none = { count: 0, last: null, tailDamaged: false, tailDeferred: false };
@@ -514,7 +507,8 @@ export class BodyTools {
       const partial = size - HDR - count * REC;
       // Verify only the window a crash could have damaged (the last VERIFY_WINDOW records); the rolling
       // scrub (scrubSome) walks the older part a bounded amount per open.
-      const from = Math.max(0, count - VERIFY_WINDOW);
+      // WHY the lostRecs floor (review 5, F4): the slots before the stand-in record hold no real record by design; they are not damage
+      const from = Math.max(0, count - VERIFY_WINDOW, lostRecs > 0 ? lostRecs - 1 : 0);
       const buf = await f.read(recPos(from), (count - from) * REC);
       let good = 0; let prev: Rec | null = null;
       for (; good < count - from; good++) {

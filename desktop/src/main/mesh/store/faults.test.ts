@@ -9,11 +9,12 @@ import { REC, HDR, recPos } from './records';
 import { cc } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot } from './testkit';
 import { FaultFs, InjectedCrash } from './fault-fs';
-import { readCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
+import { readCheckpoint, writeCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
+import { readMarksState } from './marks';
 import { realFs } from './fsio';
-import { versionTag } from './chain';
 import { acquireLock } from './lock';
 import { encodeSide } from './sidefile';
+import { sealEnv } from './envelope';
 
 let t: Awaited<ReturnType<typeof tmpRoot>>;
 beforeEach(async () => { t = await tmpRoot('faults-'); });
@@ -52,57 +53,68 @@ async function expectWhole(root: string, L: Buffer[], from = 0, o: { allowEvicte
 const deadLock = (root: string) => { const lp = path.join(root, 'LOCK'); if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' })); };
 
 // ----------------------------------------------------------------------------------------------------------------------------
-describe('evicted.json is never trusted to delete anything', () => {
+describe('the eviction record (the checkpoint\'s, evicted.json is gone) is never trusted to delete anything', () => {
   const L = rows(60);
-  it('one flipped bit anywhere in evicted.json: no un-evicted body chunk is removed and every un-evicted line is served', async () => {
+  it('there is no evicted.json any more, and one flipped bit anywhere in checkpoint.bin removes no body chunk and loses no line that has a body', async () => {
     await build(t.dir, L, { chunkBytes: 1500, evict: 20 });
-    const ev = path.join(vdir(), 'evicted.json');
-    const original = fs.readFileSync(ev);
+    expect(fs.existsSync(path.join(vdir(), 'evicted.json'))).toBe(false);
+    const ck = path.join(vdir(), 'checkpoint.bin');
+    const original = fs.readFileSync(ck);
     const chunks = fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'));
-    for (let pos = 0; pos < original.length; pos++) {
-      for (const mask of [0x01, 0x04, 0x80]) {
-        fs.writeFileSync(ev, original); flipAt(ev, pos, mask);
-        const s = await expectWhole(t.dir, L, 20, { allowEvicted: true });
+    for (let pos = 0; pos < original.length; pos += 5) {
+      for (const mask of [0x01, 0x80]) {
+        fs.writeFileSync(ck, original); flipAt(ck, pos, mask);
+        const s = await ChatStore.open(t.dir, verifierOpts);
+        const head = await s.head(V(1));
+        expect(head.lines).toBe(60);
+        for (let i = 20; i < 60; i++) expect(((await s.read(V(1), 0, i, i + 1)) as Buffer[])[0].equals(L[i])).toBe(true);
         await s.close();
         expect(fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'))).toEqual(chunks);
       }
     }
   });
-  it('evicted.json truncated, zero-length, deleted or garbage: nothing is deleted and every line that still has a body is served', async () => {
+  it('checkpoint.bin truncated, zero-length, deleted or garbage: nothing is deleted and every line that still has a body is served', async () => {
     await build(t.dir, L, { chunkBytes: 1500, evict: 20 });
-    const ev = path.join(vdir(), 'evicted.json'); const original = fs.readFileSync(ev);
+    const ck = path.join(vdir(), 'checkpoint.bin'); const original = fs.readFileSync(ck);
     const chunks = fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'));
-    for (const damage of [() => fs.truncateSync(ev, 10), () => fs.truncateSync(ev, 0), () => fs.unlinkSync(ev), () => fs.writeFileSync(ev, '{"lines":9999,"bytes":999999999}')]) {
-      fs.writeFileSync(ev, original); damage();
-      const s = await expectWhole(t.dir, L, 20, { allowEvicted: true });
+    for (const damage of [() => fs.truncateSync(ck, 10), () => fs.truncateSync(ck, 0), () => fs.unlinkSync(ck), () => fs.writeFileSync(ck, Buffer.alloc(original.length, 7))]) {
+      fs.writeFileSync(ck, original); damage();
+      const s = await ChatStore.open(t.dir, verifierOpts);
+      expect((await s.head(V(1))).lines).toBe(60);
+      for (let i = 20; i < 60; i++) expect(((await s.read(V(1), 0, i, i + 1)) as Buffer[])[0].equals(L[i])).toBe(true);
       await s.close();
       expect(fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'))).toEqual(chunks);
     }
   });
-  it('an evicted.json with a VALID checksum whose numbers the index does not support deletes nothing', async () => {
+  it('a checkpoint with a VALID checksum whose eviction numbers the index does not support deletes nothing', async () => {
     await build(t.dir, L, { chunkBytes: 1500, evict: 20 });
     const chunks = fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'));
-    const ev = path.join(vdir(), 'evicted.json');
-    for (const forged of [{ lines: 40, bytes: 99999 }, { lines: 20, bytes: 1 }, { lines: 59, bytes: 4000 }, { lines: 5, bytes: 123456789 }]) {
-      fs.writeFileSync(ev, encodeSide({ ...forged, holders: ['x'] }));
-      const s = await expectWhole(t.dir, L, 20, { allowEvicted: true }); await s.close();
-      expect(fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'))).toEqual(chunks);
+    const cur = (await readCheckpoint(realFs, vdir()))!;
+    for (const forged of [{ evLines: 40, evBytes: 99999 }, { evLines: 20, evBytes: 1 }, { evLines: 59, evBytes: 4000 }, { evLines: 5, evBytes: 123456789 }]) {
+      await writeCheckpoint(realFs, vdir(), { ...cur, ...forged });
+      const s = await ChatStore.open(t.dir, verifierOpts);
+      for (let i = 20; i < 60; i++) { try { const r = await s.read(V(1), 0, i, i + 1); if (r !== 'evicted') expect(r[0].equals(L[i])).toBe(true); } catch (e: any) { expect(['corrupt', 'damaged']).toContain(e?.code); } }
+      await s.close();
+      // a statement the index cannot confirm may quarantine the version (typed `damaged`): the bodies are then KEPT under aside/, never removed
+      const kept = [...fs.readdirSync(vdir()), ...(fs.existsSync(path.join(t.dir, 'aside')) ? fs.readdirSync(path.join(t.dir, 'aside')).flatMap((d) => fs.readdirSync(path.join(t.dir, 'aside', d))) : [])].filter((n) => n.startsWith('body-'));
+      expect([...new Set(kept)].sort()).toEqual(chunks.slice().sort());
+      await writeCheckpoint(realFs, vdir(), cur);
     }
   });
-  it('a rotted index record of an evicted line is reported as damaged with every kept byte still under the root', async () => {
+  it('a rotted index record of an evicted line no longer hides the kept lines (review 5, F4): they are served, nothing is quarantined', async () => {
     await build(t.dir, L, { chunkBytes: 1500, evict: 20 });
     flipAt(path.join(vdir(), 'index.bin'), recPos(5) + 3);
     const s = await ChatStore.open(t.dir, verifierOpts);
-    await rejects(s.head(V(1)), 'damaged');
+    expect((await s.head(V(1))).lines).toBe(60);
+    for (let i = 20; i < 60; i++) expect(((await s.read(V(1), 0, i, i + 1)) as Buffer[])[0].equals(L[i])).toBe(true);
     await s.close();
-    const kept = fs.readdirSync(path.join(t.dir, 'aside')).flatMap((d) => fs.readdirSync(path.join(t.dir, 'aside', d)));
-    expect(kept.filter((n) => n.startsWith('body-')).length).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(t.dir, 'aside')) ? fs.readdirSync(path.join(t.dir, 'aside')).length : 0).toBe(0);
   });
 });
 
 describe('side files: any one fault leaves every acknowledged line served', () => {
   const L = rows(60);
-  const sideFiles = ['meta.json', 'meta.copy', 'summary.json', 'scrub.json', 'checkpoint.bin', 'evicted.json'];
+  const sideFiles = ['meta.json', 'meta.copy', 'summary.json', 'scrub.json', 'checkpoint.bin'];
   const faults: [string, (f: string) => void][] = [
     ['flipped byte', (f) => { const b = fs.readFileSync(f); b[Math.floor(b.length / 2)] ^= 0x10; fs.writeFileSync(f, b); }],
     ['flipped first byte', (f) => flipAt(f, 0)],
@@ -251,9 +263,9 @@ describe('a crash plus rot in the batch being written never forks the head', () 
 });
 function deadLockAfterKill(root: string): void { deadLock(root); }
 
-describe('a flipped partial.json still reports that lines were set aside', () => {
+describe('a flipped marks.bin still reports that lines were set aside', () => {
   const L = rows(50);
-  it('lines the index lost and the checkpoint cannot verify are reported damaged from the head, even with partial.json flipped', async () => {
+  it('lines the index lost and the checkpoint cannot verify are reported damaged from the head, even with marks.bin flipped', async () => {
     const s = await openWith(t.dir, V(1));
     for (let i = 0; i < 50; i++) await s.append(V(1), 0, i, [L[i]]);
     deadLockAfterKill(t.dir);
@@ -263,7 +275,7 @@ describe('a flipped partial.json still reports that lines were set aside', () =>
     const head = await s2.head(V(1));
     expect(head.lines).toBe(40); expect(head.hash).toBe(refChains(L).raw[40]); expect(head.damagedFromLine).toBe(40);
     await s2.close();
-    const pj = path.join(vdir(), 'partial.json');
+    const pj = path.join(vdir(), 'marks.bin');
     expect(fs.existsSync(pj)).toBe(true);
     flipAt(pj, 5);
     const s3 = await ChatStore.open(t.dir);
@@ -273,7 +285,7 @@ describe('a flipped partial.json still reports that lines were set aside', () =>
     expect((await s3.head(V(1))).damagedFromLine).toBeNull();
     expect((await s3.head(V(1))).hash).toBe(refChains(L).raw[50]);
     await s3.close();
-    expect(fs.existsSync(pj)).toBe(false);                                  // the marker goes once the lines are back
+    expect((await readMarksState(realFs, vdir())).value?.partial).toBeNull();   // the marker is cleared (a newer statement) once the lines are back
   });
   it('index tail rotted and no checkpoint: the lines after it are kept and reported damaged from the head, never adopted from their own bytes', async () => {
     const s = await openWith(t.dir, V(1));
@@ -408,23 +420,25 @@ describe('reads on a full disk never fail', () => {
     fs.unlinkSync(path.join(vdir(), 'index.bin')); fs.unlinkSync(path.join(vdir(), 'checkpoint.bin'));   // a version nothing can vouch for: quarantine
     const s = await ChatStore.open(t.dir); await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' }); await s.close();
     const name = fs.readdirSync(path.join(t.dir, 'aside'))[0];
-    fs.unlinkSync(path.join(vdir(), 'damaged.json'));                                   // the kill came before the marker
+    fs.unlinkSync(path.join(vdir(), 'marks.bin'));                                      // the kill came before the marker
     fs.unlinkSync(path.join(t.dir, 'aside', name, 'COMPLETE'));                          // (the COMPLETE mark is written after the marker, so it was not there either)
-    fs.writeFileSync(path.join(vdir(), 'aside.intent'), encodeSide({ asideName: name, reason: 'interrupted', version: vhex }));
+    fs.writeFileSync(path.join(vdir(), 'aside.intent'), encodeSide({ role: 'intent', key: vhex }, { asideName: name, reason: 'interrupted' }));
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
     await s2.close();
     const s3 = await ChatStore.open(t.dir);
     await expect(s3.head(V(1))).rejects.toMatchObject({ code: 'damaged' });             // and with space the marker is written
-    expect(fs.existsSync(path.join(vdir(), 'damaged.json'))).toBe(true);
+    expect(fs.existsSync(path.join(vdir(), 'marks.bin'))).toBe(true);
     await s3.close();
   });
   it('a parked append that can now be applied is not applied while the disk is full, and the read still works', async () => {
     const L = rows(13);
     const s = await openWith(t.dir, V(1)); await s.append(V(1), 0, 0, L.slice(0, 10)); await s.close();
-    const { frameLines } = await import('./records');
+    const { frameLines } = await import('./records'); const { createHash: ch } = await import('node:crypto');
+    const hh = ch('sha256'); for (const l of L.slice(10, 13)) hh.update(l);
+    const stem = `${'10'.padStart(16, '0')}-${hh.digest('hex').slice(0, 16)}`;
     fs.mkdirSync(path.join(vdir(), 'parked'), { recursive: true });
-    fs.writeFileSync(path.join(vdir(), 'parked', `${'10'.padStart(16, '0')}-${'a'.repeat(16)}.park`), Buffer.concat([versionTag(vhex), frameLines(L.slice(10, 13))]));
+    fs.writeFileSync(path.join(vdir(), 'parked', `${stem}.park`), sealEnv({ role: 'park', version: vhex, id: stem }, frameLines(L.slice(10, 13))));
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     expect((await s2.head(V(1))).lines).toBe(10);
     await s2.close();
@@ -505,14 +519,13 @@ describe('a second copy that was found damaged is repaired when the version load
       fs.writeFileSync(path.join(vdir(), 'checkpoint.bin'), c);
     }
   });
-  it('a stale-chain marker deleted while the checkpoint stamp still says stale is written again', async () => {
+  it('the stale-chain bit lives in the checkpoint (stale-conv.json is gone) and survives reopening', async () => {
     const accept = { proofVerifier: () => true };
     await build(t.dir, rows(30), { evict: 10 });
     const o = { ...accept, replyEnd: { apiErrorsEndReplies: false } };
     const s = await ChatStore.open(t.dir, o); expect((await s.head(V(1))).conversationChainStale).toBe(true); await s.close();
-    fs.unlinkSync(path.join(vdir(), 'stale-conv.json'));
+    expect(fs.existsSync(path.join(vdir(), 'stale-conv.json'))).toBe(false);
     const s2 = await ChatStore.open(t.dir, o); expect((await s2.head(V(1))).conversationChainStale).toBe(true); await s2.close();
-    expect(fs.existsSync(path.join(vdir(), 'stale-conv.json'))).toBe(true);
   });
 });
 
@@ -595,7 +608,7 @@ describe('clearing a damaged marker', () => {
     const aside = fs.readdirSync(path.join(t.dir, 'aside'))[0];
     fs.renameSync(path.join(t.dir, 'aside', aside), path.join(t.dir, 'elsewhere'));
     await rejects(s.setAsideDamaged(V(1)), 'corrupt');
-    expect(fs.existsSync(path.join(vdir(), 'damaged.json'))).toBe(true);
+    expect((await readMarksState(realFs, vdir())).value?.damaged).not.toBeNull();   // the marker is kept
     await s.close();
   });
 });

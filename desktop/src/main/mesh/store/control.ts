@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto';
 import { mkdirDurable, sweepTemps, writeFileAtomic, type Fs } from './fsio';
 import { StoreError } from './errors';
 import { crc32, isHash64 } from './chain';
-import { readSide, writeSide } from './sidefile';
+import { readSideFor, writeSideFor } from './sidefile';
 import { isDiskFull } from './storeutil';
 
 export interface ControlEntry {
@@ -145,17 +145,19 @@ export class ControlStore {
     const chatHash = createHash('sha256').update(chat, 'utf8').digest('hex');
     let best: { count: number; acc: bigint } | null = null;
     for (const copy of [false, true]) {
-      const r = await readSide(this.fs, this.anchorPath(dir, copy));
-      if (r.kind !== 'ok' || !r.value || r.value.chat !== chatHash || !Number.isSafeInteger(r.value.count) || r.value.count < 0 || typeof r.value.acc !== 'string' || !/^[0-9a-f]{1,64}$/.test(r.value.acc)) continue;
+      // review 5: the chat hash is sealed INSIDE the envelope (role 'anchor'), so another chat's anchor is `foreign` before any field is looked at
+      const r = await readSideFor(this.fs, this.anchorPath(dir, copy), { role: 'anchor', key: chatHash });
+      if (r.kind !== 'ok' || !r.value || !Number.isSafeInteger(r.value.count) || r.value.count < 0 || typeof r.value.acc !== 'string' || !/^[0-9a-f]{1,64}$/.test(r.value.acc)) continue;
       if (!best || r.value.count > best.count) best = { count: r.value.count, acc: BigInt('0x' + r.value.acc) };
     }
     return best;
   }
   private async writeAnchor(dir: string, chat: string, a: { count: number; acc: bigint }): Promise<void> {
-    const v = { chat: createHash('sha256').update(chat, 'utf8').digest('hex'), count: a.count, acc: a.acc.toString(16) };
+    const w = { role: 'anchor', key: createHash('sha256').update(chat, 'utf8').digest('hex') };
+    const v = { count: a.count, acc: a.acc.toString(16) };
     // DESTRUCTIVE-OK(verified-record): the statement is computed from log.bin's own checksummed records (or advanced by the one entry just made durable); an older statement is replaced whole and atomically, one copy at a time so a kill leaves at least one intact
-    await writeSide(this.fs, this.anchorPath(dir), v);
-    await writeSide(this.fs, this.anchorPath(dir, true), v); // DESTRUCTIVE-OK(verified-record): the second copy, same statement
+    await writeSideFor(this.fs, this.anchorPath(dir), w, v);
+    await writeSideFor(this.fs, this.anchorPath(dir, true), w, v); // DESTRUCTIVE-OK(verified-record): the second copy, same statement
   }
 
   /**
@@ -321,8 +323,8 @@ export class ControlStore {
   private async copiesAgree(dir: string, chat: string, a: { count: number; acc: bigint }): Promise<boolean> {
     const chatHash = createHash('sha256').update(chat, 'utf8').digest('hex');
     for (const copy of [false, true]) {
-      const r = await readSide(this.fs, this.anchorPath(dir, copy));
-      if (r.kind !== 'ok' || r.value?.chat !== chatHash || r.value.count !== a.count || r.value.acc !== a.acc.toString(16)) return false;
+      const r = await readSideFor(this.fs, this.anchorPath(dir, copy), { role: 'anchor', key: chatHash });
+      if (r.kind !== 'ok' || r.value.count !== a.count || r.value.acc !== a.acc.toString(16)) return false;
     }
     return true;
   }

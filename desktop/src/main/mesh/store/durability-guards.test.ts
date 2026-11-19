@@ -12,6 +12,7 @@ import { readCheckpoint, readCheckpointState, writeCheckpoint, CHECKPOINT_SLOT }
 import { CHAT, V, openWith, tmpRoot } from './testkit';
 import { cc } from './fixtures';
 import { encodeSide } from './sidefile';
+import { readMarksState } from './marks';
 import { encodeTailFile } from './storeutil';
 import { frameLines } from './records';
 import { versionTag } from './chain';
@@ -194,7 +195,7 @@ const bodyFiles = (root: string) => fs.readdirSync(vdir(root)).filter((f) => f.s
 describe('guards for the identity, freshness and hole mechanisms', () => {
   it('a tail file that decodes fine but holds other lines than were written stops the set-aside (read-back compares the lines, not only the checksum)', async () => {
     const t = await tmpRoot('dg-tail2-');
-    const bad: Fs = { ...realFs, rename: async (a, b) => { await realFs.rename(a, b); if (b.endsWith('.tail')) fs.writeFileSync(b, encodeTailFile({ version: keyOf(1), fromLine: 4, fromHash: '', fromConv: '', headHash: '', headConv: '', replyEnds: [], pending: null }, rows(1, 'zz'))); } };
+    const bad: Fs = { ...realFs, rename: async (a, b) => { await realFs.rename(a, b); if (b.endsWith('.tail')) fs.writeFileSync(b, encodeTailFile(keyOf(1), 'abcdef012345', { fromLine: 4, fromHash: '', fromConv: '', headHash: '', headConv: '', replyEnds: [], pending: null }, rows(1, 'zz'))); } };
     const s = await openWith(t.dir, V(1), { fs: bad }); await s.append(V(1), 0, 0, rows(8));
     await expect(s.setAsideTail('abcdef012345', V(1), 4)).rejects.toMatchObject({ code: 'corrupt' });
     expect((await s.head(V(1))).lines).toBe(8);
@@ -262,22 +263,22 @@ describe('guards for the identity, freshness and hole mechanisms', () => {
     await s3.close(); await t.cleanup();
   });
 
-  it('an older damaged.json next to a live index is ignored and kept aside, the healthy chat is served', async () => {
+  it('an older damaged marker (marks.bin) next to a live index is ignored and cleared by a newer statement, the healthy chat is served', async () => {
     const { t, s, root } = await freshStore(10);
     await expect((s as any).quarantine(keyOf(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
-    const marker = fs.readFileSync(path.join(vdir(root), 'damaged.json'));
+    const marker = fs.readFileSync(path.join(vdir(root), 'marks.bin'));
     await s.setAsideDamaged(V(1));                                                           // clears the marker
     expect(await s.append(V(1), 0, 0, rows(5))).toBe('ok'); await s.close();
-    fs.writeFileSync(path.join(vdir(root), 'damaged.json'), marker);                         // an older copy comes back
+    fs.writeFileSync(path.join(vdir(root), 'marks.bin'), marker);                         // an older copy comes back
     const s2 = await ChatStore.open(root, opts1); await s2.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
     expect((await s2.head(V(1))).lines).toBe(5);
-    expect(fs.readdirSync(vdir(root)).some((n) => /^damaged\.json\.bad-\d+$/.test(n))).toBe(true);
+    expect((await readMarksState(realFs, vdir(root))).value?.damaged).toBeNull();            // cleared by a newer statement, nothing deleted
     await s2.close(); await t.cleanup();
   });
 
   it('a set-aside note that names ANOTHER version is ignored and kept, nothing is moved', async () => {
     const { t, s, root } = await freshStore(12); await s.close();
-    fs.writeFileSync(path.join(vdir(root), 'aside.intent'), encodeSide({ asideName: 'aa01-q1', reason: 'x', version: keyOf(2) }));
+    fs.writeFileSync(path.join(vdir(root), 'aside.intent'), encodeSide({ role: 'intent', key: keyOf(2) }, { asideName: 'aa01-q1', reason: 'x' }));
     const s2 = await ChatStore.open(root, opts1); await s2.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
     expect((await s2.head(V(1))).lines).toBe(12);
     expect(fs.existsSync(path.join(root, 'aside', 'aa01-q1'))).toBe(false);
@@ -290,7 +291,7 @@ describe('guards for the identity, freshness and hole mechanisms', () => {
     const name = (await s.setAsideDamaged(V(1))).asideName;
     const ls = rows(36); for (let i = 0; i < 36; i += 3) await s.append(V(1), 0, i, ls.slice(i, i + 3));   // live data with chunk names the aside folder does not have
     await s.close();
-    fs.writeFileSync(path.join(vdir(root), 'aside.intent'), encodeSide({ asideName: name, version: keyOf(1) }));
+    fs.writeFileSync(path.join(vdir(root), 'aside.intent'), encodeSide({ role: 'intent', key: keyOf(1) }, { asideName: name }));
     const files = bodyFiles(root);
     const s2 = await ChatStore.open(root, opts1); await s2.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
     const h = await s2.head(V(1));

@@ -1,7 +1,10 @@
 // The in-memory state of one loaded version (split out of store.ts to keep it inside its line budget). Types only; never persisted: memory is dropped after any failed operation and re-read from disk.
 import type { ChainSeeds, RuntimeKind } from './chain';
 import type { ReplyState } from './classify';
-import type { CheckpointState } from './checkpoint';
+import type { Boundary, CheckpointState } from './checkpoint';
+import type { Marks } from './marks';
+import type { SlotState } from './slotfile';
+import type { HighWater } from './highwater';
 
 export interface VState {
   key: string;
@@ -16,6 +19,12 @@ export interface VState {
   rs: ReplyState;
   evictedLines: number;
   evictedBytes: number;
+  /** The chain state after the last evicted line (null when nothing is evicted); kept in every checkpoint statement (review 5, F4). */
+  evB: Boundary | null;
+  /** The first `lostRecs` index slots hold no real record (see checkpoint.ts); 0 normally. */
+  lostRecs: number;
+  /** The line that stops the conversation chain from being recomputed, or null (lives in the checkpoint; replaces stale-conv.json). */
+  staleBad: number | null;
   chunks: number[];             // start offsets of body chunk files, ascending
   /** The last chunk file ends before the body end the index describes (a fault cut its tail): the next append checks the file's size once and starts a new chunk instead of writing past its end. */
   tailShort: boolean;
@@ -39,8 +48,14 @@ export interface VState {
   indexNeedsInit: boolean;
   /** A rebuild set lines [fromLine, fromLine+lost) aside because their bodies did not match the chain (N7). */
   partial: { fromLine: number; lost: number } | null;
-  /** stale-conv.json exists (N4). */
+  /** The conversation chain of the evicted prefix was written by another classifier (N4); the bit lives in the checkpoint stamp. */
   staleConv: boolean;
+  /** marks.bin as read (partial / damaged markers). */
+  marks: SlotState<Marks>;
+  /** The high-water record kept outside the chat folders (highwater.ts), the head count it last stated, and a head count it reported as rolled back from (null: none). */
+  hw: HighWater;
+  /** The head was found behind the high-water record (a whole folder put back): reported through damagedFromLine and head.rolledBack until the head passes `had`. Never persisted: it is re-derived at each open. */
+  rolledBack: { from: number; had: number } | null;
   /** Parked append files: name -> size, kept in memory so a park never rescans the folder (M4). */
   parked: Map<string, number>;
   parkedBytes: number;

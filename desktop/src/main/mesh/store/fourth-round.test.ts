@@ -50,17 +50,17 @@ async function evict(s: ChatStore, through: number, v: Buffer = V(1)) {
 }
 const asideCount = (root: string) => fs.readdirSync(path.join(root, 'aside')).length;
 
-describe('F1 an older valid evicted.json never deletes restored bodies', () => {
+describe('F1 an older eviction record never deletes restored bodies', () => {
   it('S1: restore, evict less, put the older marker back: every body file survives and every line is served', async () => {
     const { t, s, ls, root } = await fresh(30);
     await evict(s, 20);
-    const e20 = fs.readFileSync(path.join(vdir(root), 'evicted.json'));
+    const e20 = fs.readFileSync(path.join(vdir(root), 'checkpoint.bin'));   // review 5: the eviction record is the checkpoint's alone
     await s.restoreBody(V(1), ls);
     await evict(s, 5);
     const before = bodies(root);
     const headBefore = await s.head(V(1));
     await s.close();
-    fs.writeFileSync(path.join(vdir(root), 'evicted.json'), e20);
+    fs.writeFileSync(path.join(vdir(root), 'checkpoint.bin'), e20);
     const s2 = await reopen(root);
     const h = await s2.head(V(1));
     expect(bodies(root)).toEqual(before);                       // nothing unlinked on the word of an older marker
@@ -205,15 +205,15 @@ describe('F4 a deleted first body chunk is damage, never a deliberate eviction',
   });
 });
 
-describe('F5 an older evicted.json does not quarantine a healthy chat', () => {
+describe('F5 an older eviction record does not quarantine a healthy chat', () => {
   it('S1b: the marker from before a later eviction is put back: still served, nothing set aside', async () => {
     const { t, s, ls, root } = await fresh(30);
     await evict(s, 8);
-    const e8 = fs.readFileSync(path.join(vdir(root), 'evicted.json'));
+    const e8 = fs.readFileSync(path.join(vdir(root), 'checkpoint.bin'));
     await evict(s, 20);
     const before = await s.head(V(1));
     await s.close();
-    fs.writeFileSync(path.join(vdir(root), 'evicted.json'), e8);
+    fs.writeFileSync(path.join(vdir(root), 'checkpoint.bin'), e8);
     const s2 = await reopen(root);
     const h = await s2.head(V(1));
     expect(asideCount(root)).toBe(0);
@@ -428,7 +428,7 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
   it('with the eviction record lost (checkpoint deleted) restoreBody still brings the bodies back from the lines the caller supplies', async () => {
     const { t, s, ls, root } = await fresh(30);
     await evict(s, 20); await s.close();
-    fs.rmSync(path.join(vdir(root), 'checkpoint.bin'));
+    fs.rmSync(path.join(vdir(root), 'checkpoint.bin')); fs.rmSync(path.join(root, 'highwater'), { recursive: true });   // BOTH records of the eviction are lost (with the high-water record the eviction is proven: see fifth-round.test.ts)
     const s2 = await reopen(root);
     const h = await s2.head(V(1));
     expect(h.evictedLines).toBe(0); expect(h.damagedFromLine).toBe(0);                      // reported damaged, never relabelled as evicted
@@ -438,7 +438,7 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     await s2.close(); await t.cleanup();
   });
 
-  it('the report that a rebuild set lines aside survives the loss of one of its two files', async () => {
+  it('the report that a rebuild set lines aside survives a damaged marks file (reported from the head)', async () => {
     const { t, s, root } = await fresh(30);
     const cp = path.join(vdir(root), 'checkpoint.bin'); const before = fs.readFileSync(cp);
     await s.setAsideTail('abcdef012345', V(1), 12); await s.close();
@@ -446,21 +446,19 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     let s2 = await reopen(root);
     expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();
     await s2.close();
-    fs.rmSync(path.join(vdir(root), 'partial.json'));                                        // one copy of the report is lost
+    const mk = path.join(vdir(root), 'marks.bin'); const b = fs.readFileSync(mk); b[9] ^= 0x01; fs.writeFileSync(mk, b);   // the marker file is damaged
     s2 = await reopen(root);
-    expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();                            // still reported, from the other copy
-    expect(fs.existsSync(path.join(vdir(root), 'partial.json'))).toBe(true);                 // and the lost copy is rewritten
+    expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();                            // still reported (from the head)
     await s2.close(); await t.cleanup();
   });
 
-  it('deleting one of the two quarantine markers does not make the emptied chat look healthy: it is still reported damaged and the lost copy is rewritten', async () => {
+  it('deleting the quarantine marker file does not make the emptied chat look healthy: it is still reported damaged (the quarantined copy aside says so)', async () => {
     const { t, s, root } = await fresh(10);
     await expect((s as any).quarantine(keyOfV(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
     await s.close();
-    fs.rmSync(path.join(vdir(root), 'damaged.json'));
+    fs.rmSync(path.join(vdir(root), 'marks.bin'));
     const s2 = await reopen(root);
     await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
-    expect(fs.existsSync(path.join(vdir(root), 'damaged.json'))).toBe(true);
     await s2.close(); await t.cleanup();
   });
 

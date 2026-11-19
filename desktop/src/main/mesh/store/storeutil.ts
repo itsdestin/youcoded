@@ -1,7 +1,8 @@
 // Small pure helpers of the chat store (split out of store.ts to keep it inside its line budget): line and proof validation,
 // the disk-full test, and the on-disk codec of a set-aside tail file.
 import { StoreError } from './errors';
-import { crc32, isHash64 } from './chain';
+import { isHash64 } from './chain';
+import { openEnv, sealEnv } from './envelope';
 import { frameLines, unframeLines } from './records';
 import type { EvictionProof } from './types';
 
@@ -34,24 +35,30 @@ export function isDiskFull(e: unknown): boolean {
   return code === 'ENOSPC' || code === 'EDQUOT';
 }
 
-export interface TailFile { version: string; fromLine: number; fromHash: string; fromConv: string; headHash: string; headConv: string; lines: Buffer[]; replyEnds: number[]; pending: number | null }
+export interface TailFile { fromLine: number; fromHash: string; fromConv: string; headHash: string; headConv: string; lines: Buffer[]; replyEnds: number[]; pending: number | null }
 
-/** `YCMTAIL2 | header length u32 | JSON header | header crc u32 | framed lines` (the framed lines carry their own checksum). */
-export function encodeTailFile(header: unknown, lines: Buffer[]): Buffer {
+/**
+ * A set-aside tail inside the ONE envelope (envelope.ts): role 'tail', the version key and the TAKEOVER ID are sealed inside the checksum (review 5, F2: a tail file used to say which version it
+ * belonged to but not which takeover, so a copy of another tail of the same version under this name was believed). Payload: u32 header length | JSON header | framed lines (own checksum).
+ */
+export function encodeTailFile(key: string, takeoverId: string, header: unknown, lines: Buffer[]): Buffer {
   const hb = Buffer.from(JSON.stringify(header));
   const hl = Buffer.alloc(4); hl.writeUInt32BE(hb.length);
-  const hc = Buffer.alloc(4); hc.writeUInt32BE(crc32(hb));
-  return Buffer.concat([Buffer.from('YCMTAIL2'), hl, hb, hc, frameLines(lines)]);
+  return sealEnv({ role: 'tail', version: key, id: takeoverId }, Buffer.concat([hl, hb, frameLines(lines)]));
 }
 
-export function decodeTailFile(b: Buffer): TailFile {
-  if (b.length < 16 || b.subarray(0, 8).toString() !== 'YCMTAIL2') throw new StoreError('corrupt', 'tail file');
-  const hl = b.readUInt32BE(8);
-  // WHY a checksum on the header (L6): the framed lines carry their own, the JSON header did not
-  if (12 + hl + 4 > b.length || crc32(b.subarray(12, 12 + hl)) !== b.readUInt32BE(12 + hl)) throw new StoreError('corrupt', 'tail file header');
+/** Throws `corrupt` for a damaged file AND for a valid one that is not THIS version's tail for THIS takeover id (nothing is moved or deleted). */
+export function decodeTailFile(b: Buffer, key: string, takeoverId: string): TailFile {
+  const r = openEnv(b, { role: 'tail', version: key, id: takeoverId });
+  if (r.kind === 'foreign') throw new StoreError('corrupt', `tail file is not this takeover's tail (${r.why})`);
+  if (r.kind !== 'ok') throw new StoreError('corrupt', 'tail file');
+  const p = r.payload;
+  if (p.length < 4) throw new StoreError('corrupt', 'tail file header');
+  const hl = p.readUInt32BE(0);
+  if (4 + hl > p.length) throw new StoreError('corrupt', 'tail file header');
   let header: any;
-  try { header = JSON.parse(b.subarray(12, 12 + hl).toString()); } catch { throw new StoreError('corrupt', 'tail file header'); }
-  const lines = unframeLines(b.subarray(12 + hl + 4));
+  try { header = JSON.parse(p.subarray(4, 4 + hl).toString()); } catch { throw new StoreError('corrupt', 'tail file header'); }
+  const lines = unframeLines(p.subarray(4 + hl));
   if (!lines) throw new StoreError('corrupt', 'tail file body');
-  return { version: header.version, fromLine: header.fromLine, fromHash: header.fromHash, fromConv: header.fromConv, headHash: header.headHash, headConv: header.headConv, lines, replyEnds: header.replyEnds, pending: header.pending };
+  return { fromLine: header.fromLine, fromHash: header.fromHash, fromConv: header.fromConv, headHash: header.headHash, headConv: header.headConv, lines, replyEnds: header.replyEnds, pending: header.pending };
 }

@@ -12,7 +12,7 @@ import { REC, recPos } from './records';
 import { cc, nl, ccConversation, nativeConversation } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot, listFiles } from './testkit';
 import { FaultFs } from './fault-fs';
-import { encodeSide, decodeSide } from './sidefile';
+import { encodeSide } from './sidefile';
 import { analyseLine, initialReplyState, replyEndStep } from './classify';
 import { defaultChainSeeds, hex } from './chain';
 import { initAdapterState, poll, isRewritten, type AdapterOptions, type PollBatch, type PollResult } from './adapter';
@@ -293,7 +293,7 @@ describe('H2: set-aside of a damaged copy keeps the aside index at every kill po
     // state "moves done, intent still there, fresh header-only index already created": the review's kill point
     const s = await ChatStore.open(t.dir); await s.setAsideDamaged(V(1)); await s.close();
     const name = asideDirs(t.dir)[0];
-    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), encodeSide({ asideName: name, version: V(1).toString('hex') }));
+    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), encodeSide({ role: 'intent', key: V(1).toString('hex') }, { asideName: name }));
     const s2 = await ChatStore.open(t.dir);
     expect((await s2.head(V(1))).lines).toBe(0);
     expect(fs.readFileSync(path.join(t.dir, 'aside', name, 'index.bin')).equals(orig)).toBe(true);
@@ -387,7 +387,7 @@ describe('H4: an eviction proof cannot be self-asserted', () => {
     expect(seen).toEqual([]);                                           // the verifier is only asked about well-bound proofs
     expect((await s.evictBody(V(1), good)).evictedLines).toBe(4);
     expect(seen).toEqual([`${vhex.slice(0, 4)}:4`]);
-    expect((decodeSide(fs.readFileSync(path.join(vdir(t.dir), 'evicted.json'))) as { value: { holders: string[] } }).value.holders).toEqual(['dev-a']);
+    expect(fs.existsSync(path.join(vdir(t.dir), 'evicted.json'))).toBe(false);   // review 5: the eviction record is the checkpoint's alone
     await s.close();
   });
 
@@ -716,7 +716,7 @@ describe('L2/L4/L5/L6/L8/L9', () => {
     const wrong = L.map((l, i) => (i === 2 ? cc.user('forged') : l));
     await rejects(s.restoreBody(V(1), wrong), 'bad-argument');
     expect((await s.head(V(1))).evictedLines).toBe(4);
-    expect((await s.restoreBody(V(1), L)).restoredLines).toBe(4);
+    expect((await s.restoreBody(V(1), L)).restoredLines).toBe(10);
     await s.close();
   });
 

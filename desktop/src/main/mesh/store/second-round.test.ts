@@ -195,7 +195,7 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     expect(h.lines).toBe(60); expect(h.hash).toBe(refChains(L).raw[60]); expect(h.conversationChainStale).toBe(true);
     const more = cc.user('more');
     expect(await s.append(V(1), 0, 60, [more])).toBe('ok');
-    expect((await s.restoreBody(V(1), L)).restoredLines).toBe(30);
+    expect((await s.restoreBody(V(1), L)).restoredLines).toBe(60);
     const h2 = await s.head(V(1));
     expect(h2.conversationChainStale).toBe(false); expect(h2.conversationHash).toBe(refChains([...L, more]).conv);
     expect(fs.existsSync(path.join(vdir(t.dir), 'stale-conv.json'))).toBe(false);
@@ -249,12 +249,11 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     await s.close();
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.json'), 'not json');
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.copy'), 'not json either');
-    fs.writeFileSync(path.join(vdir(t.dir, V(3).toString('hex')), 'evicted.json'), '{{{');
     fs.unlinkSync(path.join(vdir(t.dir, V(4).toString('hex')), 'index.bin'));   // a quarantined version has no live index (review 4: a marker next to a live index is an older copy and is ignored)
-    fs.writeFileSync(path.join(vdir(t.dir, V(4).toString('hex')), 'damaged.json'), 'garbage');
+    fs.writeFileSync(path.join(vdir(t.dir, V(4).toString('hex')), 'marks.bin'), 'garbage');
     const s2 = await ChatStore.open(t.dir);
     const lv = await s2.listVersions();
-    expect(lv.map((v) => v.damaged)).toEqual([null, 'unreadable: corrupt', null, 'unknown']);   // a garbage evicted.json is just ignored; a garbage damaged marker still reports damaged
+    expect(lv.map((v) => v.damaged)).toEqual([null, 'unreadable: corrupt', null, 'unknown']);   // a garbage marks file with no index still reports damaged
     expect(lv[0].head!.lines).toBe(5); expect(lv[1].chatId).toBeNull();
     expect((await s2.head(V(1))).lines).toBe(5);
     // the remedy does not itself need the bad file

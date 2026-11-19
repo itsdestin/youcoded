@@ -248,7 +248,7 @@ describe('kill at every disk operation', () => {
         expect(Buffer.concat(kept).equals(Buffer.concat(conv.slice(THROUGH)))).toBe(true);
         await s.evictBody(V(1), proof());
         expect((await s.head(V(1))).evictedLines).toBe(THROUGH);
-        expect((await s.restoreBody(V(1), conv)).restoredLines).toBe(THROUGH);
+        expect((await s.restoreBody(V(1), conv)).restoredLines).toBe(conv.length);
         expect(Buffer.concat(await s.read(V(1), 0, 0, conv.length) as Buffer[]).equals(Buffer.concat(conv))).toBe(true);
         await s.close();
       },
@@ -375,7 +375,7 @@ describe('kill at every operation: the new recovery paths', () => {
         expect(head.lines).toBe(100); expect(head.hash).toBe(RREF.raw[100]); expect(head.evictedLines).toBe(30); expect(head.conversationChainStale).toBe(true);
         expect((await s.verify(V(1))).ok).toBe(true);
         expect(await s.append(V(1), 0, 100, [AFTER])).toBe('ok');
-        expect((await s.restoreBody(V(1), R100)).restoredLines).toBe(30);
+        expect((await s.restoreBody(V(1), R100)).restoredLines).toBe(100);
         const h2 = await s.head(V(1));
         expect(h2.conversationChainStale).toBe(false); expect(h2.evictedLines).toBe(0);
         expect(h2.conversationHash).toBe(refChains([...R100, AFTER]).conv);

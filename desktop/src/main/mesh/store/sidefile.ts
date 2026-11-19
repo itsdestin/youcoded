@@ -1,56 +1,35 @@
-// Checksummed envelope for the store's small state files (class fix: every file the store writes is integrity-checked, see inventory.ts).
-//
-// `YCS1 | payload length u32 | CRC-32 of the payload u32 | payload (JSON)`. WHY: before this, evicted.json, partial.json, meta.json and friends were
-// plain JSON whose numbers were believed blindly; one flipped digit in evicted.json deleted acknowledged body chunks (review 3, F1).
-// Reading one yields THREE outcomes, never two, so each caller can give a damaged file a non-destructive meaning:
-//   absent  the file is not there
-//   bad     it is there but zero-length, truncated, wrongly framed, failing its CRC or not JSON
-//   ok      the value
+// Small JSON state files, written through the ONE envelope (envelope.ts). Reading one yields FOUR outcomes so each caller can give a damaged or misplaced file a
+// non-destructive meaning:
+//   absent   the file is not there
+//   bad      it is there but zero-length, truncated, wrongly framed, failing its checksum or not JSON
+//   foreign  its checksum is good but it is not the file the caller asked for (another kind, another version or chat, another id): never believed, never deleted
+//   ok       the value
 import * as nodePath from 'node:path';
 import { crc32 } from './chain';
 import { writeFileAtomic, type Fs } from './fsio';
+import { openEnv, sealEnv } from './envelope';
 
-const MAGIC = Buffer.from('YCS1', 'ascii');
+export type SideRead = { kind: 'absent' } | { kind: 'bad' } | { kind: 'foreign'; why: string } | { kind: 'ok'; value: any; fresh: number };
 
-export type SideRead = { kind: 'absent' } | { kind: 'bad' } | { kind: 'ok'; value: any };
+/** What a caller expects a file to be: its kind, the version/chat it belongs to, and (where it applies) what it stands for. */
+interface SideWant { role: string; key: string; id?: string | number | null }
 
-export function encodeSide(value: unknown): Buffer {
-  const payload = Buffer.from(JSON.stringify(value), 'utf8');
-  const h = Buffer.alloc(12);
-  MAGIC.copy(h, 0); h.writeUInt32BE(payload.length, 4); h.writeUInt32BE(crc32(payload), 8);
-  return Buffer.concat([h, payload]);
+export function encodeSide(w: SideWant, value: unknown, fresh = 0): Buffer {
+  return sealEnv({ role: w.role, version: w.key, id: w.id, fresh }, Buffer.from(JSON.stringify(value), 'utf8'));
 }
 
-export function decodeSide(b: Buffer | null): SideRead {
-  if (b === null) return { kind: 'absent' };
-  if (b.length < 12 || !b.subarray(0, 4).equals(MAGIC)) return { kind: 'bad' };
-  const len = b.readUInt32BE(4);
-  if (b.length !== 12 + len) return { kind: 'bad' };
-  const payload = b.subarray(12);
-  if (crc32(payload) !== b.readUInt32BE(8)) return { kind: 'bad' };
-  try { return { kind: 'ok', value: JSON.parse(payload.toString('utf8')) }; } catch { return { kind: 'bad' }; }
+export function decodeSide(b: Buffer | null, w: SideWant, minFresh?: number): SideRead {
+  const r = openEnv(b, { role: w.role, version: w.key, id: w.id, minFresh });
+  if (r.kind !== 'ok') return r;
+  try { return { kind: 'ok', value: JSON.parse(r.payload.toString('utf8')), fresh: r.fresh }; } catch { return { kind: 'bad' }; }
 }
 
-export async function readSide(fs: Fs, path: string): Promise<SideRead> { return decodeSide(await fs.readFile(path)); }
+export async function readSideFor(fs: Fs, path: string, w: SideWant): Promise<SideRead> { return decodeSide(await fs.readFile(path), w); }
 
 /** Atomic replacement (temp file, fsync, rename, directory fsync). Callers tag themselves with why replacing the old content is safe. */
-export async function writeSide(fs: Fs, path: string, value: unknown): Promise<void> {
-  // DESTRUCTIVE-OK(verified-record): the callers decide; this only replaces whole files atomically, never half
-  await writeFileAtomic(fs, path, encodeSide(value));
-}
-
-/**
- * Version-scoped side files (review 4, class fix): the value carries the version key it belongs to. A copy of summary.json, partial.json, damaged.json
- * and the like taken from ANOTHER version has a good checksum, so only this field can say it is foreign; it then reads as `bad` (never believed).
- * `version` is a reserved field name for these files.
- */
-export async function readSideFor(fs: Fs, path: string, key: string): Promise<SideRead> {
-  const r = await readSide(fs, path);
-  return r.kind === 'ok' && r.value?.version !== key ? { kind: 'bad' } : r;
-}
-export function writeSideFor(fs: Fs, path: string, key: string, value: Record<string, unknown>): Promise<void> {
-  // DESTRUCTIVE-OK(verified-record): the callers decide what may be replaced; this adds the identity field and replaces whole files atomically
-  return writeSide(fs, path, { ...value, version: key });
+export function writeSideFor(fs: Fs, path: string, w: SideWant, value: unknown): Promise<void> {
+  // DESTRUCTIVE-OK(verified-record): the callers decide what may be replaced; this seals the identity into the file and replaces whole files atomically, never half
+  return writeFileAtomic(fs, path, encodeSide(w, value));
 }
 
 /** `<name>.bad-<n>`: a damaged state file moved aside (kept) before a fresh one is written. n is the next free number, never a name already taken. */

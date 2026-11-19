@@ -294,7 +294,7 @@ describe('eviction', () => {
     const wrong = lines.slice(0, 15).map((l, i) => (i === 3 ? cc.user('wrong') : l));
     await rejects(s.restoreBody(V(1), wrong), 'bad-argument');
     expect(await s.read(V(1), 0, 0, 2)).toBe('evicted');
-    expect((await s.restoreBody(V(1), lines)).restoredLines).toBe(15);
+    expect((await s.restoreBody(V(1), lines)).restoredLines).toBe(20);
     expect(Buffer.concat(await s.read(V(1), 0, 0, 20) as Buffer[]).equals(Buffer.concat(lines))).toBe(true);
     expect((await s.verify(V(1))).ok).toBe(true);
     // evicted state survives reopen

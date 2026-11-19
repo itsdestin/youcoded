@@ -73,6 +73,12 @@ export interface Head {
    * another device's until `restoreBody` brings the bodies back; `hash` (the raw chain) is unaffected.
    */
   conversationChainStale: boolean;
+  /**
+   * Review 5, F3: the head is BEHIND the high-water record kept outside the chat folder and the history up to the record's nearest point is the same: the folder was put back as it was
+   * earlier. `from` is the head found, `had` the line count the store once held. Reported (damagedFromLine = from) until the head passes `had`; the store never deletes or cuts anything because of
+   * it; a replicator should refetch lines [from, had). Null when nothing is known: the record can only under-report, and a rollback of the WHOLE store root is invisible.
+   */
+  rolledBack: { from: number; had: number } | null;
 }
 
 export type AppendResult = 'ok' | 'parked' | 'not-a-prefix';

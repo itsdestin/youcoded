@@ -21,6 +21,8 @@ const F_CONVERSATION = 1;
 const F_CAND_ID_NULL = 2;
 /** This line changed a summary fact (title, model, folder), so a crash-time catch-up only has to re-read flagged lines. */
 const F_FACT = 4;
+/** A stand-in for the last evicted line's record after the whole index was lost (review 5, F4): it carries only the boundary chain state, never a real line. */
+const F_STANDIN = 8;
 const KIND_SHIFT = 4;
 
 export interface Rec {
@@ -28,6 +30,7 @@ export interface Rec {
   len: number;          // line length in bytes, newline included
   conversation: boolean;
   fact: boolean;        // this line changed a summary fact
+  standIn?: boolean;    // a stand-in for a lost record (see F_STANDIN)
   kind: LineKind;
   confirms: number;     // line number this line confirmed as a reply end, or NONE
   candN: number;        // tracker candidate AFTER this line, or NONE
@@ -73,7 +76,7 @@ export const headerOk = (b: Buffer): boolean => b.length >= HDR && b.subarray(0,
 export function encodeRecord(r: Rec, out: Buffer, pos: number): void {
   out.writeBigUInt64BE(BigInt(r.offset), pos);
   out.writeUInt32BE(r.len, pos + 8);
-  const flags = (r.conversation ? F_CONVERSATION : 0) | (r.fact ? F_FACT : 0) | (r.candN !== NONE && r.candId === null ? F_CAND_ID_NULL : 0) | (KINDS.indexOf(r.kind) << KIND_SHIFT);
+  const flags = (r.conversation ? F_CONVERSATION : 0) | (r.fact ? F_FACT : 0) | (r.standIn ? F_STANDIN : 0) | (r.candN !== NONE && r.candId === null ? F_CAND_ID_NULL : 0) | (KINDS.indexOf(r.kind) << KIND_SHIFT);
   out.writeUInt32BE(flags >>> 0, pos + 12);
   out.writeBigUInt64BE(r.confirms === NONE ? NONE64 : BigInt(r.confirms), pos + 16);
   out.writeBigUInt64BE(r.candN === NONE ? NONE64 : BigInt(r.candN), pos + 24);
@@ -98,6 +101,7 @@ export function decodeRecord(buf: Buffer, pos: number): Rec | null {
     len: buf.readUInt32BE(pos + 8),
     conversation: (flags & F_CONVERSATION) !== 0,
     fact: (flags & F_FACT) !== 0,
+    standIn: (flags & F_STANDIN) !== 0,
     kind,
     confirms: confirms === NONE64 ? NONE : Number(confirms),
     candN: candN === NONE64 ? NONE : Number(candN),
