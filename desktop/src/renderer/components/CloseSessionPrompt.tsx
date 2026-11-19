@@ -18,6 +18,10 @@ interface Props {
   sessionName?: string;
   sessionId?: string | null;
   onCancel: () => void;
+  // Closes the chat WITHOUT writing the choices. Offered only after a save failed.
+  // WHY (code review round 3, W-2, Destin picked "Close anyway"): with a save that keeps failing,
+  // "Close session" only retried, so the person could not close the chat without undoing edits.
+  onCloseAnyway: () => void;
   // onConfirm receives a DELTA in every field. The prompt preloads the session's
   // current flags/tags/note (so what is already applied shows as applied) and
   // reports only what the user changed off that baseline: `flags` carries the
@@ -56,7 +60,7 @@ const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
 // yes/no facts. Unlike Session details nothing here writes until Close session: the cards
 // edit local state and the caller writes the delta (tag renames/colours still write at once,
 // as everywhere).
-function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm }: Props) {
+function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onCloseAnyway, onConfirm }: Props) {
   const [sel, setSel] = useState<Record<FlagName, boolean>>({ priority: false, complete: false });
   // "Don't show again" — persisted to localStorage so the caller can skip this
   // prompt on future closes. Default off so users see it at least once.
@@ -226,8 +230,12 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
             {failedParts !== null && (
               // WHY the red box with Try again (Destin, R-1 H-1: work that could be lost gets the box that stays):
               // the chat is still open, so nothing is lost; Try again writes the choices again.
+              // Close anyway (W-2) closes and drops only what would not save, so a failing save never traps the chat.
               <Callout tone="danger" role="alert" actionsPlacement="below"
-                actions={<Button size="sm" onClick={confirm} disabled={saving}>Try again</Button>}>
+                actions={<>
+                  <Button size="sm" onClick={confirm} disabled={saving}>Try again</Button>
+                  <Button size="sm" variant="secondary" onClick={onCloseAnyway} disabled={saving}>Close anyway</Button>
+                </>}>
                 {`Couldn’t save ${failedText}. This chat is still open.`}
               </Callout>
             )}

@@ -36,12 +36,28 @@ describe('CloseSessionPrompt when a write failed', () => {
       tags: { list: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn() }, on: {},
     };
     const onConfirm = vi.fn().mockResolvedValueOnce(['tags', 'note']).mockResolvedValueOnce([]);
-    render(<CloseSessionPrompt open sessionName="x" sessionId="s" onCancel={() => {}} onConfirm={onConfirm} />);
+    render(<CloseSessionPrompt open sessionName="x" sessionId="s" onCancel={() => {}} onCloseAnyway={() => {}} onConfirm={onConfirm} />);
     await screen.findByText('No tags on this session yet');
     fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
     expect(await screen.findByText('Couldn’t save tags and note. This chat is still open.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(/Couldn’t save/)).toBeNull());
+  });
+
+  it('offers Close anyway, which closes without writing again, so a save that keeps failing never traps the chat', async () => {
+    (window as any).claude = {
+      session: { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', supported: true, flags: {} }) },
+      tags: { list: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), delete: vi.fn() }, on: {},
+    };
+    const onConfirm = vi.fn().mockResolvedValue(['note']);
+    const onCloseAnyway = vi.fn();
+    render(<CloseSessionPrompt open sessionName="x" sessionId="s" onCancel={() => {}} onCloseAnyway={onCloseAnyway} onConfirm={onConfirm} />);
+    await screen.findByText('No tags on this session yet');
+    expect(screen.queryByRole('button', { name: 'Close anyway' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close anyway' }));
+    expect(onCloseAnyway).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });

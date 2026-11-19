@@ -4252,6 +4252,13 @@ function AppInner() {
         sessionName={sessions.find((s) => s.id === closePromptFor)?.name ?? closePromptName /* WHY live first: the prompt renames now (close-session-1); a peer window's session keeps its captured name */}
         sessionId={closePromptFor}
         onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
+        onCloseAnyway={() => {
+          // WHY (W-2): after a failed save, the person may close without the choices that would not land.
+          const id = closePromptFor;
+          if (id) closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
+          setClosePromptFor(null);
+          setClosePromptName(undefined);
+        }}
         onConfirm={async (result) => {
           const id = closePromptFor;
           if (!id) return [];
