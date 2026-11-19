@@ -373,6 +373,9 @@ export class BodyTools {
         } else {
           line = await cursor.takeLine(pos);
           if (!line) {
+            // WHY (review 5, fuzz seed 9708): the same rule as for a record with no body, for a SLOT with no valid record. Past the checkpoint nothing was ever acknowledged, so a missing body there ends the
+            // rebuild; it must not be Damaged just because an OLDER index copy (replaced-index/, after a cut) still has valid records further on and one rotted record exactly at the cut.
+            if (ckpt && i >= ckpt.count && i >= evLines && gapStart < 0) { include = i; stopAt = i; break; }
             // WHY not Damaged when ONLY the checkpoint vouches for this line and every line before it has a valid record (review 4): the body holds exactly what the index
             // holds, so the checkpoint is the file that is ahead of everything (an older copy taken before a cut, which setAsideTail makes legitimate). The lines the
             // checkpoint claimed are reported as set aside (partial.json) and the old statement is kept in torn/ before it is lowered; the chat is not hidden.

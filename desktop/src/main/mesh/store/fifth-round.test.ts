@@ -452,3 +452,21 @@ describe('each identity check can be killed on its own (the second layer that al
     await t.cleanup();
   });
 });
+
+describe('the rebuild past the checkpoint', () => {
+  it('a missing body past the checkpoint ends the rebuild even when an OLDER index copy has a rotted record exactly at the cut and valid ones beyond it', async () => {
+    const t = await tmpRoot('r5-cut-');
+    const L = mk('z', 24); const o = { ...opts, chunkBytes: 1 << 20 };
+    let s = await open(t.dir, o); await s.append(V(1), 0, 0, L); await s.close();
+    const ix = path.join(vdir(t.dir), 'index.bin'); const b = fs.readFileSync(ix); b[36 + 116 * 7 + 5] ^= 1; fs.writeFileSync(ix, b);      // a rotted record 7 among valid ones
+    s = await open(t.dir, o); await s.head(V(1)); await s.setAsideTail('cccccccc', V(1), 7); await s.close();                          // the rebuild kept the old index in replaced-index/; the cut is at line 7
+    const s2 = await open(t.dir, o, V(2)); await s2.append(V(2), 0, 0, mk('o', 30)); await s2.close();
+    fs.copyFileSync(path.join(vdir(t.dir, V(2)), 'index.bin'), ix);                                                                    // ONE fault: another version's index
+    s = await open(t.dir, o);
+    const h = await s.head(V(1));                                                                                                     // found by fuzz seed 9708: this used to quarantine the version
+    expect(h.lines).toBe(7); expect(h.damagedFromLine).toBeNull();
+    expect(await readAll(s, L.slice(0, 7))).toBe('.'.repeat(7));
+    await s.close(); await t.cleanup();
+  });
+});
+
