@@ -62,6 +62,18 @@ const TONE: Record<CalloutTone, { surface: string; body: string; title: string }
   danger: { surface: CALLOUT_DANGER_SURFACE, body: 'text-fg-2', title: 'text-fg' },
 };
 
+/** The same box drawn ON the accent colour (inside a sent message bubble). WHY (Destin,
+ *  pinned-bubbles-review-7#V-3): the page tones above are see-through tints made for the page,
+ *  and inside a bubble — always the opposite brightness from the page — they read too dark or
+ *  too pale. Here the fill is the bubble's own colour mixed toward amber/red, the outline the
+ *  plain status colour, and the words the bubble's own text colour (globals.css
+ *  `.notice-on-accent`). Info has no on-accent use yet, so it falls back to the bubble text. */
+const ON_ACCENT_TONE: Record<CalloutTone, { surface: string; body: string; title: string }> = {
+  info: { surface: 'notice-on-accent border-on-accent/45', body: 'text-on-accent', title: 'text-on-accent' },
+  warning: { surface: 'notice-on-accent notice-on-accent--warning', body: 'text-on-accent', title: 'text-on-accent' },
+  danger: { surface: 'notice-on-accent notice-on-accent--danger', body: 'text-on-accent', title: 'text-on-accent' },
+};
+
 export type CalloutProps = {
   tone?: CalloutTone;
   /** Optional bold lead-in line above the body, in the normal text colour (2026-10-05). */
@@ -107,13 +119,16 @@ export type CalloutProps = {
    *  WHY (Destin, round-3 deck S-1: "replace got it with an x in the top right"): it is the app's own CloseButton,
    *  the same ✕ the chat's "not available on this device" notice uses, not a new control. */
   onDismiss?: () => void;
+  /** 'on-accent': the box sits on an accent-coloured surface (a sent message bubble), so it is
+   *  drawn from the accent colours instead of the page's (ON_ACCENT_TONE). Default 'page'. */
+  surface?: 'page' | 'on-accent';
 };
 
 // WHY `data-parts-agree` on the action rows (2026-10-05): shoot's "parts agree" check reads
 // marked rows and fails when the buttons in one differ in height — a notice's buttons sit
 // side by side, so they must match.
-export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role, details, onDismiss }: CalloutProps) {
-  const t = TONE[tone];
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role, details, onDismiss, surface = 'page' }: CalloutProps) {
+  const t = (surface === 'on-accent' ? ON_ACCENT_TONE : TONE)[tone];
   const fold = details?.trim() ? (
     <FoldRow className="mt-2" title="Details">
       <p className="text-2xs text-fg-2 font-mono break-all">{details}</p>

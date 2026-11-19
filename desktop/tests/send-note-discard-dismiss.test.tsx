@@ -37,6 +37,16 @@ describe('the buttons on the note', () => {
     render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="not-sent" onSendAgain={() => {}} onDiscard={() => {}} />);
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Discard', 'Send again']);
   });
+  // WHY (pinned-bubbles-review-7#V-3): the note sits inside the accent-coloured bubble, so it is drawn from the bubble's colours,
+  // red for "didn't send" and amber for "not sure", never the page's see-through tint that read too dark or too pale there.
+  it('the note takes its colours from the bubble: red or amber blended into it, buttons in the bubble\'s text colour', () => {
+    const { container } = render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="not-sent" onSendAgain={() => {}} onDiscard={() => {}} />);
+    expect(container.querySelector('[role="status"]')!.className).toContain('notice-on-accent--danger');
+    expect(screen.getByRole('button', { name: 'Send again' }).className).toContain('bg-on-accent');
+    cleanup();
+    const unsure = render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="unsure" onSendAgain={() => {}} onDismiss={() => {}} />);
+    expect(unsure.container.querySelector('[role="status"]')!.className).toContain('notice-on-accent--warning');
+  });
 });
 
 function state(note: 'unsure' | 'not-sent', attachments: string[] = []) {

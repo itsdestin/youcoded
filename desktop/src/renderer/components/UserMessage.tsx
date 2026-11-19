@@ -107,16 +107,19 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
   // WHY the app's own notice card (Callout), unchanged, sitting INSIDE the bubble at its foot (Destin, pinned-bubbles-review-3#B-1, 2026-11-18:
   // "i just wanted the error cards from before to sit inside the message bubbles at the bottom"; review-2#N-1: "full width of the bubble. dark
   // send again on the right side with light dismiss on left. no x"). The card is the same one every other warning/error uses (red = known not
-  // received, amber = a doubt), with the app's standard buttons: outlined Dismiss/Discard first, filled Send again last, and no ✕. It sits on
-  // the chat's own background (bg-canvas) so its see-through tint looks exactly as it does everywhere else, not mixed into the bubble colour.
+  // received, amber = a doubt): outlined Dismiss/Discard first, filled Send again last, and no ✕.
+  // WHY its colours come from the bubble (surface="on-accent", the on-accent buttons), Destin, pinned-bubbles-review-7#V-3 after rounds 4–6
+  // ("these look so dark", "almost looks too light", "in regular youcoded i can barely tell the red/yellow apart"): the page's own tint sat
+  // inside a bubble of the opposite brightness and fought it. The fill is now the bubble colour blended toward amber/red with a solid
+  // amber/red outline, and the words and buttons use the bubble's text colour, as the file and reference pills in this bubble already do.
   const notSent = sendNote === 'not-sent';
   const note = sendNote && (
-    <div className="mt-2.5 rounded-lg bg-canvas whitespace-normal select-text" data-send-note={sendNote}>
-      <Callout tone={notSent ? 'danger' : 'warning'} compact role="status"
+    <div className="mt-2.5 whitespace-normal select-text" data-send-note={sendNote}>
+      <Callout tone={notSent ? 'danger' : 'warning'} surface="on-accent" compact role="status"
         actions={(onDiscard || onDismiss || onSendAgain) && <>
-          {onDiscard && <Button variant="secondary" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
-          {onDismiss && <Button variant="secondary" size="sm" className="whitespace-nowrap" onClick={onDismiss}>Dismiss</Button>}
-          {onSendAgain && <Button variant="primary" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
+          {onDiscard && <Button variant="on-accent-outline" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
+          {onDismiss && <Button variant="on-accent-outline" size="sm" className="whitespace-nowrap" onClick={onDismiss}>Dismiss</Button>}
+          {onSendAgain && <Button variant="on-accent-solid" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
         </>}>
         {notSent ? "This didn't send — your computer never received it." : 'Not sure this was sent.'}
       </Callout>
