@@ -28,7 +28,10 @@
 //    is not durable until that file is fsynced. On power loss the OLD bytes come back. Without this the shim could not tell whether the acknowledgement itself
 //    (the checkpoint slot) was made durable, so a store that forgot its fsync passed every test.
 //  - OPEN HANDLES: `openHandles` counts opened-minus-closed files, so a test can prove no path leaks one (N10).
-//  NOT modelled (unverified): reordering of unsynced writes between files, and file systems that lie about fsync.
+//  - REORDERED UNSYNCED WRITES (review 5, `reorder`: a random-number function, with `powerLoss`): the shim also remembers every write since the file's last fsync. At power loss each touched
+//    file keeps its synced bytes plus a RANDOM SUBSEQUENCE of those writes (none, a prefix, any subset), independently per file, so a later file's data can survive while an earlier file's is lost, a
+//    written range can sit past a zero-filled hole, and a renamed-over file can hold only part of its content. Ported from the reviewer's virtual disk (store-review-5/vfs.ts), which modelled the same.
+//  NOT modelled (unverified): file systems that lie about fsync.
 import * as fsp from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import type { Fs, FileLike } from './fsio';
@@ -60,7 +63,9 @@ export class FaultFs implements Fs {
   private shadowN = 0;
   /** Pre-images of in-place overwrites since the file's last fsync (see `revertInPlace`). */
   private undo: { path: string; pos: number; old: Buffer }[] = [];
-  constructor(private readonly failAt: number, private readonly opts: { tear?: boolean; powerLoss?: boolean; enospcFrom?: number; shadowDir?: string; revertOverwrites?: boolean; revertInPlace?: boolean } = {}, private readonly inner: Fs = realFs) {}
+  /** Writes since each file's last fsync, in order (only with `reorder`). */
+  private pend: { path: string; pos: number; buf: Buffer }[] = [];
+  constructor(private readonly failAt: number, private readonly opts: { tear?: boolean; powerLoss?: boolean; enospcFrom?: number; shadowDir?: string; revertOverwrites?: boolean; revertInPlace?: boolean; reorder?: () => number } = {}, private readonly inner: Fs = realFs) {}
 
   /** Count a space-allocating operation; true when the (simulated) disk is full for it. */
   private full(): boolean {
@@ -107,12 +112,13 @@ export class FaultFs implements Fs {
           throw enospc('write ' + path);
         }
         self.touched.add(path);
+        if (self.opts.reorder) self.pend.push({ path, pos, buf: Buffer.from(buf) });
         await f.write(buf, pos);
       },
       read: (p, l) => f.read(p, l),
       size: () => f.size(),
       async truncate(len) { self.tick('truncate ' + path); self.touched.add(path); await f.truncate(len); },
-      async sync() { self.tick('fsync ' + path); await f.sync(); self.synced.set(path, await f.size()); self.touched.delete(path); self.undo = self.undo.filter((u) => u.path !== path); },
+      async sync() { self.tick('fsync ' + path); await f.sync(); self.synced.set(path, await f.size()); self.touched.delete(path); self.undo = self.undo.filter((u) => u.path !== path); self.pend = self.pend.filter((w) => w.path !== path); },
       async close() { if (!closed) { closed = true; self.openHandles--; } await f.close(); },
     };
     return guard;
@@ -139,6 +145,7 @@ export class FaultFs implements Fs {
     const s = this.synced.get(a);
     if (s !== undefined) { this.synced.set(b, s); this.synced.delete(a); }
     for (const u of this.undo) if (u.path === a) u.path = b;
+    for (const w of this.pend) if (w.path === a) w.path = b;
     if (this.touched.delete(a)) this.touched.add(b);
     if (overwrote) { this.pendingCreates.delete(a); return; }
     if (this.pendingCreates.delete(a)) this.pendingCreates.add(b); // still a not-yet-durable creation, under its new name
@@ -152,7 +159,7 @@ export class FaultFs implements Fs {
       await this.inner.rename(p, sh);
       this.pendingUnlinks.push({ path: p, shadow: sh, dir: nodePath.dirname(p) });
     } else await this.inner.unlink(p);
-    this.synced.delete(p); this.touched.delete(p); this.pendingCreates.delete(p);
+    this.synced.delete(p); this.touched.delete(p); this.pendingCreates.delete(p); this.pend = this.pend.filter((w) => w.path !== p);
   }
   async fsyncDir(p: string) {
     this.tick('fsyncDir ' + p); await this.inner.fsyncDir(p);
@@ -177,8 +184,17 @@ export class FaultFs implements Fs {
       if (!(await this.inner.exists(p))) continue;
       const f = await this.inner.open(p, { create: false });
       await f.truncate(Math.min(await f.size(), this.synced.get(p) ?? 0));
+      if (this.opts.reorder) {
+        // a random subsequence of this file's unsynced writes survives (style per file: none, a prefix, or any subset); a write past the end extends the file with zeros
+        const mine = this.pend.filter((w) => w.path === p); const rnd = this.opts.reorder; const style = rnd();
+        for (let k = 0; k < mine.length; k++) {
+          const keep = style < 0.34 ? false : style < 0.67 ? k < Math.floor(rnd() * (mine.length + 1)) : rnd() < 0.5;
+          if (keep) await f.write(mine[k].buf, mine[k].pos);
+        }
+      }
       await f.close();
     }
+    this.pend = [];
     for (const r of [...this.pendingRenames].reverse()) {
       if ((await this.inner.exists(r.to)) && !(await this.inner.exists(r.from))) await this.inner.rename(r.to, r.from);
     }

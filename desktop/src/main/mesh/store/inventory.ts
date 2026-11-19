@@ -10,21 +10,31 @@
 //   missing     the file is gone
 //   truncated   the file was cut short at a clean boundary (a record, a slot, a line) so nothing in it fails a checksum
 //
-// The mechanisms behind those answers (so a new file knows what to use):
-//   identity   index header, checkpoint slots and every small version file carry the version they belong to (chain.ts versionTag / the `version` field), so a foreign
-//              copy is recognised as foreign;
-//   freshness  what must be CURRENT (which lines were evicted on purpose) lives only in the checkpoint, which is rewritten in place at every acknowledgement; a file with no
-//              freshness (evicted.json) is never decided from;
-//   anchor     a file that can lose a whole tail without any bad byte (the control log, the extras folder) has a second record (anchor.json, manifest.bin) of what was
-//              acknowledged, so a shorter file is REPORTED;
-//   evidence   a destructive act (unlink of an evicted chunk, a body cut) needs CURRENT, cross-checked evidence, never a marker that was merely true once: an unlink of a body
-//              happens only inside evictBody under a proof that was just verified (load never unlinks a body); a cut of surplus body happens only after the index has been checked
-//              against the checkpoint, and the cut bytes are copied to torn/ first.
+// A SIXTH wrong file (review 5): a valid file of the SAME KIND that is not this one (another park position, another tail id, another chunk). It is covered by the same rule, below.
+//
+// THE ENVELOPE RULE (review 5, the end of five rounds of "a file that does not state what it is"): every small file the store writes goes through ONE helper (envelope.ts) and carries, inside its
+// checksum, its ROLE, the VERSION KEY (or chat hash) it belongs to, the POSITION or ID it stands for (a park's line number and line hash, a tail's takeover id), and where it applies a FRESHNESS
+// counter (a slot's sequence number). The reader compares every field with what the caller expects; a mismatch is `foreign` (a typed result): the file is kept, never adopted, never deleted.
+// No file is interpreted from its name alone. The binary files are the same rule in fixed width: the index header and the checkpoint slots (magic = role, version tag, record position / count,
+// sequence number), the body chunks (the chain values), the extras (the name IS the content hash) and the control log (entry id = hash of body, the entry names its chat).
+// `matrix.test.ts` walks this table: for EVERY kind it swaps in a valid same-kind file from the same folder and from a differently-seeded folder, so a new kind cannot skip it.
+//
+// The other mechanisms behind the answers:
+//   freshness  what must be CURRENT (which lines were evicted on purpose, the chain state at that boundary) lives only in the checkpoint, rewritten in place at every acknowledgement;
+//   anchor     a file that can lose a whole tail without any bad byte (the control log, the extras folder) has a second record (control anchor, extras manifest) of what was acknowledged;
+//   evidence   a destructive act (unlink of an evicted chunk, a body cut) needs CURRENT, cross-checked evidence: an unlink happens only inside evictBody under a proof just verified, a cut of
+//              surplus body only after the index was checked against the checkpoint, and the cut bytes are copied to torn/ first;
+//   witness    the HIGH-WATER record (highwater/<version>.hw, outside every chat folder) remembers the highest head the store ever stated: it makes a whole folder put back REPORTED, and proves an
+//              eviction that an older checkpoint forgot. It only ever raises (except where the store itself shortens a version), is written after the lines are durable, and a stale, missing or
+//              foreign one can only UNDER-report.
 // HONEST LIMITS (the only places where a single fault costs something, and what is guaranteed anyway):
 //   (1) a fault that destroys the ONLY copy of some bytes (a body chunk, a tail, a rejected park, a control log, an extra) destroys them; it is always REPORTED and never served wrong;
-//   (2) after a successful eviction the chain values of the evicted lines exist only in index.bin (and its kept copies): a fault there that no kept copy can cover quarantines
-//       the version (everything kept intact under aside/, nothing served until a peer re-sends);
-//   (3) parked appends are provisional by definition (the caller keeps ownership until the head passes them); a lost parked file is not reported.
+//   (2) after an eviction AND the loss of the whole index (every kept copy too) the chain values of the evicted lines are gone for good: the checkpoint kept the state AT the boundary, so the kept lines
+//       are re-derived from their bodies and served, hashAt(n) for an evicted n before the boundary answers `evicted`, and a restoreBody brings everything back and re-derives the index;
+//   (3) parked appends are provisional by definition (the caller keeps ownership until the head passes them); a lost parked file is not reported;
+//   (4) WHAT REMAINS UNDETECTABLE: a rollback of the WHOLE STORE ROOT (the high-water record goes back with it), a rollback to a head the record never saw (it is raised every HW_EVERY = 256 lines, at close
+//       and at every eviction and restore, so up to 255 of the newest lines can be rolled back unreported), and a set-aside tail or extra created after a rolled-back folder's state (they go with the folder;
+//       the rolled-back HEAD is the report).
 //
 // `inventory.test.ts` fails when the store writes a name that has no row; `fuzz.test.ts` and `matrix.test.ts` apply each of the five faults to every file of a real folder.
 //
@@ -54,7 +64,7 @@ export const VERSION_ROWS: InventoryRow[] = [
     A('bad header or classifier stamp: rebuilt KEEPING every valid record; a bad record: re-derived from the body and confirmed by the next valid record or the checkpoint; the old file is kept in replaced-index/',
       'shorter than the checkpoint: re-derived from the bodies and confirmed by the checkpoint\'s chain value; never shorter than what was acknowledged without that being repaired',
       'the header tag names another version: none of its records is used; the index is re-derived from this version\'s own bodies and confirmed by its own checkpoint; no body is cut (the check against the checkpoint comes before any surplus is moved)',
-      'rebuilt from the bodies and confirmed by the checkpoint (limit 2: after an eviction the evicted lines\' chain values come only from kept copies)',
+      'rebuilt from the bodies and confirmed by the checkpoint; after an eviction the checkpoint\'s boundary state stands in for the lost evicted-lines records (limit 2): every kept line is served',
       'a cut inside a record is a torn tail (kept in torn/, then cut); a cut at a record boundary is an older copy (see older)')),
   VF('index.rebuild', 'index\\.rebuild', 'none (scratch, always re-derivable)', SCRATCH),
   VF('body', 'body-[0-9a-f]{16}\\.bin', 'every line is hashed into the chain stored in the index records and the checkpoint',
@@ -63,7 +73,7 @@ export const VERSION_ROWS: InventoryRow[] = [
       'its lines fail their chain values one by one: reported like rot; nothing is served wrong; a resend heals them',
       'a hole: every line wholly inside another chunk file is served, the lines in the hole are reported damaged (never relabelled as evicted), nothing is set aside, a correct resend writes them back; below the evicted bytes it is an eviction and nothing',
       'lines up to the cut are served, the rest are a hole as above; appends start a new chunk at the head')),
-  VF('checkpoint.bin', 'checkpoint\\.bin', 'two checksummed slots, each with a sequence number, the version tag, the head\'s chain values and the eviction state, rewritten in place before each acknowledgement',
+  VF('checkpoint.bin', 'checkpoint\\.bin', 'two checksummed slots, each with a sequence number, the version tag, the head\'s chain values, the eviction state AND the chain state at the eviction boundary (review 5), rewritten in place before each acknowledgement',
     A('one bad slot: the other is used and the bad one rewritten at load', 'a lagging statement is read like a crash between index and checkpoint: the index (cross-checked) is newer, the file is rewritten level with it; an older eviction state that is still true (the bodies really are gone) is used; one that a restore undid is vetoed by the holders\' note and the lines are served; a newer eviction forgotten by an older statement reads the evicted prefix as damaged, never as served wrongly', 'a slot carrying another version\'s tag is not evidence (as missing)', 'no evidence: lines the index cannot vouch for are reported, never trusted, never dropped; the eviction state is unknown, so evicted lines are reported damaged until a resend or restoreBody', 'one slot cut off: the other; both cut: as missing')),
   VF('summary.json', 'summary\\.json', 'checksummed envelope carrying the version key', A('recomputed from the index and bodies', 'lines after its count are replayed from the index', 'counts as bad: recomputed', 'recomputed', 'counts as bad: recomputed')),
   VF('scrub.json', 'scrub\\.json', 'checksummed envelope carrying the version key', A('the integrity scrub starts again at line 0', 'the scrub re-checks lines it already checked', 'counts as bad: starts again', 'starts again', 'counts as bad: starts again')),

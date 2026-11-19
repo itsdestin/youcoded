@@ -6,6 +6,11 @@
 // is dealt to a random file chosen from EVERYTHING under the root (no exclusions): one flipped bit, one overwritten byte,
 // a truncation, a zero-length file or a deleted file. Then the store is reopened and the invariant in store.ts is checked.
 //
+// Review 5 added three things (store-review-5 was the model):
+//   sibling     the file is replaced by ANOTHER file of the same inventory kind (another position, another id, another chunk): the shape that hid parked appends and tails for five rounds
+//   rollback    a whole chat folder is put back as it was at an earlier clean close (a backup restore); oracle: every line acknowledged before that close is served or REPORTED
+//               (head.damagedFromLine / head.rolledBack), never silent, and nothing under the folder is deleted by the store because of it; a rolledBack report with no rollback is a false alarm
+//   reorder     the crash shim lets a random subsequence of each file's unsynced writes survive, independently per file (fault-fs.ts `reorder`), so a later file can survive while an earlier one is lost
 // Review 4 widened this to the class "a file that is internally VALID but is the WRONG one" (the checksums cannot see it): besides bad bytes the fault set now has
 //   older    the file is replaced by its own copy from an earlier moment of the same run (a restored backup, a rollback)
 //   foreign  the file is replaced by the same file of ANOTHER chat (a second version and a second control log live in every folder)
@@ -27,7 +32,7 @@ import { ChatStore } from './store';
 import { FaultFs, InjectedCrash } from './fault-fs';
 import { V, CHAT, refChains, rng, tmpRoot } from './testkit';
 import { nl } from './fixtures';
-import { inventoryRow } from './inventory';
+import { inventoryRow, inventoryKind } from './inventory';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const key = V(1).toString('hex');
@@ -83,8 +88,10 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     checkpointEvery: [32, 32, 8][Math.floor(r() * 3)],
   };
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
+  let closedAckedMax = 0; let rollbackDone = false;   // acknowledged count at the last CLEAN close (the high-water record is raised there); whether a whole-folder rollback was dealt
   let ack2Max = 0; let faultsSinceClean = 0; let faultNote = ''; let faultOnIndexAfterEviction = false;
   const snaps: Map<string, Buffer>[] = [];
+  const snapClosed = new Map<Map<string, Buffer>, number>();   // per snapshot: the acknowledged count if the episode ended in a clean close, else -1
   const tailsAcked: { id: string; from: number }[] = [];
   const tailFaults = new Map<string, number>();   // faults per set-aside id: a tail and its `.done` mark are one pair, and two faults on one pair are not promised
   const extraReportedBad = new Set<string>();   // a rotted extra is reported (`corrupt`) ONCE and then reads as absent until a peer's copy is put: that is a report, not a silent loss
@@ -145,6 +152,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       // review 4 (F1, F4, F5): a line may only read as evicted when an evictBody call covered it. A deleted chunk, an older marker, a foreign file must never do it.
       if (head.evictedLines > evictedMax) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, evictedMax, fault: faultNote });
       if (!rotted && !lossy && flagged !== null) bad('false-alarm-without-any-fault', { tag, flagged });
+      if (head.rolledBack && !rollbackDone && !rotted && !lossy) bad('rolled-back-reported-with-no-rollback-and-no-fault', { tag, rolledBack: head.rolledBack, fault: faultNote });
       for (let i = 0; i < ackedMax; i++) {
         if (i < evictedMax) { ev('evict-exempt'); continue; }
         if (i < head.lines) {
@@ -192,7 +200,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     for (const ta of tailsAcked) {
       try {
         const t = await s.tail(ta.id);
-        if (t === null) { if ((tailFaults.get(ta.id) ?? 0) <= 1) bad('tail-vanished-without-report', { tag, id: ta.id, fault: faultNote }); }
+        if (t === null) { if ((tailFaults.get(ta.id) ?? 0) <= 1 && !rollbackDone) bad('tail-vanished-without-report', { tag, id: ta.id, fault: faultNote }); }
         else { for (let i = 0; i < t.lines.length; i++) if (!t.lines[i].equals(canon[t.fromLine + i])) bad('tail-WRONG-BYTES', { tag, i }); ev('tail-served'); }
       } catch (e: any) { ev('tail-throw-' + e?.code); if (e?.code !== 'corrupt') bad('tail-threw-other', { tag, code: e?.code }); }
     }
@@ -215,7 +223,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     const failAt = 1 + Math.floor(r() * 60);
     const shadow = crash && r() < 0.4 ? (await tmpRoot(`fzs${seed}-`)) : undefined;
     const full = !legacy && !crash && r() < 0.1;       // a full disk instead of a crash
-    const ffs = crash ? new FaultFs(failAt, { tear: r() < 0.6, powerLoss: r() < 0.6, shadowDir: shadow?.dir, revertOverwrites: r() < 0.5, revertInPlace: r() < 0.5 })
+    const ffs = crash ? new FaultFs(failAt, { tear: r() < 0.6, powerLoss: r() < 0.6, shadowDir: shadow?.dir, revertOverwrites: r() < 0.5, revertInPlace: r() < 0.5, reorder: !big && r() < 0.4 ? r : undefined })
       : full ? new FaultFs(0, { tear: r() < 0.5, enospcFrom: 1 + Math.floor(r() * 40) }) : undefined;
     let s: ChatStore | null = null; let crashed = false;
     try {
@@ -288,6 +296,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       if (e instanceof InjectedCrash) crashed = true;
       else { ev('episode-throw-' + e?.code); log.push(`episode threw ${e?.code}`); }
     }
+    if (!crashed && s && !full) closedAckedMax = Math.max(closedAckedMax, ackedMax);   // (the close below raises the high-water record to what was acknowledged)
     if (!crashed && s && ffs) { try { await s.close(); s = null; } catch (e: any) { if (e instanceof InjectedCrash) crashed = true; else { ev('episode-close-failed-' + e?.code); log.push('CLOSEFAIL ' + String(e?.message).slice(0, 120)); if (!full || e?.code !== 'disk-full') bad('close-threw', { code: e?.code, msg: String(e?.message).slice(0, 150) }); } } }
     if (crashed && ffs) {
       await ffs.applyPowerLoss();
@@ -299,7 +308,19 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // A snapshot of the whole folder as it is NOW (before any fault of this episode): the source of "older copy" faults in later episodes
     const snapshotRoot = (): Map<string, Buffer> => { const m = new Map<string, Buffer>(); for (const p of walk(root)) { const rel = path.relative(root, p); if (!/^LOCK/.test(rel)) m.set(rel, fs.readFileSync(p)); } return m; };
     // (taken BEFORE this episode's fault, so an "older copy" is a true earlier state; the newest one equals the present and is skipped)
-    if (!legacy && r() < 0.6) { snaps.push(snapshotRoot()); if (snaps.length > 3) snaps.shift(); }
+    if (!legacy && r() < 0.6) { const sn = snapshotRoot(); snaps.push(sn); snapClosed.set(sn, crashed ? -1 : ackedMax); if (snaps.length > 3) snaps.shift(); }
+    // WHOLE-FOLDER ROLLBACK (review 5, F3): chat 1's folder is replaced by its state at an earlier clean close. Only snapshots taken after a clean close count (the high-water record is raised there).
+    if (!legacy && !big && snaps.length && r() < 0.05) {
+      const sn = snaps[Math.floor(r() * snaps.length)];
+      const pre = `versions/${key}/`; const here = walk(root).map((p) => path.relative(root, p)).filter((p) => p.startsWith(pre));
+      const then = [...sn.keys()].filter((p) => p.startsWith(pre));
+      if (then.length && snapClosed.get(sn) !== undefined && snapClosed.get(sn)! >= 0) {
+        for (const p of here) fs.unlinkSync(path.join(root, p));
+        for (const p of then) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), sn.get(p)!); }
+        rotted = true; lossy = true; rollbackDone = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = Math.min(exemptFrom, closedAckedMax);
+        log.push(`ROLLBACK to a snapshot with ${then.length} files; closedAckedMax=${closedAckedMax}`); ev('rot'); ev('rollback');
+      }
+    }
     // ONE FAULT in a random file of the whole folder
     if (r() < 0.4) {
       const all = walk(root).filter((p) => fs.statSync(p).size > 0 || !legacy);
@@ -310,7 +331,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         const f = from[Math.floor(r() * from.length)];
         const rel = path.relative(root, f);
         const b = fs.readFileSync(f); const pos = Math.floor(r() * Math.max(1, b.length));
-        const KINDS = ['flip', 'flip', 'overwrite', 'truncate', 'truncrec', 'zero', 'zerorange', 'delete', 'older', 'older', 'foreign', 'foreign', 'dup'];
+        const KINDS = ['flip', 'flip', 'overwrite', 'truncate', 'truncrec', 'zero', 'zerorange', 'delete', 'older', 'older', 'foreign', 'foreign', 'dup', 'sibling', 'sibling'];
         let kind = legacy || b.length === 0 ? 'flip' : KINDS[Math.floor(r() * KINDS.length)];
         // clean boundaries of a file: the places a cut leaves every remaining record whole
         const boundaries = (): number[] => {
@@ -332,6 +353,12 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           if (/^extras\/[0-9a-f]{2}\/[0-9a-f]{64}$/.test(rel)) { const o = pool.filter((p) => p !== f && /^extras\/[0-9a-f]{2}\/[0-9a-f]{64}$/.test(path.relative(root, p))); return o.length ? o[Math.floor(r() * o.length)] : null; }
           return null;
         };
+        /** Another file of the same fine inventory kind with other bytes (another park, another tail, another chunk), preferring the same folder */
+        const siblingOf = (): string | null => {
+          const k = inventoryKind(rel); if (!k) return null;
+          const c = pool.filter((p) => p !== f && inventoryKind(path.relative(root, p)) === k && !fs.readFileSync(p).equals(b));
+          return c.length ? c[Math.floor(r() * c.length)] : null;
+        };
         let done = true;
         if (kind === 'flip' && b.length) { b[pos] ^= 1 << Math.floor(r() * 8); fs.writeFileSync(f, b); }
         else if (kind === 'overwrite' && b.length) { b[pos] = (b[pos] + 1 + Math.floor(r() * 255)) & 0xff; fs.writeFileSync(f, b); }
@@ -345,6 +372,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           if (!sn) done = false; else if (ob === undefined) fs.unlinkSync(f); else if (ob.equals(b)) done = false; else fs.writeFileSync(f, ob);
         }
         else if (kind === 'foreign') { const d = donorOf(); if (d && !fs.readFileSync(d).equals(b)) fs.copyFileSync(d, f); else done = false; }
+        else if (kind === 'sibling') { const d = siblingOf(); if (d) fs.copyFileSync(d, f); else done = false; }
         else if (kind === 'dup' && b.length) fs.writeFileSync(f, Buffer.concat([b, b.subarray(0, Math.min(b.length, 40))]));
         else done = false;
         if (done) {

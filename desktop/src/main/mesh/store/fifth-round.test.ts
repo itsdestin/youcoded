@@ -42,7 +42,7 @@ describe('the envelope', () => {
   it('a valid file of another ROLE is foreign, not believed', () => { expect(openEnv(env, { role: 'tail', version: 'aa' }).kind).toBe('foreign'); });
   it('a valid file of another VERSION is foreign', () => { expect(openEnv(env, { role: 'park', version: 'bb' }).kind).toBe('foreign'); });
   it('a valid file with another ID (position, takeover) is foreign', () => { expect(openEnv(env, { role: 'park', version: 'aa', id: '0000000000000009-0123456789abcdef' }).kind).toBe('foreign'); });
-  it('a valid file OLDER than the caller already knows is foreign', () => { expect(openEnv(env, { role: 'park', version: 'aa', minFresh: 4 }).kind).toBe('foreign'); expect(openEnv(env, { role: 'park', version: 'aa', minFresh: 3 }).kind).toBe('ok'); });
+  it('the freshness counter is returned for the slot readers (slotfile.ts) to compare', () => { const r = openEnv(sealEnv({ ...id, fresh: 9 }, Buffer.from('x')), { role: 'park', version: 'aa' }); expect(r.kind === 'ok' && r.fresh).toBe(9); });
   it('a flipped bit anywhere, a cut and an extension are bad (never ok, never foreign)', () => {
     for (let i = 0; i < env.length; i++) { const b = Buffer.from(env); b[i] ^= 0x04; expect(openEnv(b, { role: 'park', version: 'aa' }).kind).toBe('bad'); }
     expect(openEnv(env.subarray(0, env.length - 1), { role: 'park', version: 'aa' }).kind).toBe('bad');

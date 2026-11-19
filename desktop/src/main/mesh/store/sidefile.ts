@@ -18,8 +18,8 @@ export function encodeSide(w: SideWant, value: unknown, fresh = 0): Buffer {
   return sealEnv({ role: w.role, version: w.key, id: w.id, fresh }, Buffer.from(JSON.stringify(value), 'utf8'));
 }
 
-function decodeSide(b: Buffer | null, w: SideWant, minFresh?: number): SideRead {
-  const r = openEnv(b, { role: w.role, version: w.key, id: w.id, minFresh });
+function decodeSide(b: Buffer | null, w: SideWant): SideRead {
+  const r = openEnv(b, { role: w.role, version: w.key, id: w.id });
   if (r.kind !== 'ok') return r;
   try { return { kind: 'ok', value: JSON.parse(r.payload.toString('utf8')), fresh: r.fresh }; } catch { return { kind: 'bad' }; }
 }
