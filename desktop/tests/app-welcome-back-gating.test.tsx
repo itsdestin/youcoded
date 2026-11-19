@@ -26,6 +26,7 @@ vi.mock('@xterm/addon-fit', async () => (await import('./helpers/busy-app-probes
 vi.mock('@xterm/addon-unicode11', async () => (await import('./helpers/busy-app-probes')).fakeAddonModule('Unicode11Addon'));
 vi.mock('@xterm/addon-webgl', async () => (await import('./helpers/busy-app-probes')).fakeAddonModule('WebglAddon'));
 
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
 import { installMock } from '../src/renderer/dev/workbench/install-mock';
 import { setConnectionMode } from '../src/renderer/platform';
 
@@ -153,6 +154,14 @@ beforeAll(async () => { await import('../src/renderer/App'); }, APP_IMPORT_MS);
 // file passed alone. A found screen returns at once, so only a broken one pays the wait (under
 // the 30 s test timeout); the negative checks do not use this number.
 const APPEAR_MS = 20_000;
+// WHY CPU budget, not the 30 s wall limit (2026-11-18): mounting the whole App is CPU work, and at load 58-149 different
+// tests here ran past 30 s of WALL time while passing alone in seconds. Budgeted in CPU instead (cpu-budget.ts); the wall
+// limit only catches a hang, and each wait below still has its own condition and budget.
+vi.setConfig({ testTimeout: CPU_BOUND_WALL_LIMIT_MS });
+budgetCpuPerTest();
+// WHY no `{ timeout: 8000 }` on the "Reopening…" waits (2026-11-18): an explicit 8 s beat the suite's 15 s waitFor
+// default, so at load 58-149 the restore had not finished inside 8 s while the file passed alone. Those waits now
+// take the suite default.
 
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {
@@ -236,7 +245,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       // Drain the original serial implementation too, so a red test leaves no work behind.
       window.claude.session = api;
       await act(async () => { for (const done of release) done(); });
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
     }
   });
 
@@ -280,7 +289,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     } finally {
       window.claude.session = api;
       await act(async () => { await Promise.all(release.map(done => done())); });
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
     }
   });
 
@@ -295,7 +304,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
     act(() => { setConnectionMode(mode); });
     fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
-    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
     await waitFor(() => expect(pushes).toHaveLength(3));
     const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
     await waitFor(() => expect(active()).toBeTruthy());
@@ -483,7 +492,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     } finally {
       await act(async () => { fail?.(); });
       window.claude.session = api;
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
     }
   });
 
@@ -511,7 +520,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       while (screen.queryByRole('button', { name: 'Never mind' })) {
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Never mind' })); });
       }
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
       window.claude.syncSpaces = api;
     }
   });
@@ -558,7 +567,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Never mind' })); });
       }
       await act(async () => { await release?.(); finish(); });
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
     }
   });
 
@@ -572,14 +581,14 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
     fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
 
-    await waitFor(() => expect(store.getState().sessions.length).toBeGreaterThan(before), { timeout: 8000 });
+    await waitFor(() => expect(store.getState().sessions.length).toBeGreaterThan(before));
     const opened = store.getState().sessions.slice(before);
     expect(opened.every((s: any) => s.skipPermissions === false)).toBe(true);
     // WHY wait for the button to leave "Reopening…" (2026-10-02): the sessions appear
     // before Resume all's own finally-block runs, so the test used to end mid-resume and
     // its last state updates landed after the file's jsdom was torn down — two
     // "window is not defined" unhandled errors that failed verify.sh at random.
-    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
   });
 
   it('Resume all reopens a session that ran with Skip permissions on with it still on, and only that one', async () => {
@@ -603,11 +612,11 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
     fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
 
-    await waitFor(() => expect(store.getState().sessions.some((s: any) => s.resumeSessionId === 'wb-past-0')).toBe(true), { timeout: 8000 });
+    await waitFor(() => expect(store.getState().sessions.some((s: any) => s.resumeSessionId === 'wb-past-0')).toBe(true));
     const opened = store.getState().sessions.slice(before);
     expect(opened.find((s: any) => s.resumeSessionId === 'wb-past-0')?.skipPermissions).toBe(true);
     // settle: wait for the whole batch, then check no other row picked the setting up.
-    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument());
     const others = store.getState().sessions.slice(before).filter((s: any) => s.resumeSessionId !== 'wb-past-0');
     expect(others.length).toBeGreaterThan(0);
     expect(others.every((s: any) => s.skipPermissions === false)).toBe(true);
