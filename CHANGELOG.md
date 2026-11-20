@@ -62,7 +62,8 @@ Changes since 1.3.3: clearer sign-in and "No internet" messages, a sturdier mess
 ### Phone
 
 - First-run Claude Code questions show as cards, and every sign-in returns to the app.
-- Connect to Desktop checks whether Tailscale is on; a failed connection says whether your computer needs updating or can't be reached.
+- The phone connects to a computer only through Tailscale; plain home-network addresses (like 192.168.x.x) no longer work, because they carried your chats unencrypted.
+- Connect to Desktop checks whether Tailscale is on; a failed connection says whether your computer needs updating or can't be reached. Update the app on your computer and phone together.
 - You can answer the assistant's browser approvals from your phone; pasting a picture in the phone browser attaches it.
 - Attached file names keep their accents; the lock screen shows only "A session needs you"; the camera switches off when the QR scanner closes; after reconnecting to a computer with no chats open, the phone opens a new chat.
 - The voice custom-words setting no longer shows on the phone, where it didn't work.
