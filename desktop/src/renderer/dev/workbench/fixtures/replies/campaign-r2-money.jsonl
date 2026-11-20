@@ -1,10 +1,12 @@
-{"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "pages/money/page.json"}, "delay": 300}
-{"type": "tool_result", "tool_use_id": "t1", "content": "Wrote page.json", "delay": 400}
-{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "pages/money/index.html"}, "delay": 300}
-{"type": "tool_result", "tool_use_id": "t2", "content": "Wrote index.html", "delay": 500}
-{"type": "turn_complete", "delay": 200}
-{"type": "assistant_text", "text": "Yes. Found eleven.", "delay": 350}
-{"type": "turn_complete", "delay": 200}
-{"type": "tool_use", "id": "t3", "name": "Write", "input": {"file_path": "automations/morning-money/email.html"}, "delay": 300}
-{"type": "tool_result", "tool_use_id": "t3", "content": "Wrote email.html", "delay": 400}
-{"type": "turn_complete", "delay": 200}
+{"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "pages/money/page.json"}, "delay": 250}
+{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "pages/money/index.html"}, "delay": 40}
+{"type": "tool_result", "tool_use_id": "t1", "content": "Wrote page.json", "delay": 350}
+{"type": "tool_result", "tool_use_id": "t2", "content": "Wrote index.html", "delay": 300}
+{"type": "turn_complete", "delay": 150}
+{"type": "assistant_text", "text": "Yes. Found eleven.", "delay": 300}
+{"type": "turn_complete", "delay": 150}
+{"type": "tool_use", "id": "t3", "name": "Write", "input": {"file_path": "automations/morning-money/email.html"}, "delay": 250}
+{"type": "tool_use", "id": "t4", "name": "Write", "input": {"file_path": "automations/morning-money/schedule.json"}, "delay": 40}
+{"type": "tool_result", "tool_use_id": "t3", "content": "Wrote email.html", "delay": 300}
+{"type": "tool_result", "tool_use_id": "t4", "content": "Wrote schedule.json", "delay": 250}
+{"type": "turn_complete", "delay": 150}
