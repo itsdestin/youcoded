@@ -43,7 +43,7 @@
     "renderer/state/chat-reducer.ts": 3523,
     "renderer/styles/globals.css": 3122,
     "renderer/components/SessionStrip.tsx": 2893,
-    "main/main.ts": 2108,
+    "main/main.ts": 2110,
     "shared/types.ts": 1642,
     "renderer/components/SyncPanel.tsx": 2045,
     "main/engine/engine-manager.ts": 2138,
