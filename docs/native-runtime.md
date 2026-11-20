@@ -1260,7 +1260,7 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   the smoke test's own synthetic 203 MB source bitmap — not the worker's share, which is roughly
   0.6–1.2 GB. `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
   The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
-  <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/image-support.ts", "contains": "IMAGE_CACHE_DIR_NAME = 'image-cache'"} -->
 - **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
   history before any compaction or summary (`maybeCompact`, `compactNow`). A provider/profile
   change (`setBinding`) only marks `imagesRefitPending`; the next model request's `maybeCompact`,
