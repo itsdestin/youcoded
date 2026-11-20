@@ -1,6 +1,6 @@
 # YouCoded Privacy Policy
 
-**Effective date:** November 5, 2026
+**Effective date:** November 19, 2026
 
 YouCoded is made and published by **Destin's Adventures, LLC**, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This page explains, in plain words, what information the YouCoded app sends off your device, who gets it, how long it is kept, and what you can switch off.
 
@@ -161,7 +161,7 @@ These fetch public files. They do not send anything about you beyond what any we
 - **Announcements and changelog.** An announcement file is fetched from GitHub at launch and hourly while the app runs, and the changelog when you open it.
 - **Marketplace, themes, integrations, model lists, search settings.** Public lists and files from `raw.githubusercontent.com` and `api.youcoded.ai` (marketplace), plus public model lists from `models.dev` and OpenRouter.
 - **Theme fonts.** If a theme uses a Google web font in the document editors, the app downloads the font from Google Fonts.
-- **Setup downloads.** First-run setup downloads Claude Code (from claude.ai), Node.js (nodejs.org), the GitHub command line tool and Git for Windows (from GitHub), and on Android runtime packages (Termux mirrors). Voice input and local-AI models are downloaded from Hugging Face, npm and GitHub, only if you choose them.
+- **Setup downloads.** First-run setup downloads Claude Code (from claude.ai), Node.js (nodejs.org), and the GitHub command line tool and Git for Windows (from GitHub). The Android app carries Claude Code and the programs it needs inside the app and downloads none of them at setup. Voice input and local-AI models are downloaded from Hugging Face, npm and GitHub, only if you choose them.
 
 ### 3.10 Features you choose that talk to other companies
 
@@ -199,7 +199,7 @@ Each has its own policy for what it does with the data it receives:
 - **GitHub** hosts the app's source code and releases, the marketplace and theme lists, and the sign-in; and it holds your private sync repositories and any bug report you send. [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 - **Anthropic**, **OpenAI**, **Google**, **OpenRouter** (and the models behind it) and other AI providers you choose receive your prompts. [Anthropic](https://www.anthropic.com/privacy), [OpenAI](https://openai.com/consumer-privacy/), [OpenRouter data collection](https://openrouter.ai/docs/guides/privacy/data-collection).
 - **Google (Drive, Fonts)**, **Apple (iCloud)** if you choose them.
-- **Hugging Face, npm, Node.js, Termux**: download sources for optional components.
+- **Hugging Face, npm, Node.js**: download sources for optional components.
 - **Exa, Tavily, DuckDuckGo, Plaid** and any MCP servers or integrations you connect.
 
 YouCoded does not sell data, run ads, or have commercial data partners. Within YouCoded, only the project owner can read the server's data.
