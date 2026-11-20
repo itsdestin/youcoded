@@ -8,77 +8,65 @@ All notable changes to YouCoded are documented in this file.
 
 **Claude Code CLI baseline:** v2.1.328 (desktop review); Android bundles v2.1.325.
 
-Changes since 1.3.3: clearer sign-in and "No internet" messages, a sturdier message queue, more reliable Office saving, faster local models, a bigger buddy window, and many fixes on the phone and in chat.
+Clearer sign-in, a more dependable message box, a new Office Home, faster local models and a bigger buddy window, plus many fixes.
 
-### Sign-in and connection
+### What's new
 
-- When your Claude, ChatGPT or OpenRouter sign-in runs out, the chat shows a card with a Sign in button instead of an error you have to decode. Settings shows when your Claude sign-in expires, and a signed-out Claude can be signed in from there.
-- With no internet, the app says "No internet connection" right away, and sign-in buttons stop before opening a page that can't load. It checks with a real connection, so school or work networks that use a proxy are not mistaken for offline.
-- New "Sign out everywhere" option; phones are signed out after 90 days.
-- Windows sign-in retries when Windows refuses a local port.
+#### Sign-in
+- When a sign-in runs out, the chat shows a card with a Sign in button.
+- Settings shows when your Claude sign-in expires, and you can sign back in there.
+- New "Sign out everywhere". Phones are signed out after 90 days.
+- Offline, the app says "No internet connection" right away.
 
-### Messages and the queue
+#### Messages
+- A message the computer never confirms gets a note after 30 seconds, with Send again.
+- Waiting messages show their files as chips, and Send now says why one can't go yet.
 
-- A message the computer never confirms shows a note inside its bubble after 30 seconds, with Send again and Dismiss or Discard. A picture or file sent with no words no longer gets stuck at the bottom of the chat.
-- Queued messages no longer get stuck while a background helper waits for your permission, and Send now says why a message can't go yet.
-- No more "Queue identity is not ready" lock-ups; messages over 10,000 characters send; a long first message in a new chat no longer sits "Paused".
-- Waiting messages show their file names as chips, and editing one keeps them.
-- Dragging a file onto the message box attaches it again, and Ctrl+V after copying an image in a web browser attaches the picture.
+#### Chat
+- Right-click a picture for a menu.
+- Picking a quick chip over words you typed asks Replace or Add to end.
+- The folder list is ordered by last use.
+- "What the assistant was given" has three tabs: Overview, Global and Project.
+- Hover hints use the app's own style.
 
-### Chat
+#### Permissions and safety
+- Permission cards offer more precise Always-allow choices.
+- The assistant can comment on files outside your project, after asking you.
+- Plugins found to be unsafe can be switched off. Themes and official plugins are checked before they install.
 
-- Right-click a picture for a menu. Picking a quick chip over words you typed asks Replace or Add to end. The folder list is ordered by last use.
-- Reopening an old chat no longer makes the assistant reply on its own; a finished helper's report goes in with your next message. Reports from finished helpers and background commands otherwise reach the assistant without waiting for you to type.
-- After a crash, an interrupted step reads "completion unknown, inspect before retrying", and a crashed chat says "Session ended unexpectedly".
-- Background commands and watchers no longer show as Running forever.
-- Very large replies no longer freeze the app when they finish, and the chat no longer jumps while a page draws. Code blocks over 1,500 lines show without colour to stay fast.
-- Tapping a file name finds the file even from a short path, and links to files outside the chat's folder open the right file.
-- "What the assistant was given" has three tabs: Overview, Global context and Project context.
-- Many places that showed nothing when loading or saving failed now say what went wrong, with Try again.
+#### Office
+- Office Home: rename, copy, show in folder, ask about a file or remove it from Recent; plus search and Show all.
+- Save As opens the copy in a new tab.
 
-### Permissions and safety
+#### Local models
+- Faster replies: each chat keeps its place, and chats hold 64k by default (was 32k).
+- A chat that grows too long shows one card with Summarise.
+- The app asks before downloading a Gemma model.
 
-- Permission cards offer more precise Always-allow choices. The assistant can comment on files outside your project after asking you.
-- Installed plugins found to be unsafe can be switched off; themes and official plugins are checked against the published copy before they install.
-- A one-time notice says when a damaged Claude Code settings file was replaced.
+#### Buddy and voice
+- The buddy window shows your main chat, in two sizes.
+- Voice input warns when the microphone hears nothing.
 
-### Office
+#### Phone
+- Answer the assistant's browser approvals from your phone.
+- Pasting a picture in the phone browser attaches it.
+- The phone connects to your computer only through Tailscale; home-network addresses (like 192.168.x.x) no longer work, because they sent your chats unencrypted. Update the app on your computer and phone together.
 
-- Office Home: rename, copy, show in folder, ask about a file or remove it from Recent; plus search and Show all. Save As opens the copy in a new tab.
-- Saving is more reliable: Save is never greyed out, a failed save retries by itself and then says "Not yet saved", and unsaved typing survives moved files and unplugged drives.
-- Word and Excel previews stop after 60 seconds instead of hanging; deleting Word comments no longer makes Word ask to repair the file. Closing a window with unsaved files asks first.
+#### Privacy
+- Anonymous usage counts come only from official builds; new installs also send a few one-time setup steps. The privacy policy now says exactly what the app and server record.
 
-### Local models
+### Bug fixes and improvements
 
-- Faster replies: each chat keeps its place, and the default context is 64k (was 32k). A chat that grows too long shows one card with Summarise. The engine no longer gets stuck as busy.
-- A confirmation appears before a Gemma model downloads.
-
-### Buddy, voice and games
-
-- The buddy window shows your main chat with the same cards and session list, in two sizes.
-- Voice input warns when the microphone hears no sound and says why nothing was written.
-- In online games you can accept a rematch your opponent asked for.
-
-### Phone
-
-- First-run Claude Code questions show as cards, and every sign-in returns to the app.
-- The phone connects to a computer only through Tailscale; plain home-network addresses (like 192.168.x.x) no longer work, because they carried your chats unencrypted.
-- Connect to Desktop checks whether Tailscale is on; a failed connection says whether your computer needs updating or can't be reached. Update the app on your computer and phone together.
-- You can answer the assistant's browser approvals from your phone; pasting a picture in the phone browser attaches it.
-- Attached file names keep their accents; the lock screen shows only "A session needs you"; the camera switches off when the QR scanner closes; after reconnecting to a computer with no chats open, the phone opens a new chat.
-- The voice custom-words setting no longer shows on the phone, where it didn't work.
-
-### Other fixes
-
-- After a window reloads, it reopens the chat you were in. Welcome back reopens sessions with Skip permissions as you left them.
-- Linux: the app says what to install when no secure password storage exists. Arch Linux copies from another package say to update with the package manager.
-- Windows and Mac: the same folder in different capitals is saved once; Windows shows folders' real capitalisation.
-- A plugin install that fails partway cleans up. A theme whose files changed shows Update.
-- Shrunk copies of big pictures are cleaned up after 90 days unused; chats you keep using keep theirs. Office's error log no longer contains your document's text.
-- Anonymous usage counts come only from official builds; fresh installs also send a few one-time setup milestones (see About and Privacy). The privacy policy now describes exactly what the app and server record.
+- **Sending:** no more "Queue identity is not ready"; long messages (including 10,000+ characters, and the first one in a new chat) send; a picture sent with no words no longer gets stuck; queued messages no longer wait on a helper's permission question; dragging a file in and pasting a copied web image attach again.
+- **Sign-in:** school and work networks that use a proxy are no longer called offline; Windows sign-in retries when Windows refuses a port.
+- **Chat:** reopening an old chat no longer makes the assistant reply on its own; helper reports arrive without you typing; background commands no longer show Running forever; huge replies no longer freeze the app and the chat no longer jumps while a page draws (code blocks over 1,500 lines skip colour); file names open the right file even from a short path or outside the chat's folder.
+- **When things fail:** many screens that showed nothing now say what went wrong, with Try again; a crashed chat says "Session ended unexpectedly"; a step cut off by a crash says its result is unknown.
+- **Office:** a failed save retries by itself, then says "Not yet saved"; unsaved typing survives moved files and unplugged drives; Word and Excel previews give up after 60 seconds instead of hanging; deleting Word comments no longer makes Word offer a repair; closing a window with unsaved files asks first.
+- **Phone:** first-run questions show as cards and every sign-in returns to the app; Connect to Desktop checks Tailscale and says whether your computer needs updating or can't be reached; file names keep their accents; the lock screen shows only "A session needs you"; the camera turns off when the QR scanner closes; reconnecting to a computer with no chats opens a new one; the voice custom-words setting, which didn't work on phones, is hidden there.
+- **Windows, Mac and Linux:** a folder written in different capitals is saved once; Windows shows folders' real capitalisation; Linux says what to install when secure password storage is missing; Arch copies from another package point to the package manager for updates.
+- **Everything else:** a window that reloads reopens your chat; Welcome back keeps Skip permissions as you left it; a plugin install that fails partway cleans up; a theme whose files changed shows Update; you can accept a rematch in online games; terminals keep their graphics past 16 Claude Code chats; the assistant's Edit tool copes with curly quotes; shrunk picture copies unused for 90 days are cleaned up; the Office error log no longer contains your document's text.
 
 ### Known issues
-
 - A custom provider whose models don't report their conversation size may show a "conversation too long" error that Summarize and continue can't fix. Start a new conversation or pick a model with a known size.
 - On Android, Assistant settings shows the Local models page, but local models don't run on phones.
 
