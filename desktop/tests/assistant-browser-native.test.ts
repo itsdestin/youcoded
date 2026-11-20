@@ -76,7 +76,12 @@ afterAll(async () => {
 });
 
 describe('a native session using the Browser', () => {
-  live('opens a page, searches it and reads the answer — asking through the Browser\'s card, never the session\'s', async () => {
+  // WHY retry once (nightly Desktop CI 2026-11-19, Windows shard 1): the real Chrome started (its pid was logged) but
+  // never answered within the app's own 60 s launch limit on a loaded runner, so the test failed on cold-start speed, not
+  // on logic — the same file passed on every other run. The app's launch limit stays as it is (people depend on it);
+  // a second attempt finds Chrome already scanned and cached. `cards` is cleared so the second attempt counts its own.
+  live('opens a page, searches it and reads the answer — asking through the Browser\'s card, never the session\'s', { retry: 1, timeout: 150_000 }, async () => {
+    cards.length = 0;
     const sessionAsks: string[] = [];
     const layers = { presetRules: [], modeRules: rulesForMode('ask'), denyList: [], rememberedRules: [] };
     const model = scriptModel([
@@ -110,5 +115,5 @@ describe('a native session using the Browser', () => {
     expect(cards.length).toBe(2);
     // The screenshot came back as a picture file.
     expect(JSON.stringify(results[3].data)).toMatch(/\.jpg/);
-  }, 90_000);
+  });
 });
