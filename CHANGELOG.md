@@ -4,6 +4,83 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-11-19
+
+**Claude Code CLI baseline:** v2.1.328 (desktop review); Android bundles v2.1.325.
+
+Changes since 1.3.3: clearer sign-in and "No internet" messages, a sturdier message queue, more reliable Office saving, faster local models, a bigger buddy window, and many fixes on the phone and in chat.
+
+### Sign-in and connection
+
+- When your Claude, ChatGPT or OpenRouter sign-in runs out, the chat shows a card with a Sign in button instead of an error you have to decode. Settings shows when your Claude sign-in expires, and a signed-out Claude can be signed in from there.
+- With no internet, the app says "No internet connection" right away, and sign-in buttons stop before opening a page that can't load. It checks with a real connection, so school or work networks that use a proxy are not mistaken for offline.
+- New "Sign out everywhere" option; phones are signed out after 90 days.
+- Windows sign-in retries when Windows refuses a local port.
+
+### Messages and the queue
+
+- A message the computer never confirms shows a note inside its bubble after 30 seconds, with Send again and Dismiss or Discard. A picture or file sent with no words no longer gets stuck at the bottom of the chat.
+- Queued messages no longer get stuck while a background helper waits for your permission, and Send now says why a message can't go yet.
+- No more "Queue identity is not ready" lock-ups; messages over 10,000 characters send; a long first message in a new chat no longer sits "Paused".
+- Waiting messages show their file names as chips, and editing one keeps them.
+- Dragging a file onto the message box attaches it again, and Ctrl+V after copying an image in a web browser attaches the picture.
+
+### Chat
+
+- Right-click a picture for a menu. Picking a quick chip over words you typed asks Replace or Add to end. The folder list is ordered by last use.
+- Reopening an old chat no longer makes the assistant reply on its own; a finished helper's report goes in with your next message. Reports from finished helpers and background commands otherwise reach the assistant without waiting for you to type.
+- After a crash, an interrupted step reads "completion unknown, inspect before retrying", and a crashed chat says "Session ended unexpectedly".
+- Background commands and watchers no longer show as Running forever.
+- Very large replies no longer freeze the app when they finish, and the chat no longer jumps while a page draws. Code blocks over 1,500 lines show without colour to stay fast.
+- Tapping a file name finds the file even from a short path, and links to files outside the chat's folder open the right file.
+- "What the assistant was given" has three tabs: Overview, Global context and Project context.
+- Many places that showed nothing when loading or saving failed now say what went wrong, with Try again.
+
+### Permissions and safety
+
+- Permission cards offer more precise Always-allow choices. The assistant can comment on files outside your project after asking you.
+- Installed plugins found to be unsafe can be switched off; themes and official plugins are checked against the published copy before they install.
+- A one-time notice says when a damaged Claude Code settings file was replaced.
+
+### Office
+
+- Office Home: rename, copy, show in folder, ask about a file or remove it from Recent; plus search and Show all. Save As opens the copy in a new tab.
+- Saving is more reliable: Save is never greyed out, a failed save retries by itself and then says "Not yet saved", and unsaved typing survives moved files and unplugged drives.
+- Word and Excel previews stop after 60 seconds instead of hanging; deleting Word comments no longer makes Word ask to repair the file. Closing a window with unsaved files asks first.
+
+### Local models
+
+- Faster replies: each chat keeps its place, and the default context is 64k (was 32k). A chat that grows too long shows one card with Summarise. The engine no longer gets stuck as busy.
+- A confirmation appears before a Gemma model downloads.
+
+### Buddy, voice and games
+
+- The buddy window shows your main chat with the same cards and session list, in two sizes.
+- Voice input warns when the microphone hears no sound and says why nothing was written.
+- In online games you can accept a rematch your opponent asked for.
+
+### Phone
+
+- First-run Claude Code questions show as cards, and every sign-in returns to the app.
+- Connect to Desktop checks whether Tailscale is on; a failed connection says whether your computer needs updating or can't be reached.
+- You can answer the assistant's browser approvals from your phone; pasting a picture in the phone browser attaches it.
+- Attached file names keep their accents; the lock screen shows only "A session needs you"; the camera switches off when the QR scanner closes; after reconnecting to a computer with no chats open, the phone opens a new chat.
+- The voice custom-words setting no longer shows on the phone, where it didn't work.
+
+### Other fixes
+
+- After a window reloads, it reopens the chat you were in. Welcome back reopens sessions with Skip permissions as you left them.
+- Linux: the app says what to install when no secure password storage exists. Arch Linux copies from another package say to update with the package manager.
+- Windows and Mac: the same folder in different capitals is saved once; Windows shows folders' real capitalisation.
+- A plugin install that fails partway cleans up. A theme whose files changed shows Update.
+- Shrunk copies of big pictures are cleaned up after 90 days unused; chats you keep using keep theirs. Office's error log no longer contains your document's text.
+- Anonymous usage counts come only from official builds; fresh installs also send a few one-time setup milestones (see About and Privacy). The privacy policy now describes exactly what the app and server record.
+
+### Known issues
+
+- A custom provider whose models don't report their conversation size may show a "conversation too long" error that Summarize and continue can't fix. Start a new conversation or pick a model with a known size.
+- On Android, Assistant settings shows the Local models page, but local models don't run on phones.
+
 ## [1.3.3] — 2026-10-23
 
 **Claude Code CLI baseline:** v2.1.309 (desktop review); Android bundles v2.1.300.
