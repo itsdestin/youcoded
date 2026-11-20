@@ -1,0 +1,10 @@
+{"type": "assistant_text", "text": "Anything you like. What are you picturing?", "delay": 350}
+{"type": "turn_complete", "delay": 200}
+{"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "themes/rainy-tokyo/manifest.json"}, "delay": 300}
+{"type": "tool_result", "tool_use_id": "t1", "content": "Wrote manifest.json", "delay": 400}
+{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "themes/rainy-tokyo/wallpaper.jpg"}, "delay": 300}
+{"type": "tool_result", "tool_use_id": "t2", "content": "Wrote wallpaper.jpg", "delay": 500}
+{"type": "turn_complete", "delay": 200}
+{"type": "tool_use", "id": "t3", "name": "Edit", "input": {"file_path": "themes/rainy-tokyo/manifest.json", "old_string": "#FF3FA4", "new_string": "#2B7FFF"}, "delay": 300}
+{"type": "tool_result", "tool_use_id": "t3", "content": "Edited manifest.json", "delay": 400}
+{"type": "turn_complete", "delay": 200}
