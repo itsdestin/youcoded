@@ -54,12 +54,16 @@ const UNREADABLE = (heading: string) => ({ unreadable: heading });
  * trust dialogs, so the dialog-only assertions would not fit it; the one that
  * matters here is that cardTitleFor() gives a card at all.
  */
-const SCREEN = (title: string, options: string[], cursor: number, extra: { numbered?: boolean; older?: string[][] } = {}) =>
-  ({ screen: true as const, title, options, cursor, numbered: !!extra.numbered, older: extra.older ?? [] });
+// `cursor` may list several rows: Claude Code has moved a dialog's starting highlight between versions, and the app
+// reads the highlight off the screen (selectedIndex), so any listed start is fine — the test pins that it is READ.
+const SCREEN = (title: string, options: string[], cursor: number | number[], extra: { numbered?: boolean; older?: string[][] } = {}) =>
+  ({ screen: true as const, title, options, cursor: ([] as number[]).concat(cursor), numbered: !!extra.numbered, older: extra.older ?? [] });
 const THEME = SCREEN('Choose a Theme', [
   'Auto (match terminal)', 'Dark mode', 'Light mode', 'Dark mode (colorblind-friendly)',
   'Light mode (colorblind-friendly)', 'Dark mode (ANSI colors only)', 'Light mode (ANSI colors only)',
-], 1);
+  // WHY [1, 0]: up to 2.1.325 the picker opened on "Dark mode"; the daily drift run of 2026-11-19 (latest CLI) found it
+  // opening on "Auto (match terminal)".
+], [1, 0]);
 const SIGN_IN = SCREEN('Select Login Method', [
   'Claude account with subscription · Individual, Team, or Enterprise',
   'Anthropic Console account · API usage billing',
@@ -146,7 +150,7 @@ describe('startup-dialog captures', () => {
             // The current wording, or any older one still accepted (see SIGN_IN).
             const accepted = [want.options, ...want.older];
             expect(accepted, 'unexpected option wording').toContainEqual(menu!.options);
-            expect(menu!.selectedIndex).toBe(want.cursor);
+            expect(want.cursor).toContain(menu!.selectedIndex);
             expect(menuToButtons(menu!).map((b) => b.label)).toEqual(menu!.options);
             return;
           }

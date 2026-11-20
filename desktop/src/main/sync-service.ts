@@ -23,13 +23,16 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execFile, execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { acquireOwnedLock, pidExists, type LockHandle } from './owned-lock';
+import { atomicWrite as atomicWriteAsync } from './atomic-write';
 import { promisify } from 'util';
 import {
   type BackendInstance,
   type SyncWarning,
   addOrReplaceWarning,
   clearWarningsByBackend,
+  clearWarningsByCode,
   migrateConfigToV2,
   readWarnings,
   syncLegacyKeys,
@@ -77,6 +80,11 @@ interface SnapshotGate {
 // --- Constants ---
 
 const PUSH_DEBOUNCE_MIN = 15;
+// L-1 (Destin 2026-11-18): a backup lock whose owner cannot be verified is taken over after 2 hours.
+const STALE_LOCK_TAKEOVER_MS = 2 * 60 * 60 * 1000;
+// L-2: this long with every backup skipped for a held lock shows the red warning.
+const BACKUP_SKIPPED_WARN_MS = 24 * 60 * 60 * 1000;
+const BACKUP_SKIPPED_CODE = 'BACKUP_SKIPPED';
 // 10 min — generous because individual conversation slugs can grow to
 // hundreds of MB (one user has a 25 MB single .jsonl in a 156 MB slug).
 // The previous 60s value silently killed rclone mid-upload on big slugs,
@@ -140,6 +148,8 @@ export class SyncService extends EventEmitter {
   // once per day even though the daily-snapshot poll calls push() hourly.
   private snapshotMarkerPath: string;
   private lockDir: string;
+  private lock: LockHandle | null = null;
+  private skippedSincePath: string;
   private backupLogPath: string;
   private appSyncMarkerPath: string;
   private syncSpacesStatePath: string;
@@ -211,6 +221,7 @@ export class SyncService extends EventEmitter {
     this.syncMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.sync-marker');
     this.snapshotMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.snapshot-marker');
     this.lockDir = path.join(this.claudeDir, 'toolkit-state', '.sync-lock');
+    this.skippedSincePath = path.join(this.claudeDir, 'toolkit-state', '.sync-skipped-since');
     this.backupLogPath = path.join(this.claudeDir, 'backup.log');
     this.appSyncMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.app-sync-active');
     // Owned by SpaceManager (sync-spaces/space-manager.ts) — read-only here.
@@ -305,8 +316,8 @@ export class SyncService extends EventEmitter {
       this.healthTimer = null;
     }
 
-    // Release lock if held
-    this.releaseLock();
+    // Release lock if held (sync: the app is exiting)
+    this.releaseLockSync();
 
     // Remove .app-sync-active marker so hooks resume normal operation
     try { fs.unlinkSync(this.appSyncMarkerPath); } catch {}
@@ -455,59 +466,59 @@ export class SyncService extends EventEmitter {
   // Mutex (mkdir-based, portable)
   // =========================================================================
 
-  /** Acquire sync lock. Returns true if acquired, false if another sync is running. */
-  private acquireLock(): boolean {
-    try {
-      fs.mkdirSync(this.lockDir, { recursive: false });
-    } catch (e: any) {
-      if (e.code !== 'EEXIST') return false;
-
-      // Lock exists — check if holder PID is alive
-      const pidFile = path.join(this.lockDir, 'pid');
-      let pid = 0;
-      try { pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10); } catch {}
-
-      if (pid > 0 && this.isPidAlive(pid)) {
-        return false; // Another sync is genuinely running
-      }
-
-      // Stale lock — clean up and retry
-      try {
-        fs.rmSync(this.lockDir, { recursive: true, force: true });
-        fs.mkdirSync(this.lockDir, { recursive: false });
-      } catch {
-        return false;
-      }
+  /** Acquire sync lock. Returns true if acquired, false if another sync is running.
+   *
+   *  WHY owned-lock (R-4 / L-1, Destin 2026-11-18): this used to trust any process that reused the old owner's number, so a
+   *  crash could leave backups skipped forever with no sign. The lock now records its owner and takes over a dead owner's
+   *  lock, and a lock whose owner cannot be verified (Windows/macOS give no cheap start time) after 2 hours. */
+  private async acquireLock(): Promise<boolean> {
+    const result = await acquireOwnedLock(this.lockDir, { unverifiableStaleAfterMs: STALE_LOCK_TAKEOVER_MS, label: 'backup' });
+    if (!result.ok) {
+      await this.noteBackupSkipped();
+      return false;
     }
-
-    // Write our PID
-    try {
-      fs.writeFileSync(path.join(this.lockDir, 'pid'), String(process.pid));
-    } catch {}
+    if (result.tookOver) this.logBackup('INFO', `Took over a stale backup lock (${result.tookOver})`, 'sync.lock');
+    this.lock = result.lock;
+    await this.noteBackupRan();
     return true;
   }
 
-  /** Release sync lock. */
-  private releaseLock(): void {
-    try {
-      fs.rmSync(this.lockDir, { recursive: true, force: true });
-    } catch {}
+  /** Release sync lock (only ever removes a lock this process still owns). */
+  private async releaseLock(): Promise<void> {
+    const lock = this.lock; this.lock = null;
+    if (lock) await lock.release();
   }
 
-  /** Check if a PID is alive (cross-platform). */
+  /** Shutdown-only twin of releaseLock: the app is exiting and cannot wait. */
+  private releaseLockSync(): void {
+    const lock = this.lock; this.lock = null;
+    lock?.releaseSync();
+  }
+
+  /** L-2 (Destin 2026-11-18): remember when backups first started being skipped; after 24 hours show the red warning. */
+  private async noteBackupSkipped(): Promise<void> {
+    const now = Date.now();
+    let since = now;
+    try { const t = parseInt(await fs.promises.readFile(this.skippedSincePath, 'utf8'), 10); if (t > 0) since = t; } catch { /* first skip */ }
+    if (since === now) { try { await atomicWriteAsync(this.skippedSincePath, String(now)); } catch { /* best effort */ } }
+    if (now - since < BACKUP_SKIPPED_WARN_MS) return;
+    await addOrReplaceWarning({
+      code: BACKUP_SKIPPED_CODE, level: 'danger',
+      title: "Backups haven't run for over a day",
+      body: 'Every attempt was skipped because another backup still looks like it is running.',
+      dismissible: false, createdEpoch: Math.floor(now / 1000),
+    });
+  }
+
+  /** A backup got the lock: the skipping streak is over, so its marker and its warning go. */
+  private async noteBackupRan(): Promise<void> {
+    try { await fs.promises.unlink(this.skippedSincePath); } catch { /* none */ }
+    await clearWarningsByCode(BACKUP_SKIPPED_CODE);
+  }
+
+  /** Is a process with this number running? WHY not `tasklist`: its English "No tasks" text misread a dead process as alive on other Windows languages. */
   private isPidAlive(pid: number): boolean {
-    try {
-      if (process.platform === 'win32') {
-        // tasklist with PID filter — output contains process info if alive
-        const result = execFileSync('tasklist', ['/FI', `PID eq ${pid}`], { encoding: 'utf8', timeout: 5000 });
-        return !result.includes('No tasks');
-      } else {
-        process.kill(pid, 0); // Signal 0 = test if process exists
-        return true;
-      }
-    } catch {
-      return false;
-    }
+    return pidExists(pid);
   }
 
   // =========================================================================
@@ -1019,7 +1030,7 @@ export class SyncService extends EventEmitter {
       // deferred to a future task. (was: this.updateConversationIndex())
 
       // Acquire lock
-      if (!this.acquireLock()) {
+      if (!(await this.acquireLock())) {
         this.logBackup('INFO', 'Push skipped — another sync is running', 'sync.push');
         return { success: false, errors: 0, backends: [] };
       }
@@ -1128,7 +1139,7 @@ export class SyncService extends EventEmitter {
         this.emit('push-complete', { errors: totalErrors });
         return { success: totalErrors === 0, errors: totalErrors, backends: pushedIds };
       } finally {
-        this.releaseLock();
+        await this.releaseLock();
       }
     } finally {
       this.pushing = false;
@@ -1150,8 +1161,8 @@ export class SyncService extends EventEmitter {
   /**
    * Reachability probe behind the OFFLINE warning. Its own method so the
    * periodic re-check has one thing to stub in tests (matching how
-   * autoDetectBackend is stubbed) — an inline `await import('dns')` is
-   * awkward to control from a suite.
+   * autoDetectBackend is stubbed) — the real check makes HTTPS requests
+   * (network-check.ts), which a suite must never make.
    */
   private async probeInternet(): Promise<boolean> {
     // WHY delegated (card #236): the check now lives in network-check.ts so the sign-in
@@ -1180,7 +1191,7 @@ export class SyncService extends EventEmitter {
 
     // 0. Internet connectivity.
     //
-    // Two strikes before we say "No internet". One DNS lookup is a noisy
+    // Two strikes before we say "No internet". One probe is a noisy
     // oracle — it fails during the few seconds between Electron starting and
     // the WiFi associating, and on any resolver hiccup — and that single
     // sample is what put a red "No internet" card under an "All synced · 1m

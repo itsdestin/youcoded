@@ -303,3 +303,25 @@ describe('PRESENCE_HIDDEN_BLOCKED', () => {
     expect(gameReducer(blocked, { type: 'PARTY_CONNECTED', username: 'Me' }).hiddenBlocked).toBeNull();
   });
 });
+
+// B-6: when the OPPONENT asks for a rematch first, that must not look like OUR request —
+// otherwise our button greys out ("Rematch requested") and we can never accept.
+describe('rematch flags', () => {
+  it('opponent asking sets only opponentWantsRematch, not our own rematchRequested', () => {
+    const s = gameReducer(createInitialGameState(), { type: 'OPPONENT_REMATCH_REQUESTED' });
+    expect(s.opponentWantsRematch).toBe(true);
+    expect(s.rematchRequested).toBe(false);
+  });
+
+  it('our own request sets only rematchRequested', () => {
+    const s = gameReducer(createInitialGameState(), { type: 'REMATCH_REQUESTED' });
+    expect(s.rematchRequested).toBe(true);
+    expect(s.opponentWantsRematch).toBe(false);
+  });
+
+  it('the next game clears a pending opponent request', () => {
+    const asked = gameReducer(createInitialGameState(), { type: 'OPPONENT_REMATCH_REQUESTED' });
+    const next = gameReducer(asked, { type: 'GAME_START', seat: 0, opponent: 'Bob', play: {} as never, turnSeat: 0 });
+    expect(next.opponentWantsRematch).toBe(false);
+  });
+});

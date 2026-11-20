@@ -13,7 +13,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { imageDimensions, withinImageLimits, patchCount, IMAGE_PATCH_PX, MAX_ATTACHMENT_BYTES } from './image-support';
+// IMAGE_CACHE_FILE_RE lives in image-support so its reader can tell our copies from a user's originals.
+import { imageDimensions, withinImageLimits, patchCount, IMAGE_PATCH_PX, MAX_ATTACHMENT_BYTES, IMAGE_CACHE_FILE_RE as CACHE_FILE_RE } from './image-support';
 import type { ImageLimits } from './capability-profile';
 
 /** Decoded pixels we are willing to hold at once: pngjs keeps width×height×4
@@ -28,6 +29,13 @@ const HEADER_READ_BYTES = 256 * 1024;
 /** Provider limits are "at most": aim 10% under both so rounding, "after
  *  processing" and an off-by-one tile can never push a prepared picture over. */
 const PREPARE_MARGIN = 0.9;
+/** Shrunk copies untouched this long are deleted by sweepStale (card #66 f).
+ *  WHY 90 days: a resumed chat re-reads its pictures by the copy's path and a
+ *  deleted copy becomes a named "[image no longer available: <name>]" note, so
+ *  the window is long; a copy is touched on every cache hit AND every re-read
+ *  (image-support readImageFromDisk), so a chat still in use keeps its copies. Age, not total size: a size cap would delete
+ *  recent copies a live chat is using. */
+export const IMAGE_CACHE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 type ResizeFormat = 'png' | 'jpeg';
 /** WHY a discriminated result (not Buffer | null): one null used to stand for
@@ -110,6 +118,28 @@ export class ImagePreparer implements ImagePreparerLike {
 
   preparedPathFor(absPath: string): string | null { return this.prepared.get(absPath) ?? null; }
 
+  /** Delete shrunk copies not touched for `maxAgeMs`. Returns how many went.
+   *  Never throws (a startup chore must not block the app); never touches a
+   *  copy this run has vouched for, or any file not shaped like our own. */
+  async sweepStale(maxAgeMs: number = IMAGE_CACHE_MAX_AGE_MS, now: number = Date.now()): Promise<number> {
+    let removed = 0;
+    try {
+      const inUse = new Set(this.prepared.values());
+      for (const name of await fs.promises.readdir(this.cacheDir)) {
+        if (!CACHE_FILE_RE.test(name)) continue;
+        const full = path.join(this.cacheDir, name);
+        if (inUse.has(full)) continue;
+        try {
+          const st = await fs.promises.stat(full);
+          if (!st.isFile() || now - st.mtimeMs < maxAgeMs) continue;
+          await fs.promises.unlink(full);
+          removed++;
+        } catch { /* vanished or locked: leave it for next launch */ }
+      }
+    } catch { /* no cache folder yet */ }
+    return removed;
+  }
+
   shrinkBytes(bytes: Buffer, limits: ImageLimits): Promise<{ bytes: Buffer; mediaType: 'image/png' | 'image/jpeg' } | null> {
     const dims = imageDimensions(bytes);
     if (!dims || dims.width * dims.height > MAX_DECODE_PIXELS) return Promise.resolve(null);
@@ -163,7 +193,12 @@ export class ImagePreparer implements ImagePreparerLike {
     const done = (p: string, mediaType: 'image/png' | 'image/jpeg'): PreparedImage =>
       ({ kind: 'prepared', path: p, mediaType, ...dims, preparedWidth: target.width, preparedHeight: target.height });
     for (const [p, mediaType] of [[file('png'), 'image/png'], [file('jpg'), 'image/jpeg']] as const) {
-      try { await fs.promises.access(p); return done(p, mediaType); } catch { /* not cached yet */ }
+      try {
+        await fs.promises.access(p);
+        // WHY touch: sweepStale ages by mtime, so a reused copy must look fresh.
+        const now = new Date(); await fs.promises.utimes(p, now, now).catch(() => { /* best-effort */ });
+        return done(p, mediaType);
+      } catch { /* not cached yet */ }
     }
     const run = this.chain.then(async (): Promise<PreparedImage> => {
       const bytes = await fs.promises.readFile(absPath);

@@ -70,6 +70,9 @@ export function makeOpts(over: Partial<HarnessSessionOpts>): HarnessSessionOpts 
     binding: { providerId: 'openrouter', modelId: 'm' },
     retryDelays: [1, 1, 1],   // test hook: near-zero backoff so the suite stays fast
     skillCatalog: EMPTY_SKILL_CATALOG,
+    // WHY: without this, a test whose model call fails with a network error ran the REAL online
+    // check — it passed only while this computer had internet. Tests about "offline" pass their own.
+    checkInternet: async () => true,
     ...over,
   } as HarnessSessionOpts;
 }

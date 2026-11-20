@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
 import { CHANNEL_TABLE } from '../src/main/ipc/channel-table';
 
 const root = path.join(__dirname, '..', 'src', 'main');
@@ -150,7 +151,8 @@ const rel = (file: string) => path.relative(root, file).split(path.sep).join('/'
 
 // WHY the scan runs ONCE and is warmed in beforeAll under its own budget (test-suite-hygiene: a file's one-time cost never lands inside
 // the first test): it parses every file of desktop/src/main (measured about 1 s on a quiet machine, over 30 s under full-suite load), and five tests read the result.
-const SCAN_BUDGET_MS = 90_000;
+// WHY the wall limit is the hang-only one (2026-11-18): it is pure CPU, and a 90 s wall budget still failed at load 58-149.
+const SCAN_BUDGET_MS = CPU_BOUND_WALL_LIMIT_MS;
 let scanned: { registrations: string[]; cases: string[] } | null = null;
 function scan() {
   if (scanned) return scanned;

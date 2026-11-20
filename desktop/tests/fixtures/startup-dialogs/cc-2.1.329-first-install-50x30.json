@@ -1,0 +1,151 @@
+{
+ "ccVersion": "2.1.329",
+ "scenario": "first-install",
+ "key": "first-install-50x30",
+ "folder": "plain",
+ "trusted": false,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 50,
+ "rows": 30,
+ "capturedAt": "2026-11-20T04:07:13.240Z",
+ "chunks": [
+  {
+   "t": 786,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 831,
+   "b64": "G1s/MjVsG1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 842,
+   "b64": "G1szODsyOzIxNTsxMTk7ODdtV2VsY29tZRtbOUd0bxtbMTJHQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzM4OzI7MTUzOzE1MzsxNTNtdjIuMS4zMjkbWzM5bQ0NCg0NCg=="
+  },
+  {
+   "t": 845,
+   "b64": "G10xMTs/Bw=="
+  },
+  {
+   "t": 860,
+   "b64": "G1tj"
+  },
+  {
+   "t": 862,
+   "b64": "G1s+MHEbWz91G103NTAxOz8HG1tj"
+  },
+  {
+   "t": 1418,
+   "b64": "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"
+  },
+  {
+   "t": 2322,
+   "b64": "G1sxRBtbMTZCG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbRxtbMUENG1sxQxtbMTJBG1sxbUNsYXVkZSBDb2RlIGNhbiBiZSB1c2VkIHdpdGggeW91ciBDbGF1ZGUgDRtbMUMbWzFCc3Vic2NyaXB0aW9uIG9yIGJpbGxlZCBiYXNlZCBvbiBBUEkgdXNhZ2UgdGhyb3VnaA0bWzFDG1sxQnlvdXIgQ29uc29sZSBhY2NvdW50LhtbMjJtG1tLDRtbMUMbWzFCG1tLDRtbMUMbWzFCU2VsZWN0IGxvZ2luIG1ldGhvZDobW0sNG1szQxtbMkIbWzM4OzI7MTUzOzE1MzsxNTNtMS4gG1szODsyOzE3NzsxODU7MjQ5bUNsYXVkZSBhG1sxNkdjb3VudCB3aXRoIHN1YnNjcmlwdGlvbiDCtyANG1s1QxtbMUIbWzM5bSAbWzM4OzI7MTUzOzE1MzsxNTNtSW5kaXZpZHVhbCwgVGVhbSwgb3IgRW50ZXJwcmlzZQ0bWzNDG1sxQjIuIBtbMzltQW50aHJvcGljG1sxN0dDb25zb2xlG1syNUdhY2NvdW50G1szM0fCtxtbMzVHG1szODsyOzE1MzsxNTM7MTUzbUFQSSB1c2FnZSANG1s1QxtbMUIbWzM5bSAbWzM4OzI7MTUzOzE1MzsxNTNtYmlsbGluZxtbMzltG1tLDRtbM0MbWzFCG1szODsyOzE1MzsxNTM7MTUzbTMuIBtbMzltM3JkLXBhcnR5G1sxN0dwbGF0Zm9ybSDCtyAbWzM4OzI7MTUzOzE1MzsxNTNtQmVkcm9jaywgTWljcm9zb2Z0IA0bWzVDG1sxQhtbMzltIBtbMzg7MjsxNTM7MTUzOzE1M21Gb3VuZHJ5LCBHb29nbGUgVmVydGV4IEFJG1szOW0bW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzlBG1sxQxtbNkE="
+  },
+  {
+   "t": 3599,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 3848,
+   "b64": "G1sxRBtbNkI="
+  },
+  {
+   "t": 3849,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz83aBtbPzI1aBs3G1tyGzgbXTA7Bw=="
+  }
+ ],
+ "marks": [
+  {
+   "t": 2192,
+   "label": "dialog-1-visible",
+   "chunkIndex": 7
+  },
+  {
+   "t": 2192,
+   "label": "send",
+   "chunkIndex": 7,
+   "data": "\r"
+  },
+  {
+   "t": 3091,
+   "label": "dialog-2-visible",
+   "chunkIndex": 8
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "screen",
+   "heading": "Choose the text style that looks best with your",
+   "options": [
+    "Auto (match terminal)",
+    "Dark mode",
+    "Light mode",
+    "Dark mode (colorblind-friendly)",
+    "Light mode (colorblind-friendly)",
+    "Dark mode (ANSI colors only)",
+    "Light mode (ANSI colors only)"
+   ],
+   "numbers": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "",
+   "body": [
+    "terminal",
+    "To change this later, run /theme"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "screen",
+   "heading": "Select login method:",
+   "options": [
+    "Claude account with subscription · Individual, Team, or Enterprise",
+    "Anthropic Console account · API usage billing",
+    "3rd-party platform · Bedrock, Microsoft Foundry, Google Vertex AI"
+   ],
+   "numbers": [
+    1,
+    2,
+    3
+   ],
+   "defaultCursor": 0,
+   "selection": "numbered-digits",
+   "footer": "",
+   "body": []
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "screen": true,
+    "answered": "\"\\r\""
+   },
+   {
+    "dialog": 2,
+    "screen": true,
+    "answered": null
+   }
+  ],
+  "exitCode": null,
+  "folderTrusted": false,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks",
+   "theme"
+  ],
+  "credentialsWritten": false,
+  "sessionStartHookAt": []
+ }
+}

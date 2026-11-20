@@ -768,6 +768,16 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
   if (installsInProgress.has(id)) return { status: 'installing' };
   installsInProgress.add(id);
 
+  // WHY: set only once the "already installed" guards below have passed, i.e. once we know
+  // no working install of this plugin exists. Every failure path after that point may
+  // safely delete this folder; a failure before it must never touch an existing install.
+  let ownedTargetDir: string | null = null;
+  // Async rm: the main process must not block (performance rule 1 / blocking-call ratchet).
+  const discardFailedInstall = async () => {
+    if (!ownedTargetDir) return;
+    try { await fs.promises.rm(ownedTargetDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  };
+
   try {
     // Guard: already installed via Claude Code
     if (hasConflict(id)) return { status: 'already_installed', via: 'Claude Code' };
@@ -782,6 +792,7 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
     if (fs.existsSync(targetDir) && (fs.existsSync(dotJson) || fs.existsSync(path.join(targetDir, 'plugin.json')))) {
       return { status: 'already_installed', via: 'YouCoded' };
     }
+    ownedTargetDir = targetDir;
 
     let result: InstallResult;
     switch (sourceType) {
@@ -799,6 +810,10 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
       default:
         result = { status: 'failed', error: `Unknown source type: ${sourceType}` };
     }
+
+    // WHY: a failed clone/pin can leave a half-written folder that already holds a
+    // plugin.json, which the guard above reads as "installed" on every retry.
+    if (result.status === 'failed') await discardFailedInstall();
 
     if (result.status === 'installed') {
       ensurePluginJson(id, entry);
@@ -819,6 +834,11 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
           author: entry.author,
         });
       } catch (err: any) {
+        // WHY: the files are on disk but Claude Code was never told about them. Leaving
+        // them made every retry answer "already installed" (the guard looks for
+        // plugin.json), so the user could never fix it. Safe to delete: the guard proved
+        // no working install existed before this attempt.
+        await discardFailedInstall();
         return { status: 'failed', error: `Registry write failed: ${err?.message || String(err)}` };
       }
       // Decomposition v3 §9.5: run postInstall AFTER registry wiring so a
@@ -836,6 +856,8 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
 
     return result;
   } catch (err: any) {
+    // WHY: same stale-folder trap if anything threw after files were copied.
+    await discardFailedInstall();
     return { status: 'failed', error: err?.message || 'Unknown error' };
   } finally {
     installsInProgress.delete(id);

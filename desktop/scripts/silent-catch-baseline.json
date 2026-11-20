@@ -1,0 +1,1711 @@
+{
+  "main/analytics-service.ts": {
+    "deviceIdHash": 1,
+    "flushMilestones": 1,
+    "tick": 1
+  },
+  "main/announcement-service.ts": {
+    "writeAtomic": 1
+  },
+  "main/artifacts/artifact-store.ts": {
+    "seedSharedSidecar": 1,
+    "repairRelativeExternals": 1,
+    "renameArtifact": 1
+  },
+  "main/artifacts/cas-write.ts": {
+    "acquireLock": 1,
+    "sweepStaleTmp": 2,
+    "atomicWrite": 1,
+    "readComparand": 1
+  },
+  "main/artifacts/folder-listing.ts": {
+    "statInto": 1
+  },
+  "main/artifacts/import-file.ts": {
+    "dropTmp": 1
+  },
+  "main/artifacts/project-file-discovery.ts": {
+    "walk": 1,
+    "discoverProjectFiles": 1
+  },
+  "main/artifacts/project-manager.ts": {
+    "applyGitTreatment": 1
+  },
+  "main/artifacts/project-watcher.ts": {
+    "pumpRepoProbes": 1,
+    "done": 1,
+    "resolveArtifactId": 1,
+    "closeEntry": 1
+  },
+  "main/artifacts/read-service.ts": {
+    "findBesideSessionFiles": 1,
+    "withRealForms": 1,
+    "trackedExternalPaths": 1
+  },
+  "main/artifacts/sidecar-cleanup.ts": {
+    "readLedgerFile": 1,
+    "updateLedger": 1,
+    "surveyProject": 1,
+    "ancestorOf": 1,
+    "fsyncDir": 1,
+    "sweepArchiveTmp": 2,
+    "readArchivedRecords": 1,
+    "commit": 1,
+    "tick": 1
+  },
+  "main/artifacts/volume-safety.ts": {
+    "readText": 1,
+    "readDir": 1
+  },
+  "main/artifacts/write-authorization.ts": {
+    "vouchingRoot": 1,
+    "judgeRelativeRecord": 1,
+    "inRealRoot": 1
+  },
+  "main/assistant-browser/browser-client.ts": {
+    "commandIfAlive": 1
+  },
+  "main/assistant-browser/browser-main.ts": {
+    "startRelay": 1
+  },
+  "main/assistant-browser/browser-net.ts": {
+    "classifyUrl": 1
+  },
+  "main/assistant-browser/browser-service.ts": {
+    "launchSandboxed": 1,
+    "withSession": 1,
+    "start": 1,
+    "installRequestGuard": 4,
+    "reopenAll": 1,
+    "stop": 4,
+    "newPage": 1,
+    "adopt": 3,
+    "fitToPanel": 1,
+    "personNav": 1,
+    "personInput": 3,
+    "adoptPopup": 1,
+    "selectTab": 1,
+    "closeTab": 1,
+    "closeSession": 1,
+    "sweep": 1,
+    "capDownloads": 1,
+    "dispose": 1,
+    "attach": 1,
+    "sendAck": 1,
+    "detach": 2,
+    "clearStaleProfileLock": 2,
+    "refreshHistory": 1,
+    "refreshTitles": 1
+  },
+  "main/assistant-browser/browser-settings.ts": {
+    "read": 1,
+    "write": 1
+  },
+  "main/assistant-browser/browser-tool-runners.ts": {
+    "receiptText": 1,
+    "pageReport": 1,
+    "settle": 1,
+    "zoom": 1,
+    "screenshot": 1,
+    "installNavigationGuard": 3
+  },
+  "main/assistant-browser/claude-code-browser-mcp.ts": {
+    "start": 1,
+    "onConnection": 1,
+    "stop": 1,
+    "deployBrowserRelay": 2
+  },
+  "main/atomic-write.ts": {
+    "atomicWrite": 1
+  },
+  "main/buddy-window-manager.ts": {
+    "refreshWorkArea": 1,
+    "show": 1
+  },
+  "main/buddy-work-area.ts": {
+    "run": 1
+  },
+  "main/chatsearch-index/index-service.ts": {
+    "refreshFromLiveState": 2
+  },
+  "main/chatsearch-index/index-store.ts": {
+    "acquireBuildLock": 1
+  },
+  "main/chatsearch-index/index-worker-runner.ts": {
+    "cancel": 1
+  },
+  "main/chatsearch-index/index-worker.ts": {
+    "refresh": 2
+  },
+  "main/chatsearch-index/outbox-drain.ts": {
+    "recoverStaleProcessing": 1,
+    "sweepReceipts": 1,
+    "sweepStaleTmpFiles": 1,
+    "drainOutboxOnce": 5,
+    "startOutboxDrain": 1
+  },
+  "main/chatsearch-index/refs-service.ts": {
+    "readMetaCached": 1
+  },
+  "main/chatsearch-index/transcript-reader.ts": {
+    "firstParsedLine": 1
+  },
+  "main/claude-code-doc-comments-mcp.ts": {
+    "sweepStaleDeploysOnce": 1
+  },
+  "main/claude-code-pages-mcp.ts": {
+    "deployClaudeCodePagesMcp": 1
+  },
+  "main/claude-control-bridge.ts": {
+    "closeSession": 1,
+    "close": 2
+  },
+  "main/claude-queue-attachments.ts": {
+    "retainQueueAttachments": 3
+  },
+  "main/claude-queue-evidence.ts": {
+    "verifyClaudeQueueEvidence": 2
+  },
+  "main/claude-queue-input.ts": {
+    "prepareClaudeQueueInput": 1
+  },
+  "main/claude-queue-runtime.ts": {
+    "publish": 1,
+    "wake": 1,
+    "action": 2,
+    "forget": 1
+  },
+  "main/claude-queue-transport.ts": {
+    "issue": 2,
+    "setComposerBusy": 1,
+    "bind": 1,
+    "requestIdle": 1,
+    "poll": 1,
+    "offer": 2,
+    "finish": 1,
+    "settleWorker": 1,
+    "expire": 1,
+    "revoke": 1
+  },
+  "main/claude-queue.ts": {
+    "serial": 1,
+    "publish": 1
+  },
+  "main/claude-settings.ts": {
+    "readProjectDefaultMode": 1
+  },
+  "main/claude-start-mode.ts": {
+    "refreshProjectDefaultMode": 1,
+    "refreshUserDefaultMode": 1
+  },
+  "main/command-scanner.ts": {
+    "scanCommandsFromDir": 1
+  },
+  "main/conversations/conversation-store.ts": {
+    "heal": 1,
+    "get": 1,
+    "list": 1,
+    "worker": 1,
+    "remove": 1
+  },
+  "main/conversations/handoff-attempt.ts": {
+    "poll": 4,
+    "force": 1
+  },
+  "main/conversations/handoff-transcript.ts": {
+    "publishHandoffTranscript": 3,
+    "importHandoffTranscript": 3
+  },
+  "main/conversations/lease-client.ts": {
+    "tryParseLease": 1,
+    "sweepExpiredLeases": 1,
+    "sweepLegacyLeaseDir": 2,
+    "enqueueFileOp": 1,
+    "acquire": 1,
+    "release": 1,
+    "handleTakeoverRequest": 1
+  },
+  "main/conversations/naming-store.ts": {
+    "mutate": 1,
+    "remove": 1
+  },
+  "main/conversations/reconciler.ts": {
+    "buildSlugToName": 1,
+    "readTopicTitle": 1,
+    "safeMirror": 1,
+    "reconcile": 2
+  },
+  "main/conversations/resume-admission.ts": {
+    "open": 2,
+    "handoff": 1,
+    "end": 1
+  },
+  "main/conversations/resume-model.ts": {
+    "resolveResumeModel": 2
+  },
+  "main/conversations/service.ts": {
+    "emitConversationMetaChanged": 1,
+    "startConversationStore": 1,
+    "pruneNativePhantomRecords": 1,
+    "safeUpsert": 1,
+    "noteTranscriptEvent": 3,
+    "noteAutomaticTitle": 1,
+    "noteModelUsed": 1,
+    "buildLocalProjectResolver": 1,
+    "listAllProviders": 1,
+    "materializeSweepBody": 2,
+    "noteSessionEnded": 1,
+    "materializeOne": 2,
+    "publishStoppedHandoff": 1,
+    "resolveHandoffProject": 2,
+    "importConfirmedHandoff": 2,
+    "flushSessionToSpace": 2,
+    "runReconcile": 2,
+    "mirror": 1
+  },
+  "main/conversations/slug-repair.ts": {
+    "uuidSet": 1,
+    "uuidContentHashes": 1,
+    "move": 1,
+    "repairRecordsAndSpace": 3,
+    "repairOrphanDirs": 1,
+    "runSlugRepair": 2,
+    "firstCwdOf": 1
+  },
+  "main/conversations/tag-registry.ts": {
+    "readAll": 1
+  },
+  "main/conversations/takeover.ts": {
+    "run": 8,
+    "takeover": 2,
+    "force": 2
+  },
+  "main/conversations/transcript-mirror.ts": {
+    "sweepStaleTmp": 2,
+    "copyInto": 1,
+    "runSerializedTranscriptDestination": 1
+  },
+  "main/create-runtime.ts": {
+    "createRuntime": 2,
+    "publishNamingMode": 1,
+    "askInSessionModel": 1,
+    "cleanup": 2
+  },
+  "main/debounced-json-writer.ts": {
+    "writeNow": 1
+  },
+  "main/dev-load-recovery.ts": {
+    "retry": 1,
+    "wireDevLoadRecovery": 1
+  },
+  "main/dev-tools.ts": {
+    "<top-level>": 1,
+    "resolveCmd": 1,
+    "probeMarketplaceCache": 1,
+    "submitIssue": 1,
+    "openDevSessionIn": 1,
+    "setupManagedWorkspace": 1
+  },
+  "main/device-identity.ts": {
+    "readIdFile": 1,
+    "getDeviceIdentity": 1
+  },
+  "main/doc-comments/doc-comments-watcher.ts": {
+    "watchComments": 2,
+    "closeEntry": 1
+  },
+  "main/doc-comments/live-comments.ts": {
+    "xlsxSheetIds": 1
+  },
+  "main/doc-comments/pending-mutation-queue.ts": {
+    "sweepStaleResults": 1,
+    "handleNewRequest": 2,
+    "startPendingMutationQueue": 2,
+    "closeEntry": 1
+  },
+  "main/doc-comments/write-pipeline.ts": {
+    "isFileOpenElsewhere": 1,
+    "writeFileMutation": 2,
+    "atomicReplace": 2
+  },
+  "main/electron-platform.ts": {
+    "sendSyncEventToWindows": 1
+  },
+  "main/engine/engine-acquisition.ts": {
+    "installed": 1,
+    "pruneOthers": 1,
+    "install": 2,
+    "headContentLength": 1,
+    "download": 2,
+    "listDevices": 2
+  },
+  "main/engine/engine-log.ts": {
+    "rotate": 1
+  },
+  "main/engine/engine-manager.ts": {
+    "routerErrorText": 1,
+    "mergeIdlePendingSettings": 1,
+    "notePresetInForce": 1,
+    "installAndVerify": 1,
+    "autoUpdateOnLaunch": 1,
+    "refreshMtpModels": 1,
+    "refreshModels": 2,
+    "undoSwitch": 1,
+    "installedModels": 4,
+    "deleteModel": 2
+  },
+  "main/engine/engine-supervisor.ts": {
+    "tryPid": 1,
+    "findModelChildRss": 1,
+    "pidOnPortViaProc": 1,
+    "attemptStart": 2,
+    "reapStaleEngineOnPort": 1,
+    "_stop": 1,
+    "unloadModel": 1
+  },
+  "main/engine/load-times.ts": {
+    "constructor": 1,
+    "record": 1
+  },
+  "main/engine/model-presets.ts": {
+    "finish": 1,
+    "killAndWait": 1
+  },
+  "main/engine/mtp-fallback.ts": {
+    "onLoadResult": 3
+  },
+  "main/first-run-local.ts": {
+    "clearSetupDownload": 1
+  },
+  "main/first-run.ts": {
+    "markSetupCompleted": 1,
+    "stoppedForNoInternet": 1,
+    "isFirstRun": 1,
+    "handleConnectLocalApp": 2,
+    "handleSetupDownloadProgress": 1,
+    "cancelAuth": 1
+  },
+  "main/folder-usage.ts": {
+    "loadFolderUsage": 1,
+    "schedule": 1
+  },
+  "main/folders-service.ts": {
+    "noteFolderUsed": 1
+  },
+  "main/fs-read-head.ts": {
+    "readFileHead": 2
+  },
+  "main/git/git-branch-label.ts": {
+    "gitBranchLabel": 2
+  },
+  "main/git/git-watcher.ts": {
+    "resolveGitDirs": 1,
+    "watchGit": 1
+  },
+  "main/github-auth.ts": {
+    "detectGh": 1
+  },
+  "main/github-client.ts": {
+    "clearToken": 1,
+    "rest": 1,
+    "fetchGithubLogin": 1,
+    "combinedGithubStatus": 1
+  },
+  "main/github-connect.ts": {
+    "start": 5,
+    "disconnectGithub": 1
+  },
+  "main/handler-utils.ts": {
+    "clearSessionAfter401": 1
+  },
+  "main/harness/accepted-history-store.ts": {
+    "parseTranscriptLines": 1,
+    "read": 1,
+    "enqueue": 1
+  },
+  "main/harness/admin-capability.ts": {
+    "readSudoVersionFirstLine": 1
+  },
+  "main/harness/admin-password-startup.ts": {
+    "startAdminPassword": 1
+  },
+  "main/harness/askpass/askpass-server.ts": {
+    "closePin": 1,
+    "start": 1,
+    "sweepDeadSockets": 1,
+    "teardown": 1,
+    "deliver": 1,
+    "writeRefusal": 1,
+    "runProtocol": 1,
+    "reportRefusal": 1,
+    "destroy": 1
+  },
+  "main/harness/askpass/peer-cred.ts": {
+    "finish": 1
+  },
+  "main/harness/askpass/verify.ts": {
+    "closeAll": 1
+  },
+  "main/harness/download-guard.ts": {
+    "guardDownload": 1
+  },
+  "main/harness/eval/judge.ts": {
+    "realMessage": 1
+  },
+  "main/harness/harness-session.ts": {
+    "describeProviderError": 1,
+    "generateSummary": 2,
+    "runStreamOnce": 10,
+    "withRetry": 1
+  },
+  "main/harness/image-prepare.ts": {
+    "sweepStale": 2,
+    "shrinkBytes": 1,
+    "prepareUnguarded": 3
+  },
+  "main/harness/image-support.ts": {
+    "readImageFromDisk": 1
+  },
+  "main/harness/local-prewarm.ts": {
+    "start": 1
+  },
+  "main/harness/mcp/mcp-client.ts": {
+    "connect": 1,
+    "close": 1
+  },
+  "main/harness/mcp/mcp-manager.ts": {
+    "transportSecrets": 1,
+    "closeEntry": 1
+  },
+  "main/harness/native-session-host.ts": {
+    "releaseModel": 1,
+    "localModelForSession": 1,
+    "prewarmLocal": 1,
+    "quiesce": 1,
+    "destroy": 2,
+    "destroyAllInner": 1
+  },
+  "main/harness/pdf-text.ts": {
+    "serialized": 1,
+    "extract": 1
+  },
+  "main/harness/search/backends/ddg.ts": {
+    "resolveRedirect": 1
+  },
+  "main/harness/search/search-chain.ts": {
+    "resolve": 2
+  },
+  "main/harness/shell-registry.ts": {
+    "killTree": 2,
+    "signal": 1,
+    "unlinkEnvFile": 1,
+    "read": 1,
+    "readOnce": 1
+  },
+  "main/harness/tool-args.ts": {
+    "parseToolArgs": 1
+  },
+  "main/harness/tools/bash.ts": {
+    "realPath": 1,
+    "finish": 2,
+    "execute": 2
+  },
+  "main/harness/tools/glob.ts": {
+    "walk": 1
+  },
+  "main/harness/tools/grep.ts": {
+    "execute": 1
+  },
+  "main/harness/tools/guards.ts": {
+    "lunaFixturePathAllowed": 1,
+    "realpathNearestSync": 1
+  },
+  "main/harness/tools/net-guard.ts": {
+    "guardedFetch": 1,
+    "readBytesCapped": 1
+  },
+  "main/harness/tools/read.ts": {
+    "execute": 2
+  },
+  "main/harness/tools/readonly-guard.ts": {
+    "looksSecret": 1,
+    "findGitDirs": 1
+  },
+  "main/harness/tools/spill-paths.ts": {
+    "sweepOldSpillFiles": 2,
+    "sweepOldSpillFilesOnce": 1
+  },
+  "main/harness/tools/web-fetch.ts": {
+    "htmlToMarkdown": 2
+  },
+  "main/headless/headless-boot.ts": {
+    "bootHeadless": 3
+  },
+  "main/headless/host-bridge.ts": {
+    "connect": 1
+  },
+  "main/hitch-log-writer.ts": {
+    "drain": 1
+  },
+  "main/hitch-recorder.ts": {
+    "windowFor": 1,
+    "onBatch": 1,
+    "noteSleep": 1,
+    "onSecond": 2,
+    "onMinute": 1,
+    "stop": 1
+  },
+  "main/hook-reconciler.ts": {
+    "removePluginHooks": 1
+  },
+  "main/hook-relay.ts": {
+    "forceReleasePipe": 1,
+    "stop": 1
+  },
+  "main/install-reconcile.ts": {
+    "installedMarketplaceIds": 1
+  },
+  "main/integration-installer.ts": {
+    "invalidateCatalogCache": 1,
+    "writeCache": 1
+  },
+  "main/ipc/account.ts": {
+    "handler": 1
+  },
+  "main/ipc/appearance.ts": {
+    "settleThemeDefault": 2,
+    "handler": 2
+  },
+  "main/ipc/artifacts.ts": {
+    "handler": 3
+  },
+  "main/ipc/browser.ts": {
+    "wire": 1
+  },
+  "main/ipc/detach.ts": {
+    "detachLive": 2,
+    "dragEnded": 1,
+    "dropResolve": 1
+  },
+  "main/ipc/file-gates.ts": {
+    "refuseUnlessRecorded": 1
+  },
+  "main/ipc/first-run.ts": {
+    "handler": 2
+  },
+  "main/ipc/model.ts": {
+    "writeFileAtomicQueued": 1
+  },
+  "main/ipc/models.ts": {
+    "handler": 1
+  },
+  "main/ipc/modes.ts": {
+    "handler": 1
+  },
+  "main/ipc/native.ts": {
+    "insideSkillsRoot": 1,
+    "handler": 1
+  },
+  "main/ipc/provider.ts": {
+    "providerListWithCounts": 1
+  },
+  "main/ipc/remote-admin.ts": {
+    "handler": 3
+  },
+  "main/ipc/shell.ts": {
+    "cleanupClipboardTemp": 2
+  },
+  "main/ipc/theme-marketplace.ts": {
+    "handler": 1
+  },
+  "main/ipc-handlers.ts": {
+    "startSession": 2,
+    "registerIpcHandlers": 6,
+    "warmLocalModel": 1,
+    "applyTopic": 1
+  },
+  "main/kwin-helper.ts": {
+    "readSettings": 1,
+    "writeSettings": 1,
+    "undo": 2,
+    "remove": 1,
+    "cleanOrphans": 2
+  },
+  "main/logger.ts": {
+    "log": 1,
+    "rotateLog": 2
+  },
+  "main/main.ts": {
+    "registerFirstRunIpc": 1,
+    "createAppWindow": 4,
+    "createWindow": 1,
+    "lateFirstRunState": 1,
+    "<top-level>": 4,
+    "runShutdown": 9
+  },
+  "main/marketplace-file-reader.ts": {
+    "readComponent": 1
+  },
+  "main/mcp-reconciler.ts": {
+    "reconcileMcp": 1,
+    "removePluginMcpServers": 1
+  },
+  "main/models/add-vision.ts": {
+    "healInterruptedMove": 1
+  },
+  "main/models/curated-catalog.ts": {
+    "get": 2
+  },
+  "main/models/download-manifest.ts": {
+    "installedDirFor": 1
+  },
+  "main/models/endpoint-detectors.ts": {
+    "detectEndpoints": 2
+  },
+  "main/models/fit-estimator.ts": {
+    "availableMemoryBytes": 1
+  },
+  "main/models/gguf-header.ts": {
+    "load": 1,
+    "set": 1
+  },
+  "main/models/gpu-detector.ts": {
+    "readLinuxVendor": 1,
+    "readLinuxGfxTarget": 1
+  },
+  "main/models/manifest-backfill.ts": {
+    "kick": 1,
+    "run": 1
+  },
+  "main/models/model-downloader.ts": {
+    "downloadFile": 1
+  },
+  "main/models/model-manager.ts": {
+    "cacheTypes": 1,
+    "freeBytesNear": 1,
+    "bytesOnDiskFor": 1,
+    "download": 1
+  },
+  "main/native-home.ts": {
+    "parseSessionLines": 1,
+    "listSessionFiles": 1,
+    "listSessionFilesAsync": 1
+  },
+  "main/office/editor-settings.ts": {
+    "saveEditorSettings": 1
+  },
+  "main/office/office-commands.ts": {
+    "enqueue": 1,
+    "writeEditorBin": 1,
+    "saveFile": 2,
+    "withBin": 1,
+    "saveCopyFile": 1,
+    "keepMedia": 1,
+    "releaseKeptMedia": 2,
+    "dispose": 1,
+    "sweepStaleSaveDirsSoon": 1,
+    "sweepStaleSaveDirs": 2,
+    "finishCopy": 1
+  },
+  "main/office/office-file-ops.ts": {
+    "renameNoClobber": 1,
+    "renameLink": 1,
+    "copyBeside": 2
+  },
+  "main/office/office-home.ts": {
+    "walk": 2,
+    "startWalk": 1,
+    "createBlank": 2
+  },
+  "main/office/office-ipc.ts": {
+    "open": 1,
+    "restoreVersion": 3
+  },
+  "main/office/office-pictures.ts": {
+    "copyToMedia": 2,
+    "abort": 1,
+    "failBody": 1,
+    "readCapped": 1
+  },
+  "main/office/office-print.ts": {
+    "viewerState": 1
+  },
+  "main/office/office-protocol.ts": {
+    "serveConfined": 3
+  },
+  "main/office/office-recovery.ts": {
+    "fileStamp": 1,
+    "recordChanges": 1,
+    "beforeBinReplaced": 1,
+    "recoveryCandidates": 1,
+    "discardHeldRecovery": 1,
+    "discardRecoveryFor": 1,
+    "moveRecovery": 2,
+    "pruneRecovery": 2,
+    "discardRecovery": 1,
+    "settle": 1
+  },
+  "main/office/office-session-registry.ts": {
+    "cleanupOfficeSessions": 1,
+    "quitOfficeSessions": 2
+  },
+  "main/office/office-sessions.ts": {
+    "close": 2
+  },
+  "main/office/prune-schedule.ts": {
+    "request": 1
+  },
+  "main/office/recent.ts": {
+    "add": 1,
+    "forget": 1,
+    "replaceEntry": 1
+  },
+  "main/office/theme-fonts.ts": {
+    "download": 1,
+    "cached": 2,
+    "fetchFontCss": 1
+  },
+  "main/office/versions.ts": {
+    "locked": 1,
+    "readIndex": 1,
+    "adoptCopies": 1,
+    "sameAsCopy": 1,
+    "snapshotLocked": 2,
+    "pruneDirLocked": 1,
+    "writeBack": 1,
+    "pruneAll": 1,
+    "onlyIndexLeft": 1,
+    "sweepStrays": 2,
+    "moveVersions": 1
+  },
+  "main/office/x2t.ts": {
+    "convert": 2,
+    "makeFontData": 1
+  },
+  "main/owned-lock.ts": {
+    "readOwner": 3,
+    "acquireOwnedLock": 1,
+    "release": 1,
+    "releaseSync": 1
+  },
+  "main/pages/connections-store.ts": {
+    "deleteSavedKey": 1,
+    "prune": 1
+  },
+  "main/pages/page-fetch.ts": {
+    "performApprovedFetch": 3
+  },
+  "main/pages/page-live-socket.ts": {
+    "connectOnce": 1,
+    "received": 1,
+    "stopWire": 1
+  },
+  "main/pages/page-live-video.ts": {
+    "start": 1,
+    "finish": 1
+  },
+  "main/pages/page-program.ts": {
+    "kill": 1,
+    "run": 1
+  },
+  "main/pages/page-socket.ts": {
+    "finish": 1
+  },
+  "main/pages/pages-service.ts": {
+    "ensureWatching": 1,
+    "ensureProjectPagesWatched": 2,
+    "schedule": 1,
+    "seedSignature": 1,
+    "removeConnection": 1,
+    "deleteSavedKey": 1,
+    "plaid": 1,
+    "credentialFor": 1,
+    "pruneAgainst": 1,
+    "broadcastNow": 1,
+    "stop": 2
+  },
+  "main/pages/pages-store.ts": {
+    "list": 3,
+    "codeMovedSince": 1,
+    "setPinned": 1,
+    "foldJsonCopies": 1,
+    "foldHtmlCopies": 1,
+    "conflictCopies": 1
+  },
+  "main/pages/plaid.ts": {
+    "remove": 1,
+    "parseItems": 1,
+    "plaidCall": 1,
+    "accountsFor": 1,
+    "transactionsFor": 1,
+    "runPlaid": 2
+  },
+  "main/perf-marks.ts": {
+    "perfMark": 1
+  },
+  "main/phone-read-deny.ts": {
+    "isPhoneDeniedFile": 1
+  },
+  "main/picture-actions.ts": {
+    "drop": 1
+  },
+  "main/plugin-blocklist.ts": {
+    "fetchBlocklist": 1,
+    "saveBlocklist": 1,
+    "enforce": 1
+  },
+  "main/plugin-installer.ts": {
+    "walk": 2,
+    "setCacheTimestamp": 1,
+    "readPluginVersion": 1,
+    "writePinMarker": 1,
+    "upgradePluginFromGit": 1,
+    "upgradePluginFromLocal": 2,
+    "installFromGitSubdir": 1,
+    "discardFailedInstall": 1,
+    "uninstallPlugin": 1
+  },
+  "main/prefs-service.ts": {
+    "writeDefaults": 1,
+    "writeDefaultsNow": 1
+  },
+  "main/preload.ts": {
+    "kindOf": 1,
+    "flush": 1,
+    "drain": 1,
+    "swTeardown": 2,
+    "swEnd": 1,
+    "swQuietCheck": 1,
+    "swStart": 1,
+    "installHitchRecorder": 2,
+    "<top-level>": 1
+  },
+  "main/prerequisite-installer.ts": {
+    "<top-level>": 1,
+    "persistPathToShellProfiles": 1,
+    "cleanStaleClaudeDownloads": 2,
+    "resolveCommand": 1,
+    "detectAuth": 1,
+    "waitForMacCommandLineTools": 2,
+    "startOAuthLogin": 2,
+    "kill": 2
+  },
+  "main/presence-socket.ts": {
+    "onMessage": 1
+  },
+  "main/project-context.ts": {
+    "readRules": 1,
+    "discoverContextGroups": 1,
+    "enrichContextFile": 2
+  },
+  "main/providers/chatgpt-auth.ts": {
+    "credentialsMutation": 1,
+    "signOut": 2,
+    "exchange": 3,
+    "closeServer": 1,
+    "doRefresh": 1
+  },
+  "main/providers/chatgpt-model.ts": {
+    "pull": 1,
+    "foldStream": 1
+  },
+  "main/providers/chatgpt-request-diagnostics.ts": {
+    "write": 1
+  },
+  "main/providers/keychain-warmup.ts": {
+    "createKeychainWarmup": 1
+  },
+  "main/providers/model-catalog.ts": {
+    "ensureFresh": 1,
+    "fetchBoth": 2,
+    "get": 2,
+    "refresh": 1
+  },
+  "main/providers/openrouter-health.ts": {
+    "save": 1,
+    "openRouterTurnFetch": 1
+  },
+  "main/providers/openrouter-oauth.ts": {
+    "browserDone": 1,
+    "exchange": 2,
+    "finish": 1
+  },
+  "main/providers/prefill-progress.ts": {
+    "scanPrefillProgress": 3
+  },
+  "main/providers/provider-failure.ts": {
+    "parseBody": 1
+  },
+  "main/providers/provider-registry.ts": {
+    "setKey": 1,
+    "languageModel": 1,
+    "refreshOpenRouter": 1
+  },
+  "main/providers/recoverable-safe-storage.ts": {
+    "warm": 1
+  },
+  "main/publish.ts": {
+    "createPublish": 3
+  },
+  "main/reconnecting-ws.ts": {
+    "connect": 2,
+    "setDesired": 1,
+    "destroy": 1
+  },
+  "main/remote-asset-compression.ts": {
+    "warm": 1
+  },
+  "main/remote-auth-throttle.ts": {
+    "run": 1
+  },
+  "main/remote-config.ts": {
+    "constructor": 1,
+    "resolveTailscalePath": 2,
+    "detectTailscale": 4
+  },
+  "main/remote-devices.ts": {
+    "load": 1,
+    "save": 1
+  },
+  "main/remote-download.ts": {
+    "openedPathOf": 1,
+    "mint": 2,
+    "authorizedAsArtifact": 3,
+    "dropHandle": 1,
+    "serve": 1
+  },
+  "main/remote-failed-answer.ts": {
+    "failedMessageAnswer": 1
+  },
+  "main/remote-server.ts": {
+    "waitForTailscale": 1,
+    "startAfterWake": 1,
+    "startLiveness": 1,
+    "dropAudience": 1,
+    "addClient": 1
+  },
+  "main/safe-open.ts": {
+    "isRiskyToOpen": 2
+  },
+  "main/saved-folders.ts": {
+    "writeFolders": 1
+  },
+  "main/scan-cache.ts": {
+    "save": 1
+  },
+  "main/session-browser.ts": {
+    "readIndexMeta": 1,
+    "r1CwdForSlug": 1,
+    "walkSlugParts": 1,
+    "readTopic": 1,
+    "readSessionTranscriptMeta": 1,
+    "listPastSessions": 1,
+    "loadHistory": 1
+  },
+  "main/session-discovery.ts": {
+    "run": 2
+  },
+  "main/session-live.ts": {
+    "noteOutput": 1
+  },
+  "main/session-manager.ts": {
+    "<top-level>": 1,
+    "createSession": 3,
+    "flushCommand": 1,
+    "destroySession": 1
+  },
+  "main/session-namer.ts": {
+    "nameOpening": 3,
+    "review": 5
+  },
+  "main/session-screens.ts": {
+    "noteResize": 1,
+    "dispose": 1
+  },
+  "main/session-setup-timing.ts": {
+    "timeSessionSetup": 1
+  },
+  "main/share-in-flight.ts": {
+    "shareInFlight": 1
+  },
+  "main/signin-loopback.ts": {
+    "startSigninListener": 2
+  },
+  "main/skill-config-store.ts": {
+    "load": 1
+  },
+  "main/skill-provider.ts": {
+    "uninstall": 1,
+    "invalidateCache": 1,
+    "invalidateIndexCache": 1,
+    "fetchIndex": 2,
+    "writeCache": 1,
+    "touchCache": 1
+  },
+  "main/skill-scanner.ts": {
+    "scanSkills": 6
+  },
+  "main/smoke-probe.ts": {
+    "tick": 1
+  },
+  "main/socket-repair.ts": {
+    "relistenIfDeleted": 2
+  },
+  "main/stall-profiler.ts": {
+    "flushPending": 1,
+    "prune": 1,
+    "teardown": 1,
+    "stop": 2
+  },
+  "main/subagent-watcher.ts": {
+    "getHistory": 1,
+    "forceRereadFor": 1,
+    "settleByParent": 1,
+    "onDirEvent": 1,
+    "scheduleGapRescans": 1,
+    "drainSettled": 1,
+    "trackSubagent": 1,
+    "attachFileWatch": 1,
+    "startFilePoll": 1
+  },
+  "main/sync-hub-socket.ts": {
+    "onMessage": 1
+  },
+  "main/sync-service.ts": {
+    "start": 2,
+    "stop": 1,
+    "configGet": 1,
+    "cleanupStaleBackendErrorFiles": 2,
+    "noteBackupSkipped": 2,
+    "noteBackupRan": 1,
+    "rsyncOrCp": 1,
+    "logBackup": 2,
+    "atomicWrite": 2,
+    "pushDrive": 1,
+    "pushiCloud": 2,
+    "push": 1,
+    "runHealthCheck": 2,
+    "writeBackupMeta": 1
+  },
+  "main/sync-setup-handlers.ts": {
+    "checkSyncPrereqs": 1
+  },
+  "main/sync-spaces/daily-backup.ts": {
+    "runIfDue": 2
+  },
+  "main/sync-spaces/device-registry.ts": {
+    "readDevices": 1
+  },
+  "main/sync-spaces/engine.ts": {
+    "onWatchEvent": 1,
+    "syncSpace": 1,
+    "removeSpace": 1,
+    "stop": 1
+  },
+  "main/sync-spaces/git-transport.ts": {
+    "ensureTrusted": 2,
+    "reapIfStale": 1,
+    "git": 1,
+    "fetchOrigin": 1,
+    "reapStaleTmpPacks": 1,
+    "unstageOversize": 2,
+    "adoptTreeKeepingLocal": 1,
+    "restoreUnmanaged": 1,
+    "maybeGc": 3,
+    "repair": 1,
+    "walk": 1
+  },
+  "main/sync-spaces/import-project.ts": {
+    "moveFolder": 1,
+    "remapTranscriptDir": 1
+  },
+  "main/sync-spaces/project-registry.ts": {
+    "readProjectRegistry": 1,
+    "readRemovedProjects": 1
+  },
+  "main/sync-spaces/repair.ts": {
+    "deleteZeroByteObjects": 1,
+    "pruneBrokenBackups": 1
+  },
+  "main/sync-spaces/service.ts": {
+    "broadcast": 6,
+    "onEvent": 1,
+    "stopSyncSpaces": 1,
+    "syncSpacesEnable": 1,
+    "syncSpacesCreateProject": 1,
+    "syncSpacesImportProject": 1
+  },
+  "main/sync-state.ts": {
+    "writeWarnings": 1,
+    "removeBackend": 1
+  },
+  "main/theme-marketplace-provider.ts": {
+    "publishTheme": 1,
+    "resolvePublishStateInner": 1,
+    "fetchRegistry": 1,
+    "writeDiskCache": 1
+  },
+  "main/theme-pr-lookup.ts": {
+    "searchFirst": 1
+  },
+  "main/transcript-cwd.ts": {
+    "firstCwd": 1,
+    "scanFirstCwd": 1
+  },
+  "main/transcript-page.ts": {
+    "readTranscriptPage": 1
+  },
+  "main/transcript-utils.ts": {
+    "readTranscriptMeta": 2
+  },
+  "main/update-exit.ts": {
+    "runExitPlan": 1
+  },
+  "main/update-installer.ts": {
+    "cleanupActive": 2,
+    "startDownload": 1,
+    "cancelDownload": 1,
+    "cleanupStaleDownloads": 1,
+    "findCachedDownload": 1,
+    "spawnDetached": 2
+  },
+  "main/update-service.ts": {
+    "fetchLatestRelease": 2,
+    "getUpdateStatus": 1,
+    "recordHighestInstalled": 1,
+    "loadAutoInstall": 1,
+    "refreshAutoInstall": 1,
+    "setAutoInstall": 1,
+    "launchVerified": 1,
+    "notifyStatusChanged": 1,
+    "removePendingFiles": 2,
+    "startInit": 4,
+    "adopt": 2,
+    "downloadAndVerify": 2,
+    "onFirstWindowReady": 1,
+    "sweepNow": 3,
+    "onCheckSucceeded": 1,
+    "processAttempt": 3,
+    "refreshBrake": 1,
+    "rehash": 1,
+    "openDiskImage": 1
+  },
+  "main/update-staging.ts": {
+    "stageAppImage": 1,
+    "stageMacApp": 1,
+    "removeStaged": 1,
+    "sweepStaging": 2,
+    "removeStaleGoFiles": 2
+  },
+  "main/upload-store.ts": {
+    "uploadFolderBytes": 1,
+    "sweepOldUploads": 1
+  },
+  "main/voice/voice-assets.ts": {
+    "download": 2
+  },
+  "main/voice/voice-service.ts": {
+    "unloadWorker": 1,
+    "endSession": 1
+  },
+  "main/welcome-back-store.ts": {
+    "enqueueWrite": 1
+  },
+  "main/windows-taskbar-icon.ts": {
+    "consider": 1,
+    "ourShortcuts": 1,
+    "applyWindowsTaskbarIcon": 1,
+    "apply": 2
+  },
+  "renderer/App.tsx": {
+    "AppInner": 8,
+    "load": 1,
+    "onHandoff": 1,
+    "bootBuddyOnLaunch": 1
+  },
+  "renderer/components/ArtifactThumbnail.tsx": {
+    "ArtifactThumbnail": 1
+  },
+  "renderer/components/BetaChannelToggle.tsx": {
+    "useBetaChannel": 1,
+    "subscribeAutoInstall": 1
+  },
+  "renderer/components/ChatView.tsx": {
+    "ChatView": 1
+  },
+  "renderer/components/ConnectGithubModal.tsx": {
+    "ConnectGithubModal": 3
+  },
+  "renderer/components/ContentFindBar.tsx": {
+    "ContentFindBar": 2
+  },
+  "renderer/components/DeliverablesCard.tsx": {
+    "SentLinkTile": 1
+  },
+  "renderer/components/EngineCard.tsx": {
+    "copyCommand": 1
+  },
+  "renderer/components/FirstRunView.tsx": {
+    "FirstRunView": 1
+  },
+  "renderer/components/FolderSwitcher.tsx": {
+    "FolderSwitcher": 1
+  },
+  "renderer/components/HelpPopup.tsx": {
+    "writeTipsArmed": 1
+  },
+  "renderer/components/LocalModelDownloadStrip.tsx": {
+    "LocalModelDownloadStrip": 1
+  },
+  "renderer/components/MarkdownContent.tsx": {
+    "ChatImage": 1
+  },
+  "renderer/components/ModelPickerPopup.tsx": {
+    "ModelPickerPopup": 4
+  },
+  "renderer/components/ModelProvidersPopup.tsx": {
+    "onBack": 1,
+    "OpenRouterBlock": 2,
+    "startSignIn": 1,
+    "retest": 1,
+    "cancelSignIn": 1
+  },
+  "renderer/components/PerformancePopup.tsx": {
+    "handleRestart": 1
+  },
+  "renderer/components/PermissionsSection.tsx": {
+    "dismissNarrowed": 1
+  },
+  "renderer/components/PluginTurnedOffNotice.tsx": {
+    "PluginTurnedOffNotice": 2
+  },
+  "renderer/components/PreferencesPopup.tsx": {
+    "PreferencesPopup": 1
+  },
+  "renderer/components/ProvidersSection.tsx": {
+    "useServices": 1
+  },
+  "renderer/components/ResumeBrowser.tsx": {
+    "ResumeBrowser": 2
+  },
+  "renderer/components/RuntimeBinding.tsx": {
+    "loadLastBinding": 1,
+    "persistLastBinding": 1,
+    "defaultRuntime": 1,
+    "persistRuntimeDefault": 1
+  },
+  "renderer/components/SessionDrawer.tsx": {
+    "<top-level>": 1
+  },
+  "renderer/components/SessionStrip.tsx": {
+    "SessionStrip": 4,
+    "resolveAndRoute": 1
+  },
+  "renderer/components/SettingsPanel.tsx": {
+    "SoundCategorySection": 1,
+    "SoundButton": 2,
+    "BuddyButton": 4,
+    "ConnectToDesktopButton": 2,
+    "DesktopSettings": 4
+  },
+  "renderer/components/SettingsRepairNotice.tsx": {
+    "SettingsRepairNotice": 1
+  },
+  "renderer/components/SignInNotices.tsx": {
+    "LiveClaudeSignInNotice": 1,
+    "useOpenRouterConnectedVia": 1,
+    "ProviderSignInCard": 1,
+    "ClaudeConnectionNotice": 1
+  },
+  "renderer/components/StatusBar.tsx": {
+    "loadVisibility": 1,
+    "saveVisibility": 1
+  },
+  "renderer/components/SyncPanel.tsx": {
+    "SyncSection": 1,
+    "SyncPopup": 6
+  },
+  "renderer/components/SyncSetupWizard.tsx": {
+    "PrereqCheckStep": 1
+  },
+  "renderer/components/TerminalView.tsx": {
+    "fitAndSync": 1,
+    "TerminalView": 1
+  },
+  "renderer/components/ToolCard.tsx": {
+    "<top-level>": 1
+  },
+  "renderer/components/UpdatePanel.tsx": {
+    "UpdatePanel": 1
+  },
+  "renderer/components/android-settings-data.ts": {
+    "useAndroidSettingsData": 1
+  },
+  "renderer/components/artifact-views/ActiveArtifactView.tsx": {
+    "<top-level>": 3
+  },
+  "renderer/components/artifact-views/CodeEditorView.tsx": {
+    "CodeEditorView": 1
+  },
+  "renderer/components/artifact-views/PdfView.tsx": {
+    "PdfPages": 1
+  },
+  "renderer/components/artifact-views/cm/editor-registry.ts": {
+    "openEditorSearch": 1
+  },
+  "renderer/components/artifact-views/sheet-measure.ts": {
+    "watchFonts": 1
+  },
+  "renderer/components/assistant-settings/AssistantSettings.tsx": {
+    "useAttention": 3
+  },
+  "renderer/components/browser/BrowserPanel.tsx": {
+    "stop": 1,
+    "<top-level>": 2,
+    "run": 1,
+    "load": 1,
+    "BrowserPanel": 3
+  },
+  "renderer/components/buddy/BuddyMascot.tsx": {
+    "BuddyMascot": 2,
+    "extract": 1
+  },
+  "renderer/components/buddy/BuddyNewSessionForm.tsx": {
+    "BuddyNewSessionForm": 1
+  },
+  "renderer/components/buddy/BuddyResumeList.tsx": {
+    "BuddyResumeList": 1
+  },
+  "renderer/components/context-menu/build-menu.ts": {
+    "attempt": 1
+  },
+  "renderer/components/context-menu/clipboard.ts": {
+    "copyText": 1,
+    "readText": 1
+  },
+  "renderer/components/deferred-screen.tsx": {
+    "preload": 1
+  },
+  "renderer/components/development/ContributionDesign.tsx": {
+    "read": 1,
+    "dismiss": 1,
+    "openProject": 1
+  },
+  "renderer/components/first-run/LocalModelSetup.tsx": {
+    "LocalModelSetup": 1
+  },
+  "renderer/components/first-time-warnings.ts": {
+    "markAcknowledged": 1
+  },
+  "renderer/components/game/ArcadeShell.tsx": {
+    "endRun": 1
+  },
+  "renderer/components/game/local-best.ts": {
+    "recordRun": 1
+  },
+  "renderer/components/guide/guide-state.ts": {
+    "write": 1
+  },
+  "renderer/components/marketplace/FeedbackSection.tsx": {
+    "FeedbackSection": 1
+  },
+  "renderer/components/marketplace/IntegrationDetailOverlay.tsx": {
+    "copy": 1
+  },
+  "renderer/components/marketplace/MarketplaceCard.tsx": {
+    "install": 2,
+    "MarketplaceCard": 1
+  },
+  "renderer/components/marketplace/MarketplaceDetailOverlay.tsx": {
+    "MarketplaceDetailOverlay": 4
+  },
+  "renderer/components/marketplace/MarketplaceScreen.tsx": {
+    "MarketplaceScreen": 2
+  },
+  "renderer/components/mascot/MascotRig.tsx": {
+    "ensureParts": 1
+  },
+  "renderer/components/model/ModelPicker.tsx": {
+    "saveFavorites": 1
+  },
+  "renderer/components/model/availability.ts": {
+    "useAvailabilityData": 1
+  },
+  "renderer/components/office/EditorFrame.tsx": {
+    "<top-level>": 3,
+    "canSaveCopy": 1,
+    "answerRecoverOffer": 1
+  },
+  "renderer/components/office/OfficeFileList.tsx": {
+    "copyPath": 1
+  },
+  "renderer/components/office/office-store.ts": {
+    "reloadAfterOfficeSave": 1,
+    "watchUnsavedPrompt": 2
+  },
+  "renderer/components/pages/PageHost.tsx": {
+    "answer": 5,
+    "PageHost": 1
+  },
+  "renderer/components/pages/page-chats.ts": {
+    "readAll": 1
+  },
+  "renderer/components/pages/page-socket-host.ts": {
+    "syncPinger": 1,
+    "connect": 1,
+    "closeMain": 1,
+    "handleFrameMessage": 1
+  },
+  "renderer/components/pages/page-video-host.ts": {
+    "cancel": 1,
+    "syncPinger": 1,
+    "teardown": 3,
+    "end": 1,
+    "send": 1,
+    "processor": 1,
+    "applyEvent": 2,
+    "begin": 2
+  },
+  "renderer/components/pages/use-page-sockets.ts": {
+    "post": 1
+  },
+  "renderer/components/project-view/ContextIntroBanner.tsx": {
+    "persistDismissed": 1
+  },
+  "renderer/components/project-view/ProjectView.tsx": {
+    "runProjectRemove": 1,
+    "ProjectView": 6
+  },
+  "renderer/components/project-view/hidden-files.ts": {
+    "storeShowHidden": 1
+  },
+  "renderer/components/terminal-hidden-size.ts": {
+    "saveTerminalBottomInset": 1,
+    "saveProgramSize": 1
+  },
+  "renderer/components/terminal-key-handler.ts": {
+    "createTerminalKeyHandler": 2
+  },
+  "renderer/components/terminal-webgl.ts": {
+    "releaseWebgl": 1,
+    "loseWebglContext": 1
+  },
+  "renderer/components/tool-views/ToolBody.tsx": {
+    "handle": 1
+  },
+  "renderer/dev/workbench/CompareView.tsx": {
+    "writePicks": 1
+  },
+  "renderer/dev/workbench/GatePractice.tsx": {
+    "GatePractice": 1
+  },
+  "renderer/dev/workbench/fixtures/fake-home-assistant.ts": {
+    "fakeHomeAssistantFetch": 1
+  },
+  "renderer/dev/workbench/fixtures/site-pages.ts": {
+    "siteHomeValue": 1
+  },
+  "renderer/dev/workbench/install-mock.ts": {
+    "presetStatusBarWidgets": 1
+  },
+  "renderer/dev/workbench/mock-shim.ts": {
+    "handWritten": 2
+  },
+  "renderer/dev/workbench/mockups/BuddyChatScreen.tsx": {
+    "<top-level>": 1
+  },
+  "renderer/dev/workbench/mockups/BuddyGroupScreen.tsx": {
+    "<top-level>": 1
+  },
+  "renderer/dev/workbench/mockups/BuddySessionScreens.tsx": {
+    "<top-level>": 1
+  },
+  "renderer/game/party-client.ts": {
+    "constructor": 1
+  },
+  "renderer/hooks/use-open-session-from-host.ts": {
+    "pull": 1
+  },
+  "renderer/hooks/use-wallpaper-header-ink.ts": {
+    "sample": 1
+  },
+  "renderer/hooks/useAttentionSummary.ts": {
+    "useAttentionSummary": 2
+  },
+  "renderer/hooks/useExpiredSignIns.ts": {
+    "useExpiredSignIns": 3
+  },
+  "renderer/hooks/useGitFileStatus.ts": {
+    "useGitFileStatus": 2
+  },
+  "renderer/hooks/useMatchReport.ts": {
+    "useMatchReport": 1
+  },
+  "renderer/hooks/useModelModes.ts": {
+    "useModelModes": 1
+  },
+  "renderer/hooks/usePresence.ts": {
+    "usePresence": 4,
+    "attempt": 1
+  },
+  "renderer/hooks/useProjectWatch.ts": {
+    "useProjectWatch": 1
+  },
+  "renderer/hooks/usePtyRawBytes.ts": {
+    "usePtyRawBytes": 1
+  },
+  "renderer/hooks/useRemoteWatch.ts": {
+    "useRemoteWatch": 2
+  },
+  "renderer/hooks/useSessionDefaults.ts": {
+    "useSessionDefaults": 1
+  },
+  "renderer/hooks/useSessionMeta.ts": {
+    "useSessionMeta": 6
+  },
+  "renderer/hooks/useSessionTasks.ts": {
+    "writeInactive": 1
+  },
+  "renderer/hooks/useSpecialists.ts": {
+    "useDelegatedModels": 1
+  },
+  "renderer/hooks/useVoiceInput.ts": {
+    "useVoiceInput": 3,
+    "undoHostStart": 1
+  },
+  "renderer/hooks/useZoomControls.ts": {
+    "useZoomControls": 1
+  },
+  "renderer/index.tsx": {
+    "<top-level>": 1
+  },
+  "renderer/last-computer.ts": {
+    "rememberLastComputer": 1,
+    "forgetLastComputer": 1
+  },
+  "renderer/platform.ts": {
+    "useCurrentPlatform": 2
+  },
+  "renderer/remote-gate.tsx": {
+    "LoginScreen": 1,
+    "RemoteGate": 1
+  },
+  "renderer/remote-pages-bridge.ts": {
+    "tell": 1
+  },
+  "renderer/remote-shim.ts": {
+    "rememberDeviceRow": 1,
+    "rememberPipelines": 1,
+    "startEarlyRequests": 2,
+    "reconcileUnknownOutcomes": 1,
+    "openPtyEarly": 1,
+    "fallBackToLocalRuntime": 1,
+    "retireSocket": 1,
+    "connectToHost": 1,
+    "uploadPastedImage": 1,
+    "list": 1,
+    "readFile": 1,
+    "writeFile": 1,
+    "refreshRegistry": 1,
+    "openFolder": 1,
+    "openSound": 1,
+    "openExternal": 1,
+    "takeRepairNotice": 1,
+    "notifyStackState": 1
+  },
+  "renderer/remote-timings.ts": {
+    "pageFacts": 1
+  },
+  "renderer/state/account-context.tsx": {
+    "AccountProvider": 2,
+    "doRefresh": 1
+  },
+  "renderer/state/conversation-queue-actions.ts": {
+    "cancel": 1,
+    "sendNow": 1
+  },
+  "renderer/state/desktop-place.ts": {
+    "writeDesktopPlace": 1
+  },
+  "renderer/state/doc-comments-store.ts": {
+    "hydrate": 1,
+    "subscribeKey": 2
+  },
+  "renderer/state/draft-recovery.ts": {
+    "readRecoveryDraft": 1,
+    "clearRecoveryDraft": 1,
+    "writeRecoveryDraft": 1,
+    "flushRecoveryDrafts": 1
+  },
+  "renderer/state/held-comments.ts": {
+    "writeStore": 1
+  },
+  "renderer/state/ime-rest-memory.ts": {
+    "save": 1
+  },
+  "renderer/state/marketplace-api-client.ts": {
+    "request": 2
+  },
+  "renderer/state/marketplace-context.tsx": {
+    "MarketplaceProvider": 5
+  },
+  "renderer/state/pending-handoff.ts": {
+    "start": 1,
+    "close": 1
+  },
+  "renderer/state/pending-queue-send.ts": {
+    "allPendingQueueSends": 1
+  },
+  "renderer/state/phone-session-actions.ts": {
+    "closeSession": 1
+  },
+  "renderer/state/prompt-input.ts": {
+    "sendPromptInput": 1
+  },
+  "renderer/state/provider-sign-in-store.ts": {
+    "startSignIn": 2,
+    "cancelSignIn": 1
+  },
+  "renderer/state/remote-place.ts": {
+    "remotePlaceHostId": 1,
+    "readRemotePlace": 1,
+    "writeRemotePlace": 1,
+    "remotePlaceHost": 1
+  },
+  "renderer/state/resume-lease-gate.ts": {
+    "runLeaseTakeoverGate": 1
+  },
+  "renderer/state/session-list-sync.ts": {
+    "useDropEndedSessionsOnReconnect": 1
+  },
+  "renderer/state/skill-context.tsx": {
+    "SkillProvider": 3
+  },
+  "renderer/state/switch-marks.ts": {
+    "emit": 1
+  },
+  "renderer/state/welcome-back.ts": {
+    "forgetReopenList": 1
+  },
+  "renderer/utils/sounds.ts": {
+    "sleepSoon": 1,
+    "wake": 1,
+    "prepareSounds": 2,
+    "setCustomSoundPath": 1,
+    "getSelectedPresetId": 1,
+    "setSelectedPresetId": 1,
+    "setCategoryEnabled": 1
+  },
+  "renderer/utils/touch-input.ts": {
+    "prefersTouchInput": 1
+  },
+  "renderer/voice-capture.ts": {
+    "close": 6
+  },
+  "shared/terminal-widths.ts": {
+    "applyClaudeCodeWidths": 1
+  },
+  "shared/theme-default.ts": {
+    "guessThemeDefault": 1
+  }
+}

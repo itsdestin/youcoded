@@ -5,8 +5,8 @@
    out-rank it on SPECIFICITY, never on order — every such rule below does, and
    says so.
 
-   WHY a separate file (2026-09-18): globals.css sits at its line budget
-   (desktop/line-budgets.json), and the premium-motion work adds arrivals, hover
+   WHY a separate file (2026-09-18): globals.css is already very long, and the
+   premium-motion work adds arrivals, hover
    and press states and pane transitions. The vocabulary itself — the --dur-* and
    --ease-* tokens, and the original `.switch-arrival` — stays in globals.css,
    pinned by tests/animation-frame-budget.test.ts.

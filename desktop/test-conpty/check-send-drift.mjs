@@ -22,7 +22,7 @@
 //   node test-conpty/check-send-drift.mjs --latest        # npm's latest @anthropic-ai/claude-code (the daily CI run)
 //   node test-conpty/check-send-drift.mjs --claude <bin>  # a specific binary (e.g. an older version, to bisect)
 //   --only <substring>   run matching cases only        --jobs <n>   cases at once (default 3)
-// Exit 0 = every case sent; 1 = at least one did not (each failure prints the screen Claude Code was showing).
+// Exit 0 = every case sent; 2 = the check crashed; 1 = at least one did not (each failure prints the screen Claude Code was showing).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fork } from 'node:child_process';
@@ -150,7 +150,11 @@ async function runCase(c, cli) {
     const prepared = await bridge.prepare(SID);
     const env = { ...isolatedEnv({ home, configDir }), ANTHROPIC_BASE_URL: api.url, ANTHROPIC_AUTH_TOKEN: 'local-stand-in', DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     worker = fork(path.join(desktop, 'src', 'main', 'pty-worker.js'), [], { cwd: project, env, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-    worker.on('message', (m) => { if (m.type === 'data') { screens.noteOutput(SID, m.data); mirror.write(m.data); worker.send({ type: 'ack', n: m.data.length }); } });
+    // WHY the connected check and the error listener (PR #770 run 44420491517): output still arriving as the
+    // worker exits made this ack write to a closed channel; the unhandled EPIPE crashed the whole check instead of
+    // letting the `exit` path below report what happened.
+    worker.on('message', (m) => { if (m.type === 'data') { screens.noteOutput(SID, m.data); mirror.write(m.data); if (worker.connected) worker.send({ type: 'ack', n: m.data.length }); } });
+    worker.on('error', () => { /* a write after exit; the exit handler below records the outcome */ });
     worker.on('exit', (code, signal) => { exit = { code, signal }; });
     worker.stderr.on('data', () => {});
     worker.send({ type: 'spawn', sessionId: 'send-drift', command: cli, args: ['--model', 'haiku', '--permission-mode', 'default', '--setting-sources', 'user', ...prepared.args], controlEnv: prepared.env, cwd: project, cols: c.cols, rows: c.rows });
@@ -237,4 +241,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-await main();
+// WHY exit 2 on a crash (2026-11-19, Destin: alerts must tell a broken CHECK apart from a broken Claude Code): an
+// uncaught error would exit 1, the code for "users are affected", and send the wrong phone alert.
+const crashed = (e) => { console.error(e); process.exit(2); };
+await main().catch(crashed);

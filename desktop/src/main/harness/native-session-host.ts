@@ -13,6 +13,7 @@
 // event arrives we forward it to the renderer SYNCHRONOUSLY (UI latency must
 // not wait on disk) AND enqueue the append on the per-session chain. A renderer
 // crash losing an unpersisted event is acceptable; a stuttering UI is not.
+import { trackWrite } from './tracked-write';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -1782,11 +1783,10 @@ export class NativeSessionHost extends EventEmitter {
     this.shellRegistries.set(sessionId, registry);
     if (sidecar && this.nativeHome && cwd) {
       this.shellSidecars.set(sessionId, sidecar);
-      // D2/D3: bring in what the last run saved (finished outcomes; still-running
-      // process groups re-attached). Async; screens get each record as a change
-      // event and session:open waits for this before answering.
+      // D2/D3: bring in what the last run saved (finished outcomes; re-attached process groups). Async; session:open waits for
+      // this before answering. WHY (card #220): registry.restoreReady makes the assistant's command lookups wait too.
       const home = this.nativeHome;
-      this.shellRestores.set(sessionId, readPersistedShells(home, cwd, sessionId)
+      this.shellRestores.set(sessionId, registry.restoreReady = readPersistedShells(home, cwd, sessionId)
         .then((records) => registry.restoreFrom(records))
         .then(() => undefined)
         .catch((err) => log('WARN', 'NativeSessionHost', 'could not restore saved background commands', { sessionId, error: String(err) })));
@@ -4775,7 +4775,7 @@ export class NativeSessionHost extends EventEmitter {
               await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.deliveryClaimId);
               break;
             }
-            await this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId, rec.runNumber ?? 1); // only now is it delivered
+            await trackWrite(entry.handoffChildDrains ??= new Set(), this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId, rec.runNumber ?? 1)); // only now is it delivered. WHY (card #266): destroyEntry awaits this set, so a quit cannot drop the flag and re-deliver on resume
             // A ledger write CAN still land after all — the in-memory
             // fallback (Task 4 fix-pass 2) only exists for the window where
             // it didn't; clean up any leftover entry for the same run so it
@@ -5554,6 +5554,8 @@ export class NativeSessionHost extends EventEmitter {
     // racing one).
     await this.destroyChildrenOf(sessionId);
     if (entry?.handoffChildDrains?.size) await Promise.all([...entry.handoffChildDrains]);
+    // WHY (R-4): a waiting report's id outlived its chat; cleared after children (they may queue one); reopen re-queues it from the ledger
+    this.pendingDeliveryParents.delete(sessionId);
     // G-1 (D2): closing the conversation kills its background commands and
     // says so on the card. The holder-takeover and session-exit paths pass
     // keepShells — the conversation is still open, just somewhere else — and

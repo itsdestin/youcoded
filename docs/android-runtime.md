@@ -10,7 +10,7 @@ on-phone proof: `youcoded-dev/docs/active/plans/2026-10-14-android-clean-rebuild
 Android app (one APK)
 ├─ Kotlin shell  app/src/main/kotlin/com/youcoded/app/
 │   MainActivity        the one screen: "starting…", then the WebView; QR scanner, mic prompt, file picker, back
-│   ui/AppWebView        WebView on file:///android_asset/web/index.html?bridgeToken=…&bridgePort=…
+│   ui/AppWebView        WebView on https://appassets.androidplatform.net/assets/web/index.html?bridgeToken=…&bridgePort=… (WebViewAssetLoader; file access off; LegacyStorageMigration copies the old file:// settings once)
 │   bridge/HostJsBridge  window.YouCodedHost: the page's phone-only calls (voice, saved computers, QR, back, version)
 │   runtime/BackendService  foreground service: lays out programs, starts/restarts node, resolv.conf, wake lock
 │   runtime/RuntimeInstaller files/usr symlinks into the native-lib folder; unpacks backend.tgz

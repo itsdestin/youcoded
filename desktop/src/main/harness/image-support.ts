@@ -175,6 +175,21 @@ export function readImageFromDisk(absPath: string, limits?: ImageLimits): ImageR
     const data = fs.readFileSync(absPath);
     const dims = imageDimensions(data);
     if (dims && limits && !withinImageLimits(dims, limits)) return { ok: false, reason: 'oversized', ...dims };
+    // WHY (release 1.3.4, deck release-1-4-late L-3: "count from last use"): the startup sweep
+    // (image-prepare sweepStale) deletes shrunk copies untouched for 90 days. Reopening a chat
+    // re-reads its copies HERE, by path, not through the preparer — so without this touch a chat
+    // opened every week still lost its pictures 90 days after they were made. Only our own copies
+    // are touched (never a user's original), and asynchronously so the read stays one stat + one read.
+    if (isImageCacheCopy(absPath)) { const now = new Date(); void fs.promises.utimes(absPath, now, now).catch(() => { /* best-effort */ }); }
     return { ok: true, mediaType, data, ...(dims ?? {}) };
   } catch { return { ok: false, reason: 'missing' }; }
+}
+
+/** The folder ImagePreparer writes its shrunk copies into (create-runtime: userData/image-cache). */
+export const IMAGE_CACHE_DIR_NAME = 'image-cache';
+/** Only files ImagePreparer could have written: derivativeName's shape, or its in-flight `.tmp`. */
+export const IMAGE_CACHE_FILE_RE = /^[0-9a-f]{16}-.+\.(png|jpg)(\.\d+\.tmp)?$/;
+/** True for a shrunk copy in the image cache — never for a user's own picture. */
+export function isImageCacheCopy(absPath: string): boolean {
+  return path.basename(path.dirname(absPath)) === IMAGE_CACHE_DIR_NAME && IMAGE_CACHE_FILE_RE.test(path.basename(absPath));
 }
