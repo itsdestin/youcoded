@@ -153,6 +153,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         record: null,
         chatMessages: [],
         rematchRequested: false,
+        opponentWantsRematch: false,
         opponentDisconnected: false,
       };
 
@@ -220,6 +221,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         challengeCode: null,
         challengeGame: null,
         rematchRequested: false,
+        opponentWantsRematch: false,
         opponentDisconnected: false,
         partyError: null,
       };
@@ -296,6 +298,12 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 
     case 'REMATCH_REQUESTED':
       return { ...state, rematchRequested: true };
+
+    // WHY separate from REMATCH_REQUESTED: that one means "WE asked". Reusing it for the
+    // opponent's ask made the second player's button read "Rematch requested" and go grey,
+    // so they could never accept.
+    case 'OPPONENT_REMATCH_REQUESTED':
+      return { ...state, opponentWantsRematch: true };
 
     case 'RESET':
       return createInitialGameState();

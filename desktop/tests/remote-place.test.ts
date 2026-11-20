@@ -4,6 +4,8 @@
 // in remote-place-app-wiring.test.ts, an exact-line source pin deleted 2026-09-16
 // (Plan B Task 4) with no replacement.
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   remotePlaceHostId,
   readRemotePlace,
@@ -90,5 +92,17 @@ describe('when the conversation on screen goes away', () => {
   });
   it('nothing remaining: nothing', () => {
     expect(chooseAfterDestroyed({ destroyedId: 's1', currentId: 's1', remainingIds: [], focusSessionId: null })).toBeNull();
+  });
+});
+
+// App cannot be mounted here, so this scans its source. WHY: after a connection-mode change with an empty session list, the handler
+// used to return without deciding the place, leaving placeDecidedRef false so a reconnecting phone stopped auto-focusing new chats.
+describe('connection-mode change with an empty session list', () => {
+  it('still decides the remote place', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'App.tsx'), 'utf8');
+    const start = src.indexOf('onConnectionModeChange((mode)');
+    const body = src.slice(start, src.indexOf('return unsub;', start));
+    const empty = body.slice(body.indexOf('list.length === 0'), body.indexOf('setSessions(list)'));
+    expect(empty).toMatch(/isRemoteMode\(\)\)\s*decideRemotePlace\(\[\]\)/);
   });
 });

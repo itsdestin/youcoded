@@ -1042,12 +1042,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     if (!e.clipboardData || !isImageOnlyClipboard(e.clipboardData)) return;
     e.preventDefault();
+    // WHY (card #134): a phone cannot reach the desktop's clipboard, so take the picture out of the paste itself.
+    // Must happen before the first await: the browser empties clipboardData once the event ends. Desktop ignores it.
+    const pastedFile = Array.from(e.clipboardData.items ?? []).find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile?.() ?? undefined;
     // Card #134 round 4: the clipboard said it held an image, so "nothing came back" or a rejection is a real failure to
     // attach it (it used to vanish with no word). A successful save attaches it exactly as before.
     try {
-      const saved = await window.claude.dialog.saveClipboardImage();
+      const saved = await window.claude.dialog.saveClipboardImage(pastedFile);
       if (saved) addFiles([saved]); else if (saved !== undefined) announceFailed('attach the pasted image');
-      // undefined = a phone over remote cannot paste an image: silent for now (the shim says nothing either), pending the owner's decision.
+      // undefined = nothing to attach (phone without a readable picture, or an upload that already announced its refusal): silent.
     } catch (err) { announceFailed('attach the pasted image', err); }
   }, [addFiles]);
 
@@ -1072,7 +1075,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     e.preventDefault();
     fileDragDepth.current = 0;
     setFileDragOver(false);
-    const paths = Array.from(e.dataTransfer.files).map((f) => (f as any).path as string).filter(Boolean);
+    // WHY: Electron removed File.path, so on desktop a dropped file's path comes from the preload's
+    // webUtils bridge (dialog.pathForFile). Remote/Android have no such bridge and fall back to the
+    // old File.path read, which behaves exactly as before there.
+    const pathForFile = window.claude?.dialog?.pathForFile;
+    const paths = Array.from(e.dataTransfer.files)
+      .map((f) => (pathForFile ? pathForFile(f) : (f as any).path) as string)
+      .filter(Boolean);
     if (paths.length > 0) addFiles(paths);
   }, [addFiles]);
 

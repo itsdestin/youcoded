@@ -12,7 +12,7 @@ import { FilepathToken } from './FilepathToken';
 import { splitComposeRefs, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { TokenPill } from './comments/TokenPill';
-import { Button } from './ui';
+import { Button, Callout } from './ui';
 
 interface Props {
   message: ChatMessage;
@@ -102,6 +102,30 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
     else body.push(...renderProseSegment(seg.value, `s${i}-`));
   }
 
+  // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
+  // the record unable to tell (it restarted, the question could not be asked, or no echo came back in time), so it claims nothing about a cause.
+  // WHY the app's own notice card (Callout), unchanged, sitting INSIDE the bubble at its foot (Destin, pinned-bubbles-review-3#B-1, 2026-11-18:
+  // "i just wanted the error cards from before to sit inside the message bubbles at the bottom"; review-2#N-1: "full width of the bubble. dark
+  // send again on the right side with light dismiss on left. no x"). The card is the same one every other warning/error uses (red = known not
+  // received, amber = a doubt): outlined Dismiss/Discard first, filled Send again last, and no ✕.
+  // WHY its colours come from the bubble (surface="on-accent", the on-accent buttons), Destin, pinned-bubbles-review-7#V-3 after rounds 4–6
+  // ("these look so dark", "almost looks too light", "in regular youcoded i can barely tell the red/yellow apart"): the page's own tint sat
+  // inside a bubble of the opposite brightness and fought it. The fill is now the bubble colour blended toward amber/red with a solid
+  // amber/red outline, and the words and buttons use the bubble's text colour, as the file and reference pills in this bubble already do.
+  const notSent = sendNote === 'not-sent';
+  const note = sendNote && (
+    <div className="mt-2.5 whitespace-normal select-text" data-send-note={sendNote}>
+      <Callout tone={notSent ? 'danger' : 'warning'} surface="on-accent" compact role="status"
+        actions={(onDiscard || onDismiss || onSendAgain) && <>
+          {onDiscard && <Button variant="on-accent-outline" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
+          {onDismiss && <Button variant="on-accent-outline" size="sm" className="whitespace-nowrap" onClick={onDismiss}>Dismiss</Button>}
+          {onSendAgain && <Button variant="on-accent-solid" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
+        </>}>
+        {notSent ? "This didn't send — your computer never received it." : 'Not sure this was sent.'}
+      </Callout>
+    </div>
+  );
+
   const bubble = (
     <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap">
       {/* WHY: Find indexes authored text, not the optional timestamp beside it. */}
@@ -111,26 +135,8 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
           {formatBubbleTime(message.timestamp)}
         </div>
       )}
+      {note}
     </div>
   );
-  if (!sendNote) return <div className="flex justify-end px-4 py-2">{bubble}</div>;
-
-  // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
-  // the record unable to tell (it restarted, or the question could not be asked), so it claims nothing about a cause.
-  // WHY flex-wrap + nowrap buttons: with a second button the row no longer fits a phone, and the buttons were splitting ("Send / again") and running off the
-  // screen edge; now the sentence takes its own line and the buttons sit together under it.
-  const noteText = sendNote === 'not-sent' ? "This didn't send — your computer never received it." : 'Not sure this was sent.';
-  return (
-    <div className="px-4 py-2">
-      <div className="flex justify-end">{bubble}</div>
-      <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs text-fg-dim select-text" role="status" data-send-note={sendNote}>
-        <span className="min-w-0 max-w-full">{noteText}</span>
-        {onSendAgain && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
-        {/* WHY: before this, a message that did not send could only be sent again. Same ghost style as Send again (Button's sm size already gets the 44px
-            touch area on phones); the label says what happens to the bubble, which is the whole difference between the two. */}
-        {onDiscard && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
-        {onDismiss && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onDismiss} aria-label="Dismiss this note">Dismiss</Button>}
-      </div>
-    </div>
-  );
+  return <div className="flex justify-end px-4 py-2">{bubble}</div>;
 });

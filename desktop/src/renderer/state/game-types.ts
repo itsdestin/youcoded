@@ -99,6 +99,9 @@ export interface GameState {
   challengeDeclinedBy: { id: string; name: string; handle: string | null } | null;
   /** Whether this player has requested a rematch */
   rematchRequested: boolean;
+  /** The OPPONENT has asked for a rematch and we have not answered yet. Kept apart from
+   *  rematchRequested so our button can read "Accept rematch" and stay pressable. */
+  opponentWantsRematch: boolean;
   /** Opponent disconnected during game */
   opponentDisconnected: boolean;
 }
@@ -132,7 +135,8 @@ export type GameAction =
   | { type: 'CHALLENGE_DECLINED'; by: { id: string; name: string; handle: string | null } }
   | { type: 'CHALLENGE_FAILED'; target: string }
   | { type: 'CLEAR_CHALLENGE' }
-  | { type: 'REMATCH_REQUESTED' };
+  | { type: 'REMATCH_REQUESTED' }
+  | { type: 'OPPONENT_REMATCH_REQUESTED' };
 
 export interface GameConnection {
   // createGame was removed 2026-07-09 with the manual room-code UI (Destin:
@@ -196,6 +200,7 @@ export function createInitialGameState(): GameState {
     challengeGame: null,
     challengeDeclinedBy: null,
     rematchRequested: false,
+    opponentWantsRematch: false,
     opponentDisconnected: false,
   };
 }

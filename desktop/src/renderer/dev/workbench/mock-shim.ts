@@ -4193,6 +4193,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         return { ok: true as const, value: { id: v.id, hidden: v.hidden } };
       },
     },
+    // WHY only behind ?pastedPicture=1 (card #134): the phone-paste review screen needs a picture to land in the message box,
+    // and the workbench has no clipboard or file picker. Both routes answer with the same practice picture path.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('pastedPicture') === '1' ? { dialog: {
+      openFile: async () => ['/home/you/uploads/pasted-image.png'],
+      openFolder: async () => null, openSound: async () => null, readTranscriptMeta: async () => null,
+      saveClipboardImage: async () => '/home/you/uploads/pasted-image.png',
+    } } : {}),
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its
@@ -4498,11 +4505,14 @@ function createPagesMock(scenario: string): PagesBridge {
         const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
         if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
           w.__shootInflight += 1;
-          w.__shootHoldUntil = performance.now() + 8000;
+          // WHY 30 s, not 8 (2026-11-18, load-flaky-tests): at load 58-149 the house's first answer took longer than 8 s, the hold
+          // gave up and `page-home` was shot "Loading your rooms…", tripping the look-alike check. The hold ends the moment the
+          // answer lands (homeFirstAnswer, +250 ms), so the longer cap costs nothing on a quiet machine (same reasoning as below).
+          w.__shootHoldUntil = performance.now() + 30000;
           let held = true;
           const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
           homeFirstAnswer = () => { setTimeout(release, 250); };
-          setTimeout(release, 8000);
+          setTimeout(release, 30000);
         }
       }
       // WHY (2026-10-21, `shoot --check` failed once under heavy load, then passed): the `#menu-open` screen opens the
