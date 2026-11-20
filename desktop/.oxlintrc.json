@@ -24,7 +24,8 @@
   // tsgolint (TypeScript 7), which is why tsconfig.json uses "bundler" resolution.
   // Existing `eslint-disable` comments are honored by oxlint as-is.
   //
-  // THE GREEN-GATE RULE: every rule below is at zero on the tree. A gate that
+  // THE GREEN-GATE RULE (the one exception: the size WARNINGS at the end of the
+  // overrides, which advise and never fail): every ERROR rule below is at zero on the tree. A gate that
   // ships with known violations trains everyone to ignore it. To adopt a deferred
   // rule (bottom of this file), drive it to zero in the same commit that enables it.
   //
@@ -155,6 +156,42 @@
         "no-template-curly-in-string": "error",
         "eqeqeq": ["error", "always", { "null": "ignore" }],
         "no-async-promise-executor": "error"
+      }
+    },
+    {
+      // SIZE WARNINGS (2026-11-18, review item E-4). These are WARNINGS, never errors:
+      // `npm run lint` and verify.sh still pass with them showing. They replace
+      // line-budgets.json, a per-file line ceiling that failed verify whenever a
+      // file grew by even one line (edited 141 times in a month, with merge
+      // conflicts) and told the author nothing about whether the code was hard to
+      // follow. This is the ordinary version: flag the genuinely huge, once.
+      //
+      // The numbers were chosen from this tree on 2026-11-18 (src/, comments and blank
+      // lines not counted, so WHY comments cost nothing): each sits where only the
+      // outliers trip it, not a long tail the team would learn to ignore.
+      //   file length     1000 code lines  -> 21 files (of ~1,600). 1500 gave ~9, 500 gave ~150.
+      //   function length  300 code lines  -> 42 functions. 400 gave 28, 200 gave 100.
+      //   complexity        50 branches    -> 66 functions. 40 gave 104, 30 gave 197, 20 gave 423.
+      // A warning is a prompt to look, not an order: React screens are long functions.
+      // Lower a number only after the warnings under it are cleared, so it stays useful.
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "rules": {
+        "max-lines": ["warn", { "max": 1000, "skipComments": true, "skipBlankLines": true }],
+        "max-lines-per-function": ["warn", { "max": 300, "skipComments": true, "skipBlankLines": true, "IIFEs": true }],
+        "complexity": ["warn", { "max": 50 }]
+      }
+    },
+    {
+      // Dev-only workbench files (never in the shipped app): one huge file of fake
+      // data and fixtures is their design, so size warnings there are pure noise.
+      // Same exemption the old line-budgets.json gave them. Tests that sit beside
+      // their component (src/**/*.test.tsx) are exempt too: one long `describe`
+      // block is how a test file is written, not a sign of tangled code.
+      "files": ["src/renderer/dev/workbench/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
+      "rules": {
+        "max-lines": "off",
+        "max-lines-per-function": "off",
+        "complexity": "off"
       }
     }
   ]
