@@ -423,6 +423,26 @@ describe('native host delivery boundaries (offline investigation)', () => {
     expect((host as any).ledger.listFor(root, 'parent').find((r: any) => r.childId === child).delivered).toBe(true);
   });
 
+  it('destroy waits for an in-flight delivered-flag write so a quit cannot lose it (card #266)', async () => {
+    const b = await boot(), child = await b.spawn();
+    const writeStarted = gate(), writeRelease = gate();
+    releases.push(writeRelease.resolve);
+    const original = b.h.ledger.confirmDelivered.bind(b.h.ledger);
+    vi.spyOn(b.h.ledger, 'confirmDelivered').mockImplementation(async (...args: any[]) => {
+      writeStarted.resolve(); await writeRelease.promise; return original(...args);
+    });
+    b.childRelease.resolve();
+    await writeStarted.promise; // report injected; the delivered flag write is now stuck in flight
+    let destroyed = false;
+    const destroying = host.destroy('parent').then(() => { destroyed = true; });
+    // Negative check: destroy must still be waiting. Let the event loop turn a few times.
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(destroyed).toBe(false);
+    writeRelease.resolve();
+    await destroying;
+    expect(b.record(child).delivered).toBe(true);
+  });
+
   it('does not duplicate an injected report when both marker and confirmation writes fail', async () => {
     const b = await boot(); await b.spawn();
     vi.spyOn(b.h.ledger, 'markInjectionAttempted').mockRejectedValue(new Error('marker failed'));

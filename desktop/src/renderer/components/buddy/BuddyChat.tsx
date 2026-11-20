@@ -11,6 +11,7 @@ import { useChromeMeasurements } from '../../hooks/useChromeMeasurements';
 import { buildSessionCreateArgs } from '../../../shared/session-create-args';
 import { BuddyWelcome } from './BuddyWelcome';
 import { useBuddyFeed } from './useBuddyFeed';
+import { useStaleSends } from '../../hooks/useStaleSends';
 import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
 import { Toast } from '../ui';
 import { useBlockedSend } from '../../hooks/useBlockedSend';
@@ -49,6 +50,8 @@ export function BuddyChat({ tools = 'summary', shown = true, opened = 0 }: { too
   const [artifactStore] = useState(() => createArtifactStore());
 
   useBuddyFeed(viewedSession);
+  // A message sent from the buddy is drawn in THIS window's own chat store, so it needs its own give-up clock (stale-sends.ts).
+  useStaleSends();
 
   const select = useCallback((sid: string | null) => {
     setViewedSession(sid);

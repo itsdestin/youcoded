@@ -54,6 +54,7 @@ import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
 import { useSendReconcile } from './hooks/useSendReconcile';
+import { useStaleSends } from './hooks/useStaleSends';
 import { REMOTE_REFRESH_EVENT } from './remote-events';
 import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
@@ -1823,6 +1824,7 @@ function AppInner() {
   }, [firstPages, reportFillRound, remoteWatch, refillRetry]);
   useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
+  useStaleSends(); // a sent bubble is never pinned at the bottom forever waiting for its echo (stale-sends.ts, 2026-11-18)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
   // WHY the watch check and the retry (branch review F3): refilling opens (watches) a conversation, so one the phone has left since is
   // not refilled. And the push stands in for the hang-up that used to force a full round, so a refill that fails here gets the round's
@@ -2084,7 +2086,12 @@ function AppInner() {
 
       // Reload session list from the new server
       window.claude.session.list().then((list: any[]) => {
-        if (!list || list.length === 0) return;
+        if (!list || list.length === 0) {
+          // WHY: an empty list is still the computer's answer. Returning without deciding left placeDecidedRef false (reset above),
+          // so a phone reconnecting to a computer with no chats open never auto-focused a chat created afterwards.
+          if (isRemoteMode()) decideRemotePlace([]);
+          return;
+        }
         setSessions(list);
         for (const s of list) {
           dispatch({ type: 'SESSION_INIT', sessionId: s.id });
