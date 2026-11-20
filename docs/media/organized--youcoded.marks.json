@@ -1,0 +1,148 @@
+{
+ "fps": 24,
+ "width": 1440,
+ "height": 900,
+ "duration": 18.627,
+ "actions": [
+  {
+   "i": 0,
+   "kind": "hold",
+   "mark": null,
+   "start": 0.004,
+   "end": 0.304
+  },
+  {
+   "i": 1,
+   "kind": "click",
+   "mark": null,
+   "start": 0.304,
+   "end": 1.249
+  },
+  {
+   "i": 2,
+   "kind": "hold",
+   "mark": null,
+   "start": 1.85,
+   "end": 2.15
+  },
+  {
+   "i": 3,
+   "kind": "click",
+   "mark": null,
+   "start": 2.15,
+   "end": 3.4
+  },
+  {
+   "i": 4,
+   "kind": "click",
+   "mark": null,
+   "start": 3.8,
+   "end": 5.13
+  },
+  {
+   "i": 5,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 5.33,
+   "end": 5.56
+  },
+  {
+   "i": 6,
+   "kind": "key",
+   "mark": null,
+   "start": 5.96,
+   "end": 5.963
+  },
+  {
+   "i": 7,
+   "kind": "key",
+   "mark": null,
+   "start": 6.364,
+   "end": 6.371
+  },
+  {
+   "i": 8,
+   "kind": "click",
+   "mark": null,
+   "start": 6.771,
+   "end": 7.686
+  },
+  {
+   "i": 9,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 7.885,
+   "end": 8.086
+  },
+  {
+   "i": 10,
+   "kind": "key",
+   "mark": null,
+   "start": 8.487,
+   "end": 8.503
+  },
+  {
+   "i": 11,
+   "kind": "hold",
+   "mark": null,
+   "start": 9.204,
+   "end": 9.605
+  },
+  {
+   "i": 12,
+   "kind": "click",
+   "mark": null,
+   "start": 9.605,
+   "end": 11.039
+  },
+  {
+   "i": 13,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 11.24,
+   "end": 11.45
+  },
+  {
+   "i": 14,
+   "kind": "hold",
+   "mark": null,
+   "start": 11.851,
+   "end": 12.15
+  },
+  {
+   "i": 15,
+   "kind": "click",
+   "mark": null,
+   "start": 12.15,
+   "end": 13.639
+  },
+  {
+   "i": 16,
+   "kind": "hold",
+   "mark": null,
+   "start": 13.939,
+   "end": 14.939
+  },
+  {
+   "i": 17,
+   "kind": "key",
+   "mark": null,
+   "start": 14.939,
+   "end": 14.949
+  },
+  {
+   "i": 18,
+   "kind": "clickText",
+   "mark": null,
+   "start": 15.35,
+   "end": 16.329
+  },
+  {
+   "i": 19,
+   "kind": "hold",
+   "mark": null,
+   "start": 16.829,
+   "end": 18.33
+  }
+ ]
+}

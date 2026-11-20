@@ -1,0 +1,50 @@
+{
+ "fps": 24,
+ "width": 1440,
+ "height": 900,
+ "duration": 9.622,
+ "actions": [
+  {
+   "i": 0,
+   "kind": "hold",
+   "mark": null,
+   "start": 0.005,
+   "end": 0.306
+  },
+  {
+   "i": 1,
+   "kind": "click",
+   "mark": null,
+   "start": 0.306,
+   "end": 1.66
+  },
+  {
+   "i": 2,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 1.86,
+   "end": 3.308
+  },
+  {
+   "i": 3,
+   "kind": "key",
+   "mark": null,
+   "start": 3.71,
+   "end": 3.715
+  },
+  {
+   "i": 4,
+   "kind": "hold",
+   "mark": null,
+   "start": 4.016,
+   "end": 7.818
+  },
+  {
+   "i": 5,
+   "kind": "hold",
+   "mark": null,
+   "start": 7.818,
+   "end": 9.325
+  }
+ ]
+}
