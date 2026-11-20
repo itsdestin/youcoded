@@ -1061,10 +1061,22 @@ function insertCommentRangeMarkers(doc: Document, leaves: WriteLeaf[], start: nu
  *  (removing nothing) when any of the three pieces can't be found — a
  *  malformed "comment with no range" state this refuses rather than guesses
  *  at, matching §2.3's "never guess" rule. */
-function removeCommentRangeAndReference(doc: Document, id: string): boolean {
+function removeCommentRangeAndReference(doc: Document, id: string, tolerateMissing = false): boolean {
   const start = findByAttr(doc, 'w:commentRangeStart', 'w:id', id);
   const end = findByAttr(doc, 'w:commentRangeEnd', 'w:id', id);
   const ref = findByAttr(doc, 'w:commentReference', 'w:id', id);
+  // `tolerateMissing` (delete-thread's reply cleanup): remove whichever of the
+  // three exist instead of refusing when one is absent.
+  if (!tolerateMissing && (!start || !end || !ref)) return false;
+  if (tolerateMissing) {
+    if (!start && !end && !ref) return false;
+    for (const el of [start, end]) el?.parentNode?.removeChild(el as unknown as Node);
+    if (ref) {
+      const refRun = nearestAncestor(ref, 'w:r') ?? ref;
+      refRun.parentNode?.removeChild(refRun as unknown as Node);
+    }
+    return true;
+  }
   if (!start || !end || !ref) return false;
   (start.parentNode as unknown as Element)?.removeChild(start as unknown as Node);
   (end.parentNode as unknown as Element)?.removeChild(end as unknown as Node);
@@ -1185,6 +1197,29 @@ function countAttrOccurrences(xml: string, tag: string, attr: string, value: str
   return (xml.match(re) ?? []).length;
 }
 
+/** WHY (review M-4b): the write path used to call `.async('string')`, which
+ *  buffers the WHOLE inflated part before anyone can look at its size — so a
+ *  crafted .docx that declares a small size but inflates to gigabytes could
+ *  freeze the whole app (main process) on add/reply/resolve/delete. The read
+ *  path already avoided this with `decompressBounded`; every write-path read
+ *  now goes through this helper too. Thrown (not returned) so it fits inside
+ *  the existing Promise.all/try shapes; callers map it with `.error`. */
+class BoundedReadError extends Error {
+  constructor(readonly error: DocxReadError) {
+    super(error);
+  }
+}
+
+/** Reads one named part as text, bounded by real inflated bytes. `null` when
+ *  the part does not exist. Throws `BoundedReadError` on overflow/corruption. */
+async function readPartBounded(zip: JSZip, name: string): Promise<string | null> {
+  const file = zip.file(name);
+  if (!file) return null;
+  const result = await decompressBounded(file);
+  if (!result.ok) throw new BoundedReadError(mapDecompressError(result.error));
+  return result.text;
+}
+
 /**
  * Loads every part a write might touch and parses the ones this module
  * mutates, mirroring T10's own `readDocxComments` size-guard-before-decompress
@@ -1220,22 +1255,29 @@ async function loadArchiveForWrite(
   ]);
   if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
 
-  const commentsFile = zip.file('word/comments.xml');
-  const extendedFile = zip.file('word/commentsExtended.xml');
-  const relsFile = zip.file('word/_rels/document.xml.rels');
-  const commentsIdsFile = zip.file('word/commentsIds.xml');
-  const commentsExtensibleFile = zip.file('word/commentsExtensible.xml');
-
-  const [documentXml, contentTypesXml, commentsXml, extendedXml, relsXml, commentsIdsXml, commentsExtensibleXml] =
-    await Promise.all([
-      documentFile.async('string'),
-      contentTypesFile.async('string'),
-      commentsFile ? commentsFile.async('string') : Promise.resolve(null),
-      extendedFile ? extendedFile.async('string') : Promise.resolve(null),
-      relsFile ? relsFile.async('string') : Promise.resolve(null),
-      commentsIdsFile ? commentsIdsFile.async('string') : Promise.resolve(null),
-      commentsExtensibleFile ? commentsExtensibleFile.async('string') : Promise.resolve(null),
-    ]);
+  // Sequential (not Promise.all) so an oversized part stops the work before
+  // the later parts are inflated too.
+  let documentXml: string | null;
+  let contentTypesXml: string | null;
+  let commentsXml: string | null;
+  let extendedXml: string | null;
+  let relsXml: string | null;
+  let commentsIdsXml: string | null;
+  let commentsExtensibleXml: string | null;
+  try {
+    documentXml = await readPartBounded(zip, 'word/document.xml');
+    contentTypesXml = await readPartBounded(zip, '[Content_Types].xml');
+    commentsXml = await readPartBounded(zip, 'word/comments.xml');
+    extendedXml = await readPartBounded(zip, 'word/commentsExtended.xml');
+    relsXml = await readPartBounded(zip, 'word/_rels/document.xml.rels');
+    commentsIdsXml = await readPartBounded(zip, 'word/commentsIds.xml');
+    commentsExtensibleXml = await readPartBounded(zip, 'word/commentsExtensible.xml');
+  } catch (e) {
+    if (e instanceof BoundedReadError) return { ok: false, error: e.error };
+    return { ok: false, error: 'invalid-docx' };
+  }
+  // Both were confirmed present above; narrow the types.
+  if (documentXml === null || contentTypesXml === null) return { ok: false, error: 'missing-document-part' };
 
   const archive: LoadedArchive = {
     zip,
@@ -1608,6 +1650,13 @@ async function mutateDeleteThread(
   for (const replyEl of collectReplyEntries(archive, rootParaId)) {
     const p = elementsByTag(replyEl as unknown as Document, 'w:p')[0];
     const paraId = p ? p.getAttribute('w14:paraId') : null;
+    // WHY (review M-4a): a reply written by real Word has its OWN
+    // commentRangeStart/End/Reference in document.xml. Removing only the
+    // comment body left those marks pointing at nothing (Word's "unreadable
+    // content" repair prompt). Tolerant: an app-made reply has no anchor, and
+    // a half-missing set is cleaned up piece by piece.
+    const replyRawId = replyEl.getAttribute('w:id');
+    if (replyRawId !== null) removeCommentRangeAndReference(archive.documentDoc, replyRawId, true);
     removeElement(replyEl);
     if (paraId) {
       removeExtendedEntry(archive.extendedDoc, paraId);
@@ -1643,6 +1692,14 @@ async function mutateDeleteReply(
   if (!target) return { ok: false, error: 'comment-not-found' };
   const p = elementsByTag(target as unknown as Document, 'w:p')[0];
   const paraId = p ? p.getAttribute('w14:paraId') : null;
+  // WHY (review, same bug as M-4a): a reply written by real Word has its OWN
+  // commentRangeStart/End/Reference in document.xml. Removing only the body
+  // left those marks pointing at nothing (Word's "unreadable content" repair
+  // prompt). Tolerant: an app-made reply has no anchor, so nothing is removed.
+  const replyRawId = target.getAttribute('w:id');
+  if (replyRawId !== null && removeCommentRangeAndReference(archive.documentDoc, replyRawId, true)) {
+    archive.documentChanged = true;
+  }
   removeElement(target);
   archive.commentsChanged = true;
   if (paraId) {
@@ -1730,13 +1787,15 @@ async function collectDanglingRIds(bytes: Buffer): Promise<Set<string>> {
   } catch {
     return new Set();
   }
-  const documentFile = zip.file('word/document.xml');
-  if (!documentFile) return new Set();
-  const relsFile = zip.file('word/_rels/document.xml.rels');
-  const [documentXml, relsXml] = await Promise.all([
-    documentFile.async('string'),
-    relsFile ? relsFile.async('string') : Promise.resolve(null),
-  ]);
+  let documentXml: string | null;
+  let relsXml: string | null;
+  try {
+    documentXml = await readPartBounded(zip, 'word/document.xml');
+    relsXml = await readPartBounded(zip, 'word/_rels/document.xml.rels');
+  } catch {
+    return new Set();
+  }
+  if (documentXml === null) return new Set();
   const relIds = new Set<string>();
   if (relsXml) {
     for (const el of elementsByTag(parseXml(relsXml), 'Relationship')) {
@@ -1759,15 +1818,17 @@ async function verifyOoxmlWiring(bytes: Buffer, originalBytes: Buffer): Promise<
   } catch {
     return false;
   }
-  const documentFile = zip.file('word/document.xml');
-  const contentTypesFile = zip.file('[Content_Types].xml');
-  if (!documentFile || !contentTypesFile) return false;
-  const relsFile = zip.file('word/_rels/document.xml.rels');
-  const [documentXml, contentTypesXml, relsXml] = await Promise.all([
-    documentFile.async('string'),
-    contentTypesFile.async('string'),
-    relsFile ? relsFile.async('string') : Promise.resolve(null),
-  ]);
+  let documentXml: string | null;
+  let contentTypesXml: string | null;
+  let relsXml: string | null;
+  try {
+    documentXml = await readPartBounded(zip, 'word/document.xml');
+    contentTypesXml = await readPartBounded(zip, '[Content_Types].xml');
+    relsXml = await readPartBounded(zip, 'word/_rels/document.xml.rels');
+  } catch {
+    return false; // too large / corrupt: fail verification, which rolls back
+  }
+  if (documentXml === null || contentTypesXml === null) return false;
 
   const relIds = new Set<string>();
   if (relsXml) {
@@ -1919,9 +1980,13 @@ export async function moveDocxComment(args: {
       } catch {
         return false;
       }
-      const documentFile = zip.file('word/document.xml');
-      if (!documentFile) return false;
-      const documentXml = await documentFile.async('string');
+      let documentXml: string | null;
+      try {
+        documentXml = await readPartBounded(zip, 'word/document.xml');
+      } catch {
+        return false;
+      }
+      if (documentXml === null) return false;
       if (countAttrOccurrences(documentXml, 'w:commentRangeStart', 'w:id', rawId) !== 1) return false;
       if (countAttrOccurrences(documentXml, 'w:commentRangeEnd', 'w:id', rawId) !== 1) return false;
       if (countAttrOccurrences(documentXml, 'w:commentReference', 'w:id', rawId) !== 1) return false;
@@ -1997,12 +2062,37 @@ export async function deleteDocxComment(args: {
       } catch {
         return false;
       }
-      const documentFile = zip.file('word/document.xml');
-      if (documentFile) {
-        const documentXml = await documentFile.async('string');
-        if (countAttrOccurrences(documentXml, 'w:commentRangeStart', 'w:id', rawId) !== 0) return false;
-        if (countAttrOccurrences(documentXml, 'w:commentRangeEnd', 'w:id', rawId) !== 0) return false;
-        if (countAttrOccurrences(documentXml, 'w:commentReference', 'w:id', rawId) !== 0) return false;
+      // WHY (review M-4a): check every comment the delete removed (the root
+      // AND its replies), not just the root — Word anchors each reply in
+      // document.xml with its own markers. Removed ids = ids in the original
+      // comments.xml that are no longer in the new one.
+      let documentXml: string | null;
+      let originalCommentsXml: string | null;
+      let newCommentsXml: string | null;
+      try {
+        documentXml = await readPartBounded(zip, 'word/document.xml');
+        newCommentsXml = await readPartBounded(zip, 'word/comments.xml');
+        originalCommentsXml = await readPartBounded(await JSZip.loadAsync(originalBytes), 'word/comments.xml');
+      } catch {
+        return false;
+      }
+      const idsOf = (xml: string | null): Set<string> =>
+        new Set(
+          xml === null
+            ? []
+            : elementsByTag(parseXml(xml), 'w:comment')
+                .map((el) => el.getAttribute('w:id'))
+                .filter((v): v is string => v !== null)
+        );
+      const stillThere = idsOf(newCommentsXml);
+      const removedIds = [...idsOf(originalCommentsXml)].filter((id) => !stillThere.has(id));
+      if (!removedIds.includes(rawId)) removedIds.push(rawId);
+      if (documentXml !== null) {
+        for (const id of removedIds) {
+          if (countAttrOccurrences(documentXml, 'w:commentRangeStart', 'w:id', id) !== 0) return false;
+          if (countAttrOccurrences(documentXml, 'w:commentRangeEnd', 'w:id', id) !== 0) return false;
+          if (countAttrOccurrences(documentXml, 'w:commentReference', 'w:id', id) !== 0) return false;
+        }
       }
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;

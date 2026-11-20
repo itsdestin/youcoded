@@ -1,4 +1,4 @@
-import type { ChatAction, SessionChatState } from './chat-types';
+import type { ChatAction, SessionChatState, TimelineEntry } from './chat-types';
 
 type LocalUserAction = Extract<ChatAction, { type: 'USER_PROMPT' | 'UNSENT_RETAINED' }>;
 
@@ -23,7 +23,7 @@ export function localUserMessage(session: SessionChatState, action: LocalUserAct
   return {
     ...session,
     timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}),
-      ...(action.sendTransport ? { sendTransport: action.sendTransport } : {}) }],
+      ...(action.sendTransport ? { sendTransport: action.sendTransport } : {}), sentAfterTurn: lastTurnId(session.timeline) }],
     // WHY: preserve upstream addressed-Stop fencing; a new send is not the old recorded turn.
     transcriptTurnUuid: undefined,
     isThinking: true,
@@ -33,4 +33,11 @@ export function localUserMessage(session: SessionChatState, action: LocalUserAct
     // Only an admitted new prompt clears the previous error/park/prefill state.
     attentionState: 'ok', errorMessage: null, errorCode: null, errorKind: null, stallWarning: null, stalledSince: null, promptProcessing: null,
   };
+}
+
+/** The reply a new bubble is drawn after ('' = none yet). WHY (2026-11-18): stale-sends.ts puts a settled bubble straight back after it,
+ *  by identity — reply times are when a reply LAST changed, and a phone's clock may not match the computer's. Stops at the first reply found. */
+function lastTurnId(timeline: readonly TimelineEntry[]): string {
+  for (let i = timeline.length - 1; i >= 0; i--) { const e = timeline[i]; if (e.kind === 'assistant-turn') return e.turnId; }
+  return '';
 }

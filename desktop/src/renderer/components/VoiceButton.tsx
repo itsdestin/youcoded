@@ -58,6 +58,7 @@ const NOTICE_COPY: Record<VoiceNotice, { title: string; body: string }> = {
 };
 import { ErrorState, FoldRow, Tooltip } from './ui';
 import { getCapabilities } from '../platform';
+import { featureWorks } from '../feature-gate';
 import { useScreenOpen } from '../shoot-mode';
 import VocabularyPanel from './voice/VoiceVocabulary';
 
@@ -170,7 +171,12 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
   // WHY: a one-action menu added a click and an unwanted floating pill. Right-click
   // opens the approved editor directly, without calling the recording handler.
   // The capability/API guards keep desktop hints off phones and older hosts.
-  const preview = getCapabilities().nativeWindows
+  // WHY featureWorks (R-5 / V-2, Destin 2026-11-18): the editor used to hide itself on the phone only because
+  // `nativeWindows` happened to be false there. The device table now says so outright: the phone app's own speech engine
+  // cannot use custom words yet (row 'voice-words', not-yet), and a browser has no voice at all. The old capability
+  // check stays beside it so this can only ever show LESS than before, never more.
+  const preview = featureWorks('voice-words')
+    && getCapabilities().nativeWindows
     && typeof window.claude?.voiceVocabulary?.get === 'function'
     && typeof window.claude?.voiceVocabulary?.save === 'function'
     ? window.claude.voiceVocabulary : null;

@@ -36,6 +36,7 @@ import { sessionDiscovery } from './session-discovery';
 import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { ImagePreparer } from './harness/image-prepare';
+import { IMAGE_CACHE_DIR_NAME } from './harness/image-support';
 import { createResizeService } from './image-resize-service';
 import { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -289,7 +290,9 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // Shrunk copies of pictures too big for a model (image-prepare.ts). Profile-
   // private like the continuation store: userData, never NativeHome.
   // (Resize workers are per-job; nothing to stop at quit.)
-  const imagePreparer = new ImagePreparer(path.join(userDataDir, 'image-cache'), createResizeService().resize);
+  const imagePreparer = new ImagePreparer(path.join(userDataDir, IMAGE_CACHE_DIR_NAME), createResizeService().resize);
+  // WHY a startup sweep (card #66 f): copies were never deleted, up to 10 MB per provider switch.
+  void imagePreparer.sweepStale().catch(() => { /* best-effort cleanup */ });
   const nativeHost = new NativeSessionHost(
     new SessionStore(nativeHome),
     // Pass the per-turn opts (e.g. serialToolCalls for small local models) straight through.
