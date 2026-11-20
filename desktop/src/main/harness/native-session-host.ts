@@ -5554,6 +5554,8 @@ export class NativeSessionHost extends EventEmitter {
     // racing one).
     await this.destroyChildrenOf(sessionId);
     if (entry?.handoffChildDrains?.size) await Promise.all([...entry.handoffChildDrains]);
+    // WHY (R-4): a waiting report's id outlived its chat; cleared after children (they may queue one); reopen re-queues it from the ledger
+    this.pendingDeliveryParents.delete(sessionId);
     // G-1 (D2): closing the conversation kills its background commands and
     // says so on the card. The holder-takeover and session-exit paths pass
     // keepShells — the conversation is still open, just somewhere else — and

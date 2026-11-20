@@ -1,6 +1,7 @@
 // Registers window.__terminalRegistry so main-process executeJavaScript
 // can call getScreenText for the attention classifier's ~1s buffer reads.
 // Must run before any TerminalView mounts (which call registerTerminal).
+import { withoutSession, pendingModelAfterClose } from './state/closed-session-state';
 import { useModelModes } from './hooks/useModelModes';
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
@@ -634,6 +635,8 @@ function AppInner() {
   const [sessionModels, setSessionModels] = useState<Map<string, ModelAlias | 'unknown'>>(new Map());
   const currentModel: ModelAlias | 'unknown' = sessionId ? (sessionModels.get(sessionId) ?? 'unknown') : 'sonnet';
   const [pendingModel, setPendingModel] = useState<ModelAlias | null>(null);
+  // WHY (R-4): the session:destroyed handler is a mount-time closure, so it reads the open chat through a ref.
+  const openSessionIdRef = useRef<string | null>(null); openSessionIdRef.current = sessionId;
   const consecutiveFailures = useRef(0);
   // Fix: track whether a new user turn has started after the model switch.
   // Events from the in-flight turn (before the switch takes effect) use the
@@ -1366,6 +1369,9 @@ function AppInner() {
         next.delete(id);
         return next;
       });
+      // WHY (R-4): a closed chat's "viewed" mark and a still-pending model switch used to outlive it.
+      setViewedSessions((prev) => withoutSession(prev, id));
+      setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
       // WHY: free a closed session's file-pane entries. A resumed native chat reuses
       // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
@@ -2695,6 +2701,8 @@ function AppInner() {
     setNativePermissionModes((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setSessionModels((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
+    setViewedSessions((prev) => withoutSession(prev, id)); // WHY (R-4): same two tidy-ups as the session:destroyed handler
+    setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
     // WHY: drop the gone session's file-pane entries too (they were never freed).
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });

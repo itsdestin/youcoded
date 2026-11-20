@@ -11,6 +11,7 @@ import { SessionInfo, SessionProvider } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
+import { SessionCleanup, type CleanupFn } from './session-cleanup';
 import { NEW_SESSION } from '../shared/session-title';
 import { claudeStartMode, userDefaultMode, projectDefaultMode, refreshUserDefaultMode, refreshProjectDefaultMode } from './claude-start-mode';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
@@ -201,6 +202,12 @@ export class SessionManager extends EventEmitter {
   private readonly controlOptions: SessionManagerOptions;
   private controlSupport?: Promise<boolean>;
   private queueWorkerCalls = 0;
+  // WHY (R-4): one list of per-chat tidy-ups, run when the chat ends on ANY exit path below
+  // (destroy, worker crash, spawn failure, channel closed). Owners sign up with onSessionClose().
+  readonly cleanup = new SessionCleanup();
+
+  /** Run `fn` when chat `id` ends. Returns an un-register function. */
+  onSessionClose(id: string, fn: CleanupFn): () => void { return this.cleanup.register(id, fn); }
 
   constructor(options: SessionManagerOptions = {}) {
     super();
@@ -505,6 +512,8 @@ export class SessionManager extends EventEmitter {
         this.sessions.get(id)!.info.status = 'destroyed';
         this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
         this.emit('session-exit', id, 1);
+        // WHY (R-4): the registry runs right after the exit event on every exit path
+        this.cleanup.closeSession(id);
       }
     });
 
@@ -606,6 +615,8 @@ export class SessionManager extends EventEmitter {
           // WHY `stoppedAtExit`: if the process 'exit' event came first, the handoff entry is already gone, but a signal code from the
           // deliberately stopped PTY (e.g. 143) must still read as a clean stop, not as a crash.
           this.emit('session-exit', id, deliberate || stoppedAtExit ? 0 : msg.exitCode);
+          // WHY (R-4): the registry runs right after the exit event on every exit path
+          this.cleanup.closeSession(id);
           this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
           break;
       }
@@ -647,6 +658,8 @@ export class SessionManager extends EventEmitter {
         const exitingSession = this.sessions.get(id)!;
         exitingSession.info.status = 'destroyed';
         this.emit('session-exit', id, deliberateStop ? 0 : 1);
+        // WHY (R-4): the registry runs right after the exit event on every exit path
+        this.cleanup.closeSession(id);
         this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
       };
       channelClosed = decide;
@@ -741,6 +754,8 @@ export class SessionManager extends EventEmitter {
     // Uniform teardown: native sessions (no worker) still emit session-exit so
     // downstream cleanup (window release, remote broadcast) runs identically.
     this.emit('session-exit', id, 0);
+    // WHY (R-4): the registry runs right after the exit event on every exit path
+    this.cleanup.closeSession(id);
     if (session.worker) {
       try {
         session.worker.send({ type: 'kill' });
