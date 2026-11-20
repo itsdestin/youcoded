@@ -286,7 +286,7 @@
     "runSerializedTranscriptDestination": 1
   },
   "main/create-runtime.ts": {
-    "createRuntime": 1,
+    "createRuntime": 2,
     "publishNamingMode": 1,
     "askInSessionModel": 1,
     "cleanup": 2
@@ -459,8 +459,12 @@
     "withRetry": 1
   },
   "main/harness/image-prepare.ts": {
+    "sweepStale": 2,
     "shrinkBytes": 1,
-    "prepareUnguarded": 2
+    "prepareUnguarded": 3
+  },
+  "main/harness/image-support.ts": {
+    "readImageFromDisk": 1
   },
   "main/harness/local-prewarm.ts": {
     "start": 1
@@ -778,6 +782,12 @@
     "convert": 2,
     "makeFontData": 1
   },
+  "main/owned-lock.ts": {
+    "readOwner": 3,
+    "acquireOwnedLock": 1,
+    "release": 1,
+    "releaseSync": 1
+  },
   "main/pages/connections-store.ts": {
     "deleteSavedKey": 1,
     "prune": 1
@@ -852,6 +862,7 @@
     "upgradePluginFromGit": 1,
     "upgradePluginFromLocal": 2,
     "installFromGitSubdir": 1,
+    "discardFailedInstall": 1,
     "uninstallPlugin": 1
   },
   "main/prefs-service.ts": {
@@ -1065,8 +1076,8 @@
     "stop": 1,
     "configGet": 1,
     "cleanupStaleBackendErrorFiles": 2,
-    "acquireLock": 2,
-    "releaseLock": 1,
+    "noteBackupSkipped": 2,
+    "noteBackupRan": 1,
     "rsyncOrCp": 1,
     "logBackup": 2,
     "atomicWrite": 2,
@@ -1591,6 +1602,7 @@
     "fallBackToLocalRuntime": 1,
     "retireSocket": 1,
     "connectToHost": 1,
+    "uploadPastedImage": 1,
     "list": 1,
     "readFile": 1,
     "writeFile": 1,
