@@ -136,6 +136,8 @@ async function main() {
     const r = spawnSync('npx', ['vitest', 'run', 'tests/startup-dialogs.test.ts'], {
       cwd: desktop, stdio: 'inherit', env: { ...process.env, STARTUP_FIXTURE_DIR: outDir }, shell: process.platform === 'win32',
     });
+    // WHY: a replay that never ran (npx missing, vitest crashed) is a broken CHECK (exit 2), not a broken Claude Code.
+    if (r.error || r.status === null) throw r.error ?? new Error('the parser replay did not run');
     appOk = r.status === 0;
     say(appOk ? 'The app reads every fresh dialog correctly.' : 'The app does NOT read the fresh dialogs correctly — see the test output above.');
   }
