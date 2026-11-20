@@ -124,7 +124,7 @@ Cross-device sync is optional and has to be switched on. It needs a YouCoded acc
 
 **What the YouCoded server receives for this (a "live signal" connection, only while sync is on and you are signed in):**
 
-- **Your computer's name** (the name your operating system gives it, such as "Destin's Z13" or "Sam's MacBook"). *This often contains a person's real name.* It is shown on your other devices in "Your devices".
+- **Your computer's name** (the name your operating system gives it, such as "Alex's laptop" or "Sam's MacBook"). *This often contains a person's real name.* It is shown on your other devices in "Your devices".
 - **A device ID** (a random ID the app creates for that computer).
 - **Which sessions are open and which computer is holding each** (session IDs, the holding computer's name and ID, and a five-minute timer). This prevents two computers from continuing the same conversation at once and corrupting it.
 - **A "something changed here" signal.** It carries the name of the sync repository that changed. For a project folder, that name is built from the **project's folder name** (lowercased and tidied) plus a short code, so a project called "Tax Return 2026" shows as "tax-return-2026" plus a code. For your Personal sync, it is a fixed name.
