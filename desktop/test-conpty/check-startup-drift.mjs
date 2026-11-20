@@ -21,8 +21,10 @@
 //     [--app]    also replay the fresh captures through the app's own parser
 //                (vitest tests/startup-dialogs.test.ts) — "does the app still cope?"
 //     [--save]   replace the saved fixtures with the fresh ones (after a real update)
-// Exit 1 = something the app depends on changed (or a capture/replay failed);
-// the report says what. A body-wording change alone is reported but exits 0.
+// Exit 1 = users are affected (a capture failed, or the app's parser no longer reads
+// a dialog; without --app, anything the app depends on changed); 3 = changed, but
+// --app proved the app still reads it; 2 = the check crashed. The report says what.
+// A body-wording change alone is reported but exits 0.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -157,7 +159,18 @@ async function main() {
   // WHY removeTempTree: a cleanup failure must not decide the verdict — see its comment.
   await removeTempTree(outDir);
   if (tempInstall) await removeTempTree(tempInstall.dir);
-  process.exit(failed || breaking || !appOk ? 1 : 0);
+  // Exit codes (read by .github/workflows/cc-startup-drift.yml):
+  //   0  nothing the app depends on changed
+  //   1  users are affected: a capture failed, or the app's own parser no longer reads a dialog (--app), or (without
+  //      --app, where nobody checked the parser) anything the app depends on changed
+  //   3  something changed, but --app proved the app still reads every dialog: harmless, refresh the saved captures
+  //   2  the check itself crashed
+  // WHY 3 (2026-11-19, Destin: "only alert when users are affected"): for four days every phone alert was a dialog
+  // that moved a highlight or gained a sentence while the app read it fine.
+  process.exit(failed || !appOk ? 1 : breaking ? (has('app') ? 3 : 1) : 0);
 }
 
-await main();
+// WHY exit 2 on a crash (2026-11-19, Destin: alerts must tell a broken CHECK apart from a broken Claude Code): an
+// uncaught error would exit 1, the code for "users are affected", and send the wrong phone alert.
+const crashed = (e) => { console.error(e); process.exit(2); };
+await main().catch(crashed);

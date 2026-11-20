@@ -65,3 +65,28 @@ describe('cc-startup-drift workflow', () => {
     expect(yml.match(/check-startup-drift\.mjs --latest --app/g)?.length).toBe(2);
   });
 });
+
+// Destin, 2026-11-19: phone alerts only when users are affected, a repeat says so and how long, a broken check says
+// so, harmless changes are silent. Pins the wiring in all three daily Claude Code checks.
+describe('daily Claude Code checks alert through the shared drift-alert action', () => {
+  const wf = (f: string) => fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', f), 'utf8').replace(/\r/g, '');
+  const action = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'actions', 'drift-alert', 'action.yml'), 'utf8');
+  for (const f of ['cc-startup-drift.yml', 'cc-popup-drift.yml', 'cc-send-drift.yml']) {
+    it(`${f}: hands a verdict to the shared alert, which reads only run history`, () => {
+      const y = wf(f);
+      expect(y).toMatch(/uses: \.\/\.github\/actions\/drift-alert/);
+      expect(y).toMatch(/verdict: \$\{\{ steps\.check\.outputs\.verdict \}\}/);
+      expect(y).toContain(`workflow-file: ${f}`);
+      expect(y).not.toMatch(/https:\/\/ntfy\.sh/);   // every ping goes through the action, worded one way
+      expect(y).not.toMatch(/:\s*write/);
+    });
+  }
+  it('only the startup check has a harmless "changed" verdict (exit 3), and it does not fail the run', () => {
+    expect(wf('cc-startup-drift.yml')).toMatch(/"\$code" = 3 \] && \{ echo "verdict=changed"[^\n]*exit 0; \}/);
+  });
+  it('the alert words repeats with the day count and start date, and names a broken check', () => {
+    expect(action).toContain('Repeat — still not fixed, day $day (since $since)');
+    expect(action).toContain('the $CHECK check itself failed');
+    expect(action).toMatch(/ok\|changed\)[\s\S]*?Nothing to send: users are not affected/);
+  });
+});
