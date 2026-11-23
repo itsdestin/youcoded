@@ -70,7 +70,8 @@ export function CodeCommentPopover({ path, projectRoot }: Props) {
   }, [focusId]);
 
   const getAnchor = useCallback(() => {
-    if (!anchor) return null;
+    // A closed editor has nothing to measure (the box stays where it was).
+    if (!anchor || !anchor.view.dom.isConnected) return null;
     // null while CodeMirror has the line scrolled out of its drawn range — the
     // box then stays where it last was.
     const c = anchor.view.coordsAtPos(anchor.pos);

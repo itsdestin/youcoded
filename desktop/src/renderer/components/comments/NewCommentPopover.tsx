@@ -86,7 +86,11 @@ export function NewCommentPopover({ comment, getAnchor, boundsEl, onTextChange, 
   // viewer's own scroller does not bubble its scroll events to window.
   useEffect(() => {
     let frame = 0;
-    const onMove = () => {
+    const onMove = (e: Event) => {
+      // Only scrolls that can move the words (the viewer's own scroller or
+      // one around it) — never the chat, a terminal or this box's own text.
+      const t = e.target;
+      if (e.type === 'scroll' && boundsEl && t instanceof Node && t !== document && !t.contains(boundsEl)) return;
       if (frame) return;
       frame = requestAnimationFrame(() => { frame = 0; place(); });
     };
@@ -97,7 +101,7 @@ export function NewCommentPopover({ comment, getAnchor, boundsEl, onTextChange, 
       window.removeEventListener('scroll', onMove, { capture: true });
       window.removeEventListener('resize', onMove);
     };
-  }, [place]);
+  }, [place, boundsEl]);
 
   useEffect(() => { textRef.current?.focus(); }, []);
 
