@@ -432,7 +432,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     );
   } else if (loading || !data) {
     body = <LoadingState what="changelog" />;
-  } else if (updateStatus.update_available) {
+  } else if (updateStatus.update_available || data.entries.length > 0) {
+    // WHY entries even with no update waiting (Destin, 2026-11-22): the no-update view used to
+    // draw the raw file, so its "# Changelog" title, intro line and the empty "[Unreleased]"
+    // placeholder showed at the top of the official notes. The parsed entries drop all three,
+    // and both views now look the same. The raw-markdown branch below is only a fallback for a
+    // file with no version headings at all.
     // Filter by CHRONOLOGICAL position, not semver. CHANGELOG.md is authored
     // top-newest-bottom-oldest, so source order is release order. Semver math breaks
     // when a project resets its version numbers (e.g. YouCoded went 2.4.0 → 1.0.0);
@@ -440,7 +445,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // resets correctly.
     const currentIdx = data.entries.findIndex(e => e.version === updateStatus.current);
     let shown: ChangelogEntry[];
-    if (currentIdx === -1) {
+    if (!updateStatus.update_available) {
+      // No update waiting: every version, newest first.
+      shown = data.entries;
+    } else if (currentIdx === -1) {
       // User's current version isn't in the changelog (never-released local build,
       // stale file, etc.) — fall back to newest entry only.
       shown = data.entries.length > 0 ? [data.entries[0]] : [];
