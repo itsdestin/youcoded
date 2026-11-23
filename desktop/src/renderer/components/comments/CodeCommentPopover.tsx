@@ -17,7 +17,7 @@
 // unchanged (CodeCommentsRail + use-code-comment-anchors.ts, shown only in
 // Comments mode) — this component only covers the moment a FRESH draft is
 // being composed, while still in Reading mode.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NewCommentPopover } from './NewCommentPopover';
 import { useDocComments } from '../../state/doc-comments-store';
 import { visibleEditorFor } from '../artifact-views/cm/editor-registry';
@@ -28,8 +28,12 @@ interface Props {
   projectRoot?: string;
 }
 
+// WHY a document position, not a rect (comment-box fix, 2026-11-22): the
+// box reads its anchor live (NewCommentPopover's WHY) so it follows the code
+// while the editor scrolls; the position is the stable thing to keep.
 interface Anchor {
-  rect: DOMRect;
+  view: NonNullable<ReturnType<typeof visibleEditorFor>>;
+  pos: number;
   bounds: HTMLElement | null;
 }
 
@@ -56,21 +60,28 @@ export function CodeCommentPopover({ path, projectRoot }: Props) {
       ? Math.max(1, Math.min(comment.startLine, view.state.doc.lines))
       : null;
     const pos = !range.empty ? range.to : line != null ? view.state.doc.line(line).to : null;
-    const coords = pos != null ? view.coordsAtPos(pos) : null;
-    if (!coords) { setAnchor(null); return; }
+    if (pos == null) { setAnchor(null); return; }
     // CM6's editor host carries `data-artifact-viewer` (CodeEditorView.tsx) —
     // the same "viewer's own content area, never the window" bound
     // NewCommentPopover's own WHY requires.
     const bounds = view.dom.closest<HTMLElement>('[data-artifact-viewer]');
-    setAnchor({ rect: new DOMRect(coords.right, coords.bottom, 0, 0), bounds });
+    setAnchor({ view, pos, bounds });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per fresh draft (focusId); comments/path are looked up, not triggers
   }, [focusId]);
+
+  const getAnchor = useCallback(() => {
+    if (!anchor) return null;
+    // null while CodeMirror has the line scrolled out of its drawn range — the
+    // box then stays where it last was.
+    const c = anchor.view.coordsAtPos(anchor.pos);
+    return c ? new DOMRect(c.right, c.bottom, 0, 0) : null;
+  }, [anchor]);
 
   if (!draftComment || !anchor) return null;
   return (
     <NewCommentPopover
       comment={draftComment}
-      anchorRect={anchor.rect}
+      getAnchor={getAnchor}
       boundsEl={anchor.bounds}
       onTextChange={(t) => setCommentText(draftComment.id, t)}
       onDone={clearFocus}

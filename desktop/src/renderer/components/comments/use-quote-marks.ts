@@ -451,6 +451,16 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
       // guessed cause (error-message-standards.md).
       for (const c of textComments) setCommentStatus(c.id, 'unchecked');
     } else {
+      // WHY resolve everything first, then wrap from the END of the document
+      // backwards (comment-box fix, 2026-11-22): `points` is read once, before
+      // any wrapping, and wrapping SPLITS text nodes — the piece after a cut
+      // becomes a new node. Wrapped front-to-back, a second comment in the
+      // same run of text (words right after an existing highlight) still
+      // pointed at the old node, now too short, and silently got no highlight
+      // — and its new-comment box had nothing to sit under. Cutting a node
+      // never moves the text BEFORE the cut, so going backwards keeps every
+      // not-yet-wrapped point valid.
+      const toWrap: Array<{ c: DocComment; start: number; startPoint: TextPoint; endPoint: TextPoint }> = [];
       for (const c of textComments) {
         const sel: TextQuoteSelector = {
           type: 'TextQuoteSelector',
@@ -470,7 +480,10 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
         const startPoint = points[resolved.start];
         const lastPoint = points[resolved.end - 1];
         if (!startPoint || !lastPoint) continue; // defensive: resolveSelector's own offsets are always in range
-        const endPoint: TextPoint = { node: lastPoint.node, offset: lastPoint.offset + 1 };
+        toWrap.push({ c, start: resolved.start, startPoint, endPoint: { node: lastPoint.node, offset: lastPoint.offset + 1 } });
+      }
+      const wrapped = new Map<string, HTMLElement[]>();
+      for (const { c, startPoint, endPoint } of toWrap.sort((a, b) => b.start - a.start)) {
         const segs = wrapSegments(textRoot, startPoint, endPoint, () => {
           const mark = document.createElement('mark');
           mark.setAttribute(MARK_ATTR, '');
@@ -478,7 +491,12 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
           mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
           return mark;
         }, record);
-        if (segs.length) found.set(c.id, segs);
+        if (segs.length) wrapped.set(c.id, segs);
+      }
+      // The returned map keeps the comments' own order, as before.
+      for (const c of textComments) {
+        const segs = wrapped.get(c.id);
+        if (segs) found.set(c.id, segs);
       }
     }
   }
