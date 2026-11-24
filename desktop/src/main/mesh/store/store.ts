@@ -34,14 +34,15 @@ const writeSide0 = (fs: Fs, path: string, text: string): Promise<void> => writeF
 import { readCheckpoint, readCheckpointState, appendCheckpoint, writeCheckpoint, type Boundary, type Checkpoint } from './checkpoint';
 import { readSideFor, writeSideFor, keepBadSideFile, formatLine, parseFormat } from './sidefile';
 import { readMarksState, readPartial, readDamaged, setMarks } from './marks';
-import { resetHw, checkRollback, noteHw, lowerHwTo, readHw, type HwEnv } from './highwater';
+import { resetHw, checkRollback, noteHw, lowerHwTo, readHw, recordTakeovers, type HwEnv } from './highwater';
 import { Extras, bytesUnder } from './extras';
 import { asLine, isDiskFull, validateProofShape, ForeignTail, type TailFile } from './storeutil';
-import { setAsideTailLocked, readTailFile, readEpoch, tailWasProtected, LOST_TAIL, type TailEnv } from './tails';
+import { setAsideTailLocked, readTailFile, readEpoch, tailWasProtected, takeoverIds, lostTakeovers, LOST_TAIL, type TailEnv } from './tails';
 import { chainStep, defaultChainSeeds, hex, unhex, versionTag, type ChainSeedFn, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, type ReplyEndOptions } from './classify';
-import { HDR, REC, NONE, decodeRecord, indexHeader, recPos, type Rec } from './records';
-import { Parked } from './parked';
+import { HDR, REC, NONE, decodeRecord, indexHeader, recPos, unframeLines, type Rec } from './records';
+import { Parked, parseRejectedName, type RejectReason } from './parked';
+import { openEnv } from './envelope';
 import { Asides } from './asides';
 import { ControlStore, type ControlDamage, type ControlEntry } from './control';
 import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
@@ -109,7 +110,7 @@ export class ChatStore {
     this.stamp = ((CLASSIFIER_VERSION << 1) | ((this.replyOpts.apiErrorsEndReplies ?? true) ? 1 : 0)) >>> 0;
     this.tools = new BodyTools(this.fs, this.replyOpts);
     this.parkedStore = new Parked(this.fs, this.tools, { maxFiles: this.maxParkedFiles, maxBytes: this.maxParked, maxRejectedBytes: this.maxRejectedBytes, bytesUnder: (p) => this.bytesUnder(p) }, (st, from, lines) => this.applyLines(st, from, lines));
-    this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); }, ensureIndex: (d) => this.ensureIndex(d), resetHw: (k) => this.resetHwFor(k) });
+    this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); }, ensureIndex: (d) => this.ensureIndex(d), resetHw: (k) => this.resetHwFor(k), rejectParks: (d) => this.parkedStore.rejectAllOnDisk(d) });
     this.extras = new Extras(this.fs, this.tools, root, this.maxExtraBytes, this.maxExtrasBytes);
     this.control = new ControlStore(this.fs, nodePath.join(root, 'control'), { maxParked: o.maxParkedControl });
   }
@@ -396,7 +397,7 @@ export class ChatStore {
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv, marks, hw, rolledBack: null,
-      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir),
+      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
     };
     await this.restoreRedundancy(st);
     await this.checkRollback(st);
@@ -690,6 +691,10 @@ export class ChatStore {
    *  - 'parked'       a gap before `fromLine`: kept on disk, applied when the gap fills
    *  - 'not-a-prefix' some overlapping line differs from what the store holds; nothing was changed
    * Returns only after the write is fsynced (INV-18); throws on ENOSPC and the like.
+   *
+   * RULE FOR THE NEXT LAYER (round 7, F4; no behaviour here): the store cannot know WHO sent these lines. A park is sealed with the history (epoch) that is current when the store RECEIVES it, so a
+   * late append from a host that was already deposed, arriving after the takeover, is sealed with the NEW history and will drain onto the new host's lines. The caller (the replicator) must therefore
+   * fence the deposed host BEFORE calling append(): refuse its lines at the door, never hand them to the store. The store only fences parks that were RECEIVED before a takeover or a quarantine.
    */
   append(version: VersionId, segment: number, fromLine: number, lines: Uint8Array[]): Promise<AppendResult> {
     return this.guard(() => {
@@ -943,15 +948,20 @@ export class ChatStore {
    * Parks that were found NOT to be a prefix and set aside (N12b). A caller that was told `parked` must read this to learn that the lines
    * it believed safe were moved here instead. Nothing here is deleted; the files are framed line lists (see `unframeLines`).
    */
-  rejectedList(version: VersionId): Promise<{ name: string; fromLine: number; bytes: number }[]> {
+  rejectedList(version: VersionId): Promise<{ name: string; fromLine: number; lines: number | null; bytes: number; reason: RejectReason | 'unknown' }[]> {
     return this.guard(() => {
       const key = this.keyOf(version);
       return this.exclusive(async () => {
         const dir = nodePath.join(this.vdir(key), 'rejected');
         const out = [];
         for (const name of (await this.fs.readdir(dir)).sort()) {
-          if (!/^\d{16}-[0-9a-f]{16}\.park$/.test(name)) continue;
-          out.push({ name, fromLine: parseInt(name.slice(0, 16), 10), bytes: await this.tools.fileSize(nodePath.join(dir, name)) });
+          const p = parseRejectedName(name);
+          if (!p) continue;
+          // WHY `lines` can be null: a rejected park that rotted is kept as it is and cannot be counted; the caller resends from `fromLine` either way
+          const raw = await this.fs.readFile(nodePath.join(dir, name));
+          const env = raw ? openEnv(raw, { role: 'park', version: key }) : null;
+          const fr = env && env.kind === 'ok' ? unframeLines(env.payload) : null;
+          out.push({ name, fromLine: parseInt(p.name.slice(0, 16), 10), lines: fr ? fr.length : null, bytes: raw ? raw.length : 0, reason: p.reason });
         }
         return out;
       });
@@ -965,7 +975,7 @@ export class ChatStore {
       return this.exclusive(() => this.mutate(key, async () => {
         const st = await this.state(version);
         if (!st.parked.has(name)) return false;
-        if (!(await this.parkedStore.moveAway(st, nodePath.join(st.dir, 'parked', name), name))) throw new StoreError('limit', 'rejected/ is full');
+        if (!(await this.parkedStore.moveAway(st, nodePath.join(st.dir, 'parked', name), name, 'released'))) throw new StoreError('limit', 'rejected/ is full');
         return true;
       }));
     });
@@ -1102,7 +1112,7 @@ export class ChatStore {
     });
   }
   private tailEnv(): TailEnv {
-    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n) };
+    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n), recordTakeovers: (st) => recordTakeovers(this.hwEnv(), st, st.tailsShown) };
   }
 
   /** A previously set-aside tail, with the chain values around it, or null. Pass `version` to look in one version only. */
@@ -1453,6 +1463,6 @@ export class ChatStore {
   private rolledBackOf(st: VState): { from: number; had: number } | null { return st.rolledBack && st.count < st.rolledBack.had ? st.rolledBack : null; }
 
   private headOf(st: VState): Head {
-    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv, rolledBack: this.rolledBackOf(st) };
+    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv, rolledBack: this.rolledBackOf(st), rejectedParks: st.rejected, lostTakeovers: lostTakeovers(st) };
   }
 }

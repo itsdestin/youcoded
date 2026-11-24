@@ -10,6 +10,9 @@ import { StoreError } from './errors';
 import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { isDiskFull } from './storeutil';
+import { cutAwayBranchHit } from './tails';
+import { readHw } from './highwater';
+import { hex } from './chain';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, headerTag, indexHeader, recPos, type Rec } from './records';
 
 const MIB = 1024 * 1024;
@@ -353,6 +356,10 @@ export class BodyTools {
       let pos = start.off;
       let stopAt = include;              // slots [evLines, stopAt) end up in the new index
       let ambiguous = false;
+      // WHY (round 7, F1): set when this rebuild SERVES something that a valid file contradicts: a valid index record whose chain value differs from the line derived from the body (the pure path), or a
+      // checkpoint whose chain value differs from the rebuilt one and is rewritten. Those are the two relaxations of rounds 5 and 6; they are right when ONE file is older, and wrong when TWO files are older
+      // together (an older index with older bodies and a newer checkpoint reads as "the checkpoint is the odd one out"). The cut-away-branch check below is what tells the two apart.
+      let overrode = false;
       let derivedAny = false;            // some slot had no valid record and was derived from its body alone (review 6: then nothing but the checkpoint vouches for it)
       const out: Buffer[] = []; let outFrom = evLines;
       const flush = async (to: number) => { if (out.length) { await nf.write(Buffer.concat(out), recPos(outFrom)); out.length = 0; } outFrom = to; };
@@ -395,6 +402,7 @@ export class BodyTools {
         const sb = { ...s };
         const { recs } = this.encodeBatch(runtime, s, [line], sum);
         let d = decodeRecord(recs, 0)!;
+        if (pure) { const seen = await refRec(i); if (seen && !seen.rec.h.equals(d.h)) overrode = true; }   // a valid record of another chain was not used (round 7, F1)
         if (o) {
           const rawOk = d.h.equals(o.rec.h);
           const fieldsSame = d.c.equals(o.rec.c) && d.convCount === o.rec.convCount && d.kind === o.rec.kind && d.confirms === o.rec.confirms && d.candN === o.rec.candN && d.candId === o.rec.candId && d.conversation === o.rec.conversation;
@@ -429,6 +437,7 @@ export class BodyTools {
         // all the way, so the checkpoint is the odd one out. Time only runs one way (a takeover replaces a history, never the reverse), so a checkpoint of another history is an OLDER copy
         // from before a takeover; it is not evidence and is rewritten from the index below. Rot cannot look like this: a rotted body breaks its record's chain value (that is `firstBad`). Only when the index is strictly AHEAD of the checkpoint: a checkpoint that states the head itself and disagrees is still quarantined (second-round N1 test).
         if ((!lr || !lr.h.equals(ckpt.h)) && (pure || firstBad !== null || derivedAny || ckpt.count >= include)) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
+        if (!lr || !lr.h.equals(ckpt.h)) overrode = true;   // the checkpoint is overruled by an index and bodies that agree with each other (round 7, F1)
       }
       if (ckpt && ckpt.count > include) throw new Damaged(`the checkpoint vouches for ${ckpt.count} lines but the body holds ${include}`);
       // nothing at all is verified (no valid record, and the one stretch the checkpoint covers does not match): refused as damaged, the whole version is kept intact in aside/
@@ -438,6 +447,19 @@ export class BodyTools {
       await nf.truncate(recPos(count));        // DESTRUCTIVE-OK(scratch): cuts only the scratch file
       // lines past what is vouched for: never acknowledged when a checkpoint says so, possibly acknowledged when it does not
       const lastRec = count > 0 ? await this.recFromFile(nf, count - 1) : null;
+      // WHY (round 7, F1, the class behind review 7's finding): the two relaxations above cannot know WHICH side of a disagreement is the older one; "time only runs one way" holds for one older file but
+      // not for two put back together. What CAN be proven, from evidence an older-file fault cannot forge, is whether the head we are about to serve lies on a history a takeover REPLACED: the takeover's
+      // tail file holds every line the old host had past the cut, so the chain value after each of them is on file (tails.ts cutAwayBranchHit). Older files from before a takeover are either shorter than
+      // the cut (a shared prefix: correct) or run along that tail's branch (a hit). So when a file was overridden and the head is on a replaced branch, or the evidence needed to say cannot be read
+      // (a tail missing or unreadable, or the high-water record counting takeovers tails/ no longer shows), the version stays LOUD: quarantined, recopied from a peer later. PROVEN: a served head is never a
+      // point of a replaced history after an override. NOT claimed: all files older together with the tails also gone (the lost-tails report above says so), or a restore from before a quarantine.
+      if (overrode && lastRec && count > 0) {
+        const key = nodePath.basename(dir);
+        const hv = (await readHw(this.fs, nodePath.dirname(nodePath.dirname(dir)), key)).st.value;
+        const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(lastRec.h), hv?.takeovers ?? 0);
+        if (hit === 'unproven') throw new Damaged('the files disagree and the takeover records that could say which are missing or unreadable: refusing to pick one');
+        if (hit !== null) throw new Damaged(`the index and bodies end where takeover ${hit} cut an older history away, while the checkpoint states another: older files put back together, refusing to serve them`);
+      }
       const endOff = lastRec ? lastRec.offset + lastRec.len : 0;
       const surplusLines = await this.countWholeLines(dir, endOff);
       let partial: { fromLine: number; lost: number } | null = null;

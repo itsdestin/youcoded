@@ -35,11 +35,18 @@
 //   (4) WHAT REMAINS UNDETECTABLE: a rollback of the WHOLE STORE ROOT (the high-water record goes back with it), a rollback to a head the record never saw (it is raised at the END of an append call once the head is
 //       HW_EVERY = 256 lines past the mark, at close and at every eviction and restore: after any ACKNOWLEDGED call the record is at most 255 lines behind, and a snapshot taken while a call is still in flight can be 255 plus that call's
 //       size ahead of it; review 6 B3 corrected the old wording "up to 255"; sixth-round.test.ts pins the 255/256 boundary), and a set-aside tail or extra created after a rolled-back folder's state (they go with the folder;
-//       the rolled-back HEAD is the report).
+//       the rolled-back HEAD is the report), plus (round 7) ALL of a version's files put back older together with its tails/ also gone and the high-water record also lost or older, and a restore from before a
+//       quarantine (the quarantine resets the high-water head to 0 on purpose).
 //
-// THE HISTORY RULE (review 6, B1): a version's line N can change only through a takeover (setAsideTail), and a parked append is only ever drained onto the history it was parked against. The history is named by
-// the takeovers' `.begun` markers (tails.ts readEpoch, read from disk), sealed into every park, and checked at every drain; at a takeover the old parks are also moved to rejected/ (kept). Eviction, restore, a
-// quarantine and a recopy refill the SAME lines, so they are not history changes. The tail's own rule (B2): the intent marker is written after the tail is durable and BEFORE the cut or any park is touched.
+// THE HISTORY RULE (review 6, B1; widened in round 7): a version's line N can change only through a takeover (setAsideTail) or a quarantine / set-aside followed by a recopy, and a parked append is only
+// ever drained onto the history it was parked against. The history is named by the takeovers' `.begun` markers AND the version's aside folders (tails.ts readEpoch, read from disk), sealed into every park, and
+// checked at every drain; at a takeover or a quarantine the old parks are also moved to rejected/ (kept, with the reason in the file name: takeover, quarantine, stale-history, conflict, damaged, released; head().rejectedParks
+// counts them). Eviction and restore refill the SAME lines, so they are not history changes. (Rounds 6 and earlier said a quarantine and a recopy were not history changes: that was wrong, a peer's recopy can be another history.)
+// What the store does NOT know: who sent a late park (the replicator must fence a deposed host before append(), store.ts).
+// The tail's own rule (B2): the intent marker is written after the tail is durable and BEFORE the cut or any park is touched. Round 7 (F3): the takeover is also COUNTED in the high-water record (outside the chat
+// folder) before the cut, so losing the tail and its markers, or the whole tails/ folder, is seen as "recorded more than shown" (head().lostTakeovers) and answered with `corrupt`, never with an empty tail.
+// THE OVERRIDE RULE (round 7, F1): when a rebuild serves something that a valid file contradicts (it ignores a valid index record, or overrules the checkpoint) it must prove the head it serves is not a point of a
+// history a takeover replaced (recovery.ts, tails.ts cutAwayBranchHit); if it cannot prove it, the version is quarantined. A single older index or checkpoint is repaired; two older files put back together are loud.
 //
 // `inventory.test.ts` fails when the store writes a name that has no row; `fuzz.test.ts` and `matrix.test.ts` apply each of the five faults to every file of a real folder.
 //
@@ -90,7 +97,7 @@ export const VERSION_ROWS: InventoryRow[] = [
   VF('intent.bad', 'aside\\.intent\\.bad-\\d+', 'none (kept raw copy)', KEPT),
   VF('parked', 'parked/\\d{16}-[0-9a-f]{16}\\.park', 'the envelope: role, version key and an id of POSITION, LINE HASH and HISTORY (the takeover epoch, tails.ts) sealed inside the checksum; the drain compares the id with the name and the current epoch, and the hash with the lines',
     A('moved to rejected/ (kept); a resend parks again', 'parked files never change: the same bytes', 'another version, another position, another lines-hash than the name says, or ANOTHER HISTORY (parked before a takeover, review 6 B1): a swapped, overwritten or stale park: moved to rejected/ (kept), never applied; the head stays where it is, so the true lines are still wanted', 'provisional by definition (limit 3): the caller keeps ownership until the head passes it', 'fails the CRC: as rotted')),
-  VF('rejected', 'rejected/(older-\\d+-)?\\d{16}-[0-9a-f]{16}\\.park', 'length-framed lines with a CRC', KEPT),
+  VF('rejected', 'rejected/((takeover|quarantine|stale-history|conflict|damaged|released)--)?(older-\\d+-)?\\d{16}-[0-9a-f]{16}\\.park', 'length-framed lines with a CRC', KEPT),
   VF('tails', 'tails/[0-9a-f]{8,128}\\.tail', 'the envelope: role, version key and TAKEOVER ID sealed inside the checksum, then a header and framed lines (own CRC)',
     A('reads throw `corrupt`; the cut is never repeated on its word', 'a tail is written once and never changes: the same bytes', 'a tail of another version OR another takeover id (review 5, F2) is refused with `corrupt` for this id; nothing is moved', 'with a .begun or .done marker (the intent is written before the cut): tail() and every retry throw `corrupt`, nothing is written over the evidence; with no marker nothing was cut yet and the set-aside simply runs', 'fails its CRC: as rotted')),
   VF('begun', 'tails/[0-9a-f]{8,128}\\.begun', 'existence only; written AFTER the tail is durable and read back and BEFORE the cut or any park is touched (review 6, B2); the sorted names of these markers are the version\'s history identity (tails.ts readEpoch)',

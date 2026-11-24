@@ -422,7 +422,8 @@ describe('N11/N12/N17: kept folders are budgeted and visible, nothing kept is pr
     expect(await s.releaseParked(V(1), pl[0].name)).toBe(true);
     expect(await s.parkedList(V(1))).toEqual([]);
     const rl = await s.rejectedList(V(1));
-    expect(rl.map((r) => r.name)).toEqual([pl[0].name]);
+    expect(rl.map((r) => r.name)).toEqual([`released--${pl[0].name}`]);   // round 7: the reason is the first part of the kept file's name
+    expect(rl.map((r) => r.reason)).toEqual(['released']);
     expect(await s.releaseParked(V(1), pl[0].name)).toBe(false);
     // a park that later turns out not to be a prefix shows up in rejectedList instead of vanishing
     expect(await s.append(V(1), 0, 5, rows(2, 'other'))).toBe('parked');

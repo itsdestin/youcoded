@@ -25,7 +25,9 @@ const LADDER_MAX = 12;
 const ROLE = 'highwater';
 
 /** `ladder`: [line count, first 16 hex digits of the raw chain value there], ascending; the first entry is always count 0 (the seed). */
-interface HwValue { count: number; ladder: [number, string][]; evLines: number; evBytes: number }
+interface HwValue { count: number; ladder: [number, string][]; evLines: number; evBytes: number;
+  /** Round 7 (F3): how many takeovers (set-aside tails) this version has begun, as counted from tails/ when each began. Only ever rises. tails/ showing FEWER than this means takeover evidence was lost. Absent in older records = 0. */
+  takeovers?: number }
 export interface HighWater { st: SlotState<HwValue>; /** the head count this process last wrote or read */ noted: number }
 
 export const hwPath = (root: string, key: string): string => nodePath.join(root, 'highwater', `${key}.hw`);
@@ -34,7 +36,7 @@ export async function readHw(fs: Fs, root: string, key: string): Promise<HighWat
   const st = await readSlots<HwValue>(fs, hwPath(root, key), ROLE, key);
   const v = st.value;
   // a statement that contradicts itself is no evidence at all
-  const ok = v && Number.isSafeInteger(v.count) && v.count >= 0 && Array.isArray(v.ladder) && v.ladder.every((p) => Array.isArray(p) && Number.isSafeInteger(p[0]) && /^[0-9a-f]{16}$/.test(p[1]) && p[0] <= v.count) && Number.isSafeInteger(v.evLines) && Number.isSafeInteger(v.evBytes);
+  const ok = v && Number.isSafeInteger(v.count) && v.count >= 0 && Array.isArray(v.ladder) && v.ladder.every((p) => Array.isArray(p) && Number.isSafeInteger(p[0]) && /^[0-9a-f]{16}$/.test(p[1]) && p[0] <= v.count) && Number.isSafeInteger(v.evLines) && Number.isSafeInteger(v.evBytes) && (v.takeovers === undefined || (Number.isSafeInteger(v.takeovers) && v.takeovers >= 0));
   if (!ok) { st.value = null; if (st.kind === 'ok') st.kind = 'bad'; }
   return { st, noted: st.value ? st.value.count : 0 };
 }
@@ -43,7 +45,7 @@ export async function readHw(fs: Fs, root: string, key: string): Promise<HighWat
 async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, count: number, h16: string, seed16: string, ev: { lines: number; bytes: number }): Promise<void> {
   const cur = hw.st.value;
   const base: HwValue = cur ?? { count: 0, ladder: [[0, seed16]], evLines: 0, evBytes: 0 };
-  const next: HwValue = { count: Math.max(base.count, count), ladder: base.ladder.slice(), evLines: ev.lines, evBytes: ev.bytes };
+  const next: HwValue = { count: Math.max(base.count, count), ladder: base.ladder.slice(), evLines: ev.lines, evBytes: ev.bytes, takeovers: base.takeovers ?? 0 };
   if (count > (next.ladder[next.ladder.length - 1]?.[0] ?? -1)) next.ladder.push([count, h16]);
   while (next.ladder.length > LADDER_MAX) next.ladder.splice(1, 1);   // keep the seed point and the newest
   await mkdirDurable(fs, nodePath.dirname(hwPath(root, key)));
@@ -60,7 +62,7 @@ async function lowerHw(fs: Fs, root: string, key: string, hw: HighWater, count: 
   if (count > 0) { const h = await ladderAt(count); if (h) ladder.push([count, h]); }
   await mkdirDurable(fs, nodePath.dirname(hwPath(root, key)));
   // DESTRUCTIVE-OK(verified-record): the store shortened the version itself, so the old, higher statement is no longer true; slotfile.ts overwrites only the safe slot
-  await writeSlot(fs, hwPath(root, key), ROLE, key, hw.st, { count, ladder, evLines: Math.min(cur?.evLines ?? 0, count), evBytes: cur && cur.evLines <= count ? cur.evBytes : 0 });
+  await writeSlot(fs, hwPath(root, key), ROLE, key, hw.st, { count, ladder, evLines: Math.min(cur?.evLines ?? 0, count), evBytes: cur && cur.evLines <= count ? cur.evBytes : 0, takeovers: cur?.takeovers ?? 0 });   // the takeover count is carried: lowering a head never un-happens a takeover
   hw.noted = count;
 }
 
@@ -108,6 +110,18 @@ export async function noteHw(e: HwEnv, st: VState, force = false): Promise<void>
 /** The store shortened the version itself (a set-aside tail): state the lower truth so it is not mistaken for a rollback. */
 export async function lowerHwTo(e: HwEnv, st: VState, count: number): Promise<void> {
   try { await lowerHw(e.fs, e.root, st.key, st.hw, count, hex(st.seeds.raw).slice(0, 16), async (n) => (await e.readRecordHash(st, n))?.slice(0, 16) ?? null); } catch (err) { advisoryFailed(err); }
+}
+/**
+ * Round 7 (F3): state that `shown` takeovers have begun (the number tails/ shows right now). Unlike every other write here this is NOT advisory: the caller cuts only after it succeeded, because the record is
+ * the one place a loss of tails/ can still be seen. It never lowers the number, and it does not touch the head count or the ladder.
+ */
+export async function recordTakeovers(e: HwEnv, st: VState, shown: number): Promise<void> {
+  const cur = st.hw.st.value;
+  if ((cur?.takeovers ?? 0) >= shown) return;
+  const base: HwValue = cur ?? { count: 0, ladder: [[0, hex(st.seeds.raw).slice(0, 16)]], evLines: 0, evBytes: 0 };
+  await mkdirDurable(e.fs, nodePath.dirname(hwPath(e.root, st.key)));
+  // DESTRUCTIVE-OK(verified-record): a high-water statement that only raises the takeover count; slotfile.ts overwrites only the safe slot
+  await writeSlot(e.fs, hwPath(e.root, st.key), ROLE, st.key, st.hw.st, { ...base, takeovers: shown });
 }
 /** A quarantine or set-aside emptied the version on purpose. `seedHex` gives the version's seed (null: its registration is unreadable). */
 export async function resetHw(e: HwEnv, key: string, seedHex: () => Promise<string | null>): Promise<void> {

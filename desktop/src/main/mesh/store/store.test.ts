@@ -239,7 +239,7 @@ describe('set-asides', () => {
     expect((await s.head(V(1))).lines).toBe(1);
   });
 
-  it('setAsideDamaged moves the files to aside/ (kept), starts the version empty, keeps parked appends', async () => {
+  it('setAsideDamaged moves the files to aside/ (kept), starts the version empty, moves parked appends to rejected/ (they belong to the history that was set aside)', async () => {
     const lines = Array.from({ length: 5 }, (_, i) => cc.user('d' + i));
     const s = await openWith(t.dir);
     await s.append(V(1), 0, 0, lines.slice(0, 3));
@@ -247,7 +247,10 @@ describe('set-asides', () => {
     const { asideName } = await s.setAsideDamaged(V(1));
     expect((await s.head(V(1))).lines).toBe(0);
     expect(fs.readdirSync(path.join(t.dir, 'aside', asideName)).sort()).toContain('index.bin');
-    expect(await s.append(V(1), 0, 0, lines.slice(0, 4))).toBe('ok'); // recopy; the parked tail joins
+    expect(await s.append(V(1), 0, 0, lines.slice(0, 4))).toBe('ok'); // recopy; the old park does NOT join (round 7, F2: a recopy may be another history)
+    expect((await s.head(V(1))).lines).toBe(4);
+    expect((await s.rejectedList(V(1))).map((r) => r.reason)).toEqual(['quarantine']);
+    expect(await s.append(V(1), 0, 4, lines.slice(4))).toBe('ok');     // the caller resends the rejected line
     expect((await s.head(V(1))).lines).toBe(5);
     expect((await s.setAsideDamaged(V(1))).asideName).toBe(`${V(1).toString('hex')}-2`);
   });

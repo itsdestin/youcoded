@@ -6,13 +6,16 @@
 //      markers in tails/; the sorted list of those names IS the version's history identity (its "epoch", readEpoch below). A parked append is sealed with the epoch it was parked in
 //      (parked.ts), and is applied only when the version is still in that epoch: a park is only ever drained onto the history it was parked against. Because the epoch is READ FROM DISK
 //      (not remembered), it holds after any crash, and a lost or extra marker changes it in the SAFE direction (parks are refused, kept in rejected/, never applied).
+//      (Round 7, F2) A QUARANTINE OR SET-ASIDE IS A HISTORY CHANGE TOO. What is left in the folder after one is whatever a peer sends next, and nothing says it is the history the parks were made against. So the
+//      epoch ALSO names the version's aside folders (aside/<vhex>-<n>, which live OUTSIDE the version folder and are never deleted): a quarantine changes the epoch the moment its aside folder exists, and
+//      the parks are then moved to rejected/ with the reason `quarantine` (asides.ts). Parks made AFTER the quarantine belong to the new, empty history; the caller (the replicator) owns what it sends to it.
 //  (T) TAIL: after ANY crash point in setAsideTail and any number of retries, either the tail file is complete (and marked), or its loss is reported (`corrupt`). A retry never writes an
 //      empty tail over a lost one: a tail is only ever written while NO marker exists, and no marker exists only until the tail is durable and has been read back.
 import * as nodePath from 'node:path';
 import { createHash } from 'node:crypto';
 import { writeFileAtomic, mkdirDurable, type Fs } from './fsio';
 import { StoreError } from './errors';
-import { hex } from './chain';
+import { hex, unhex, chainStep } from './chain';
 import { encodeTailFile, decodeTailFile, type TailFile } from './storeutil';
 import type { VState } from './vstate';
 import type { Parked } from './parked';
@@ -24,10 +27,50 @@ export const GENESIS_EPOCH = 'genesis';
 const tailsDir = (dir: string): string => nodePath.join(dir, 'tails');
 const marker = (dir: string, id: string, ext: 'begun' | 'done'): string => nodePath.join(tailsDir(dir), `${id}.${ext}`);
 
-/** The history identity of the version folder `dir`: the takeovers that have begun, read from disk. */
+/**
+ * The history identity of the version folder `dir`: the takeovers that have begun (tails/*.begun) AND the quarantines / set-asides it has had (aside/<vhex>-[q]<n>), read from disk.
+ * WHY the aside folders (round 7, F2): quarantine moves the index and bodies away but used to leave the parks, so a park made against history A drained onto a recopy of history B. The aside folder is
+ * created BEFORE anything is moved (asides.ts) and lives outside the version folder, so the epoch changes first and the parks are refused from that moment, whatever a crash does next.
+ */
 export async function readEpoch(fs: Fs, dir: string): Promise<string> {
   const begun = (await fs.readdir(tailsDir(dir))).filter((n) => n.endsWith('.begun')).sort();
-  return begun.length === 0 ? GENESIS_EPOCH : createHash('sha256').update(begun.join('\n')).digest('hex').slice(0, 16);
+  const key = nodePath.basename(dir);
+  const asideRe = new RegExp(`^${key}-q?\\d+$`);
+  const asides = (await fs.readdir(nodePath.join(nodePath.dirname(nodePath.dirname(dir)), 'aside'))).filter((n) => asideRe.test(n)).sort().map((n) => `aside:${n}`);
+  const names = [...begun, ...asides];
+  return names.length === 0 ? GENESIS_EPOCH : createHash('sha256').update(names.join('\n')).digest('hex').slice(0, 16);
+}
+
+/** The takeover ids tails/ shows evidence of: any of `<id>.tail`, `<id>.begun`, `<id>.done`. */
+export async function takeoverIds(fs: Fs, dir: string): Promise<string[]> {
+  const ids = new Set<string>();
+  for (const n of await fs.readdir(tailsDir(dir))) { const m = /^([0-9a-f]+)\.(tail|begun|done)$/.exec(n); if (m) ids.add(m[1]); }
+  return [...ids].sort();
+}
+
+/**
+ * The cut-away branches (round 7, F1). A takeover's tail holds the lines the old host wrote from `fromLine` on, with the chain value at `fromLine`; so the chain value after each of those lines is a
+ * point on a history that was REPLACED. Returns the id of a tail whose branch passes through (count, headHex), `'unproven'` when a takeover's evidence cannot be read (a tail that is missing or unreadable,
+ * or the high-water record saying more takeovers happened than tails/ shows), or null when the point is on no replaced branch.
+ * WHY this is the proof the recovery relaxations need: an older copy of any file describes a state that once existed, so after a takeover it is either a prefix shared with the new history (count at or
+ * below the cut: then it is correct, merely shorter) or it runs along the replaced branch (count past the cut: then it IS on a tail's branch, because the tail holds every line the old host had). Equal chain
+ * values mean equal lines, so a hit can only be old content or an identical rewrite; the caller asks only when it has overridden a file, so a hit is a loud answer, never a quiet one.
+ * Markers: any tail with a `.begun` or `.done` counts (a cut may have happened); a tail written but not yet marked has cut nothing and is not a branch yet.
+ */
+export async function cutAwayBranchHit(fs: Fs, dir: string, key: string, count: number, headHex: string, recordedTakeovers: number): Promise<string | 'unproven' | null> {
+  const ids = await takeoverIds(fs, dir);
+  if (recordedTakeovers > ids.length) return 'unproven';
+  for (const id of ids) {
+    if (!(await fs.exists(marker(dir, id, 'begun'))) && !(await fs.exists(marker(dir, id, 'done')))) continue;
+    let tail: TailFile | null = null;
+    try { tail = await readTailFile(fs, nodePath.join(tailsDir(dir), `${id}.tail`), key, id); } catch { tail = null; }
+    if (!tail) return 'unproven';
+    if (count <= tail.fromLine || count > tail.fromLine + tail.lines.length) continue;
+    let h: Buffer = unhex(tail.fromHash);
+    for (let i = 0; i < count - tail.fromLine; i++) h = chainStep(h, tail.lines[i]);
+    if (hex(h) === headHex) return id;
+  }
+  return null;
 }
 
 export async function readTailFile(fs: Fs, path: string, key: string, takeoverId: string): Promise<TailFile | null> {
@@ -39,6 +82,8 @@ export async function readTailFile(fs: Fs, path: string, key: string, takeoverId
 export async function tailWasProtected(fs: Fs, dir: string, id: string): Promise<boolean> {
   return (await fs.exists(marker(dir, id, 'begun'))) || (await fs.exists(marker(dir, id, 'done')));
 }
+/** Takeovers the high-water record counted that tails/ no longer shows (0 normally). */
+export const lostTakeovers = (st: VState): number => Math.max(0, (st.hw.st.value?.takeovers ?? 0) - st.tailsShown);
 export const LOST_TAIL = (): StoreError => new StoreError('corrupt', 'the saved tail file is missing although the takeover was marked');
 
 /** What the store gives setAsideTail to work with (all of these stay in store.ts). */
@@ -50,6 +95,8 @@ export interface TailEnv {
   confirmedBetween: (st: VState, from: number, to: number) => Promise<number[]>;
   /** Cut the version back to n lines (the only operation that shortens a version); replaces the cached state. */
   cutTo: (st: VState, n: number) => Promise<void>;
+  /** Write the number of takeovers tails/ now shows into the high-water record (outside the chat folder). NOT advisory: a failure is thrown and the cut does not happen. */
+  recordTakeovers: (st: VState) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -64,6 +111,8 @@ export interface TailEnv {
 //  3  `.begun` marker written                              marker, tail, version uncut, parks untouched        open: the epoch has CHANGED, so every old park is refused on read
 //                                                                                                             (B1); retry goes on at step 4. A lost tail from here on is REPORTED
 //                                                                                                             (`corrupt`), because the cut may already have happened (B2)
+//  3b the takeover COUNT in the high-water record (outside     marker, tail, count; version uncut                 a lost tail from here on is reported even if `tails/` itself is lost
+//     the chat folder) is raised to what tails/ shows         (the write is not advisory: if it fails, nothing is cut)  (recorded > shown, F3), and a retry or new takeover is refused
 //  4  old parks moved to rejected/ (each move atomic)      some parks moved, some not                          retry moves the rest (the unmoved ones were already refused by the
 //                                                                                                             epoch; both layers hold, either alone is enough)
 //  5  cut (cutTo): high-water lowered, checkpoint lowered,  anything from "nothing cut" to "index cut, body not   open re-adopts lines the index lost (the tail still holds them) or sees
@@ -86,6 +135,9 @@ export async function setAsideTailLocked(e: TailEnv, st: VState, takeoverId: str
   } else {
     // WHY (review 4 F6, review 6 B2): a marker with no tail file means the tail (the only copy of the cut lines) was lost. A retry must not write an empty valid tail over that evidence.
     if (await tailWasProtected(fs, dir, takeoverId)) throw LOST_TAIL();
+    // WHY (round 7, F3): the markers can be lost WITH the tail (or the whole tails/ folder). The high-water record, which lives outside the chat folder, counted the takeovers that began; when it counts more
+    // than tails/ shows, some takeover's evidence is gone and it cannot be told whether THIS id is it. Nothing is written: not an empty tail for a retry, not a new takeover on top of a lost one.
+    if (lostTakeovers(st) > 0) throw LOST_TAIL();
     // steps 1 and 2: no marker exists, so nothing was cut, and the lines are still in the version
     if (fromLine < st.evictedLines) throw new StoreError('evicted', 'tail lines have no body here');
     if ((await fs.readdir(tailsDir(dir))).filter((n) => n.endsWith('.tail')).length >= MAX_TAILS) throw new StoreError('limit', 'too many set-aside tails for this version');
@@ -108,6 +160,10 @@ export async function setAsideTailLocked(e: TailEnv, st: VState, takeoverId: str
     // step 3: the intent. WHY BEFORE the cut (B2): from here a missing tail is evidence, not "never written". WHY it also starts the new history (B1): it changes the epoch.
     await mkdirDurable(fs, tailsDir(dir));
     await writeFileAtomic(fs, marker(dir, takeoverId, 'begun'), Buffer.from('cut begun\n')); // DESTRUCTIVE-OK(hint): an existence-only marker
+    // step 3b (round 7, F3): the takeover is counted outside tails/ BEFORE the cut or any park is touched, so from here a loss of tails/ shows as "recorded more than shown". Not advisory: if it cannot be
+    // written the takeover stops here (nothing is cut yet; the retry writes it again).
+    st.tailsShown = (await takeoverIds(fs, dir)).length;
+    await e.recordTakeovers(st);
     st.epoch = await readEpoch(fs, dir);
     // step 4: parks of the old history are kept in rejected/ (never deleted, never applied)
     await e.parked.rejectOutsideEpoch(st);

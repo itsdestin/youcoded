@@ -48,6 +48,7 @@ describe('every file the store writes is in the inventory', () => {
       // quarantine and an explicit set-aside
       await s2.setAsideDamaged(V(1));
       await s2.append(V(1), 0, 0, L.slice(0, 5));
+      await s2.append(V(1), 0, 9, L.slice(9, 11));                                    // parked in the new, empty history (round 7: the set-aside moved the old parks to rejected/)
       const v3 = V(3); await s2.registerVersion(v3, { chatId: CHAT, runtime: 'claude-code' }); await s2.append(v3, 0, 0, L.slice(0, 5));
       await s2.close();
       fs.truncateSync(path.join(t.dir, 'versions', v3.toString('hex'), 'index.bin'), 5);

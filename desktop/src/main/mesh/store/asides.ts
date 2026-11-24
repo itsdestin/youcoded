@@ -16,7 +16,7 @@ export class Asides {
     private readonly fs: Fs,
     private readonly root: string,
     /** What only the store can do: drop its cached state of a version, create an empty index, and lower the version's high-water record to 0 (the version is empty on purpose). */
-    private readonly host: { forget: (key: string) => void; ensureIndex: (dir: string) => Promise<void>; resetHw: (key: string) => Promise<void> },
+    private readonly host: { forget: (key: string) => void; ensureIndex: (dir: string) => Promise<void>; resetHw: (key: string) => Promise<void>; /** Move every parked append of the version folder to rejected/ with the reason `quarantine` (parked.ts rejectAllOnDisk). */ rejectParks: (dir: string) => Promise<void> },
   ) {}
   private vdir(key: string): string { return nodePath.join(this.root, 'versions', key); }
 
@@ -39,7 +39,7 @@ export class Asides {
 
   /**
    * The copy is damaged (its bytes no longer match its chain): move everything into aside/ (kept, never
-   * deleted, retention rule 5.3) and start the version empty so it can be recopied. Parked appends stay.
+   * deleted, retention rule 5.3) and start the version empty so it can be recopied. Parked appends are moved to rejected/ (round 7, F2: a quarantine changes the history identity).
    * Crash rule 3: an intent file names the target first; load() completes an interrupted move.
    * For a version the store already quarantined (`damaged`), this only clears the marker: the quarantined
    * copy is already aside, intact.
@@ -97,6 +97,10 @@ export class Asides {
       }
     }
     await this.fs.fsyncDir(target); await this.fs.fsyncDir(dir);
+    // WHY (round 7, F2): this is a HISTORY CHANGE. The parks were made against the copy that just moved aside, and what comes next is whatever a peer recopies, which may be another history, so none of them may
+    // ever drain onto it. They are moved to rejected/ (kept, with the reason `quarantine`). The epoch (tails.ts readEpoch) already names this aside folder, which exists since before the first move, so even
+    // a crash before this line leaves the parks refused on read; a rerun of this note (every step is repeatable) finishes the move.
+    await this.host.rejectParks(dir);
     // WHY (review 3, F7): reading must not fail because the disk is full. With no room for the marker the version is still reported `damaged` (typed), and the intent stays so the marker is written when space returns.
     try { if (reason !== undefined) await setMarks(this.fs, dir, { damaged: { asideName, reason }, partial: null }); } // DESTRUCTIVE-OK(hint): the marker that says where the copy went (marks.bin itself moved aside with the copy, so this is a fresh file)
     catch (e) { if (!isDiskFull(e)) throw e; throw new StoreError('damaged', asideName); }
