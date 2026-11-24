@@ -645,7 +645,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const anyCopying = !!status?.backends?.some(b => b.syncing);
   useEffect(() => {
     if (!anyCopying) return;
-    const timer = setInterval(() => { void refreshStatus(); }, 3000);
+    // A hidden window does no work; the next visible tick (or the 10 s push) catches up.
+    const timer = setInterval(() => { if (!document.hidden) void refreshStatus(); }, 3000);
     return () => clearInterval(timer);
   }, [anyCopying, refreshStatus]);
 
