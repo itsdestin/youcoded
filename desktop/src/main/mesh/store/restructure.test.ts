@@ -204,6 +204,10 @@ describe('a damaged version is RETIRED: its id is never refilled, and files put 
       const a = await retiredFixture(how);
       fs.rmSync(path.join(a.t.dir, 'aside'), { recursive: true });
       expect(await outcome(a.t.dir, P, A.slice(0, 20))).toBe('typed');
+      const sa = await ChatStore.open(a.t.dir, opts);                                                  // retired.json alone still says so: never an empty, refillable version
+      await expect(sa.append(P, 0, 0, A.slice(0, 3))).rejects.toMatchObject({ code: 'damaged' });
+      await expect(sa.head(P)).rejects.toMatchObject({ code: 'damaged' });
+      await sa.close();
       fs.rmSync(a.pre, { recursive: true }); await a.t.cleanup();
       const b = await retiredFixture(how);
       fs.rmSync(path.join(vdir(b.t.dir), 'retired.json'));

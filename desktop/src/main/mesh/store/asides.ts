@@ -6,7 +6,7 @@
 //   1. the aside/<vhex>-<n>/ folder, which lives OUTSIDE the version folder, is never deleted and is created BEFORE anything is moved;
 //   2. retired.json inside the version folder (sealed with the version key), written right after it and never rewritten. Only its existence counts; its content is just the aside name for humans.
 // Putting old files back into the version folder (a backup restore) changes neither, so load() still refuses with the typed `damaged`. Deleting one of the two leaves the other.
-// Crash rule 3: retired.json also is the note of intent: load() finishes an interrupted move (every step is repeatable); the move is finished when aside/<name>/COMPLETE exists.
+// Crash rule 3: retired.json also is the note of intent (written by finishAside for the aside folder retire() just made): load() finishes an interrupted move (every step is repeatable); the move is finished when aside/<name>/COMPLETE exists.
 import * as nodePath from 'node:path';
 import { writeFileAtomic, mkdirDurable, type Fs } from './fsio';
 import { StoreError } from './errors';
@@ -64,21 +64,20 @@ export class Asides {
     const dir = this.vdir(key);
     const asideName = await nextAsideName(this.fs, this.root, key, quarantined);
     await mkdirDurable(this.fs, nodePath.join(this.root, 'aside', asideName));
-    await writeSideFor(this.fs, nodePath.join(dir, RETIRED_FILE), { role: 'retired', key }, { asideName, reason }); // DESTRUCTIVE-OK(hint): a NEW existence-only statement; the version had none (a retired id is never retired twice)
     this.host.forget(key);
-    await this.finishAside(key, dir);
+    await this.finishAside(key, dir, reason);   // finds the bare aside folder just made, writes retired.json for it, and moves the files
     throw new StoreError('damaged', asideName);
   }
 
   /** Finish a move that retired.json names (idempotent; a no-op for a version that was never retired and for one whose aside folder says COMPLETE). */
-  async finishAside(key: string, dir: string): Promise<void> {
+  async finishAside(key: string, dir: string, why = 'the retirement was interrupted before its note was written'): Promise<void> {
     const note = nodePath.join(dir, RETIRED_FILE);
     if (!(await this.fs.exists(note))) {
-      // a crash between the aside folder and the note leaves a bare, unfinished aside folder: write the note now and finish the move, so the files never stay behind in a retired folder
+      // a bare, unfinished aside folder (just made by retire(), or left by a crash before the note) has no note yet: write it now and finish the move, so the files never stay behind in a retired folder
       const bare = await this.retiredName(key);
       if (!bare || !ASIDE_RE.test(bare) || await this.fs.exists(nodePath.join(this.root, 'aside', bare, 'COMPLETE'))) return;
       // a full disk only postpones it (the id is retired either way, and a read never fails for lack of space)
-      try { await writeSideFor(this.fs, note, { role: 'retired', key }, { asideName: bare, reason: 'the retirement was interrupted before its note was written' }); } // DESTRUCTIVE-OK(hint): a NEW existence-only statement; the version had none
+      try { await writeSideFor(this.fs, note, { role: 'retired', key }, { asideName: bare, reason: why }); } // DESTRUCTIVE-OK(hint): a NEW existence-only statement; the version had none
       catch (e) { if (isDiskFull(e)) return; throw e; }
     }
     const ir = await readSideFor(this.fs, note, { role: 'retired', key });

@@ -142,6 +142,14 @@ export class FaultFs implements Fs {
       this.pendingOverwrites.push({ path: b, shadow: sh, dir: nodePath.dirname(b) });
     }
     await this.inner.rename(a, b);
+    // WHY (restructure: a fork is built in a work folder and renamed into place): renaming a DIRECTORY moves every file inside it, so the per-file records of what is synced, touched or not yet directory-synced must follow them, or the shim is blind to unsynced data under the new name
+    const under = a + nodePath.sep;
+    const mv = (x: string): string => (x.startsWith(under) ? b + nodePath.sep + x.slice(under.length) : x);
+    for (const [k, v] of [...this.synced]) if (k.startsWith(under)) { this.synced.delete(k); this.synced.set(mv(k), v); }
+    for (const k of [...this.touched]) if (k.startsWith(under)) { this.touched.delete(k); this.touched.add(mv(k)); }
+    for (const k of [...this.pendingCreates]) if (k.startsWith(under)) { this.pendingCreates.delete(k); this.pendingCreates.add(mv(k)); }
+    for (const u of this.undo) u.path = mv(u.path);
+    for (const w of this.pend) w.path = mv(w.path);
     const s = this.synced.get(a);
     if (s !== undefined) { this.synced.set(b, s); this.synced.delete(a); }
     for (const u of this.undo) if (u.path === a) u.path = b;
