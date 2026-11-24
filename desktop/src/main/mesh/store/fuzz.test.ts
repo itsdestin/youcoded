@@ -45,7 +45,9 @@ const REVIEW3_SEEDS = [1408, 2127, 2749, 2915, 3397, 3704, 4457, 5814, 7077, 102
 const REGRESSION_SEEDS = [2525, 9314, 9705, 58575, 58636,
   // round 7 (found once pair faults, rollbacks after a divergence and the evict branch ran): 705/1169/428/700/382 a pending takeover or older bodies; 1317/3119 an older checkpoint behind a cut-down index;
   // 974/1647/10334 an older index or bodies behind a lowered checkpoint; 2882 a catch-up blessing old content; 9330/3803 a stopped takeover and a bare aside folder; 5380/7893 an identical rewrite
-  705, 1169, 428, 700, 382, 1317, 3119, 974, 1647, 10334, 2882, 9330, 3803, 5380, 7893, 1400, 986, 9679];
+  705, 1169, 428, 700, 382, 1317, 3119, 974, 1647, 10334, 2882, 9330, 3803, 5380, 7893, 1400, 986, 9679,
+  // found by the final long run: 14291 a stopped takeover next to an old quarantine; 539 an older checkpoint left behind by an earlier restore; 13738/25214 a second restore after the loss was reported
+  14291, 539, 13738, 25214];
 const FAST_SEEDS = [...REVIEW3_SEEDS, ...REGRESSION_SEEDS, ...Array.from({ length: 70 }, (_, i) => 100 + i)];
 
 function walk(d: string, out: string[] = []): string[] {
@@ -175,7 +177,8 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       const pairCause = pairInjected && head.damagedFromLine !== null;
       if (head.lostTakeovers > 0) lostReported = true;
       // Round 7 (F3): a rollback or loss of tails/ across a takeover is REPORTED by head().lostTakeovers (the count outside the folder), which is the promise for that case; the lines served are then not trusted.
-      const reportedLostTakeover = head.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault);
+      // (`lostReported`: once the loss has been SHOWN, later heads of the same damaged folder are not a quiet answer even if a second restore puts the markers back and the count balances again)
+      const reportedLostTakeover = (head.lostTakeovers > 0 || lostReported) && (rollbackDone || lostTakeoverFault);
       if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= Math.max(firstDiverge, head.evictedLines) && staleIndexCause) ev('stale-history-head-reported'); else if (pairCause) ev('pair-head-flagged'); else if (reportedLostTakeover) ev('head-of-another-history-lost-takeover-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine, faultNote, lostTakeovers: head.lostTakeovers }); }
       if (head.hash === ref.raw[head.lines]) { staleIndexInjected = false; pairInjected = false; }   // the version shows the canonical history again: the cause is spent
       if (head.lostTakeovers > 0 && !rotted && !lossy) bad('false-alarm-lost-takeovers-without-any-fault', { tag, lost: head.lostTakeovers });

@@ -343,6 +343,8 @@ export class ChatStore {
       if (!r) throw new NeedsRebuild(`record ${ck.count - 1} fails its checksum`);
       if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
     }
+    // (An older checkpoint whose head passed this proof, with no damage found, is then restated under the current count by restoreRedundancy: the proof is what makes it true, and without it the older count would
+    // stay forever and degrade every later repair. When the proof could not run, the older count is kept: a catch-up must never bless content it did not check.)
     // WHY (round 7, F1, found by the fuzz): an index AHEAD of the checkpoint looks exactly like a crash between the index write and the checkpoint write, and the checkpoint was then simply "caught up" to
     // it. After a takeover whose cut FINISHED (`.done`) it is also what an older index and older bodies put back look like when the checkpoint was lowered at the cut and agrees at the cut point. A restored
     // one runs along the tail of a finished takeover (the tail holds every line the old host had past the cut, with the chain value at each) while the checkpoint says the version has nothing past the cut
@@ -353,8 +355,11 @@ export class ChatStore {
     // have been put back) when the index and bodies were put back with it: all three older, nothing disagrees, and only the tail says the head is a replaced history's. A checkpoint with one damaged slot
     // (`slotsOk` 1) lags by one append through nothing but that damage, so the lag alone is not evidence there.
     // Only when the BODIES hold what the index head claims (`layout.phys`): an older index alone, whose extra records point past the trimmed bodies, would serve nothing old, and the rebuild below deals with it.
-    if (ck && last && layout.phys >= last.offset + last.len && ((count > ck.count && ckState.slotsOk === 2) || ck.hist < await histCount(this.fs, dir))) {
-      const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(last.h), 0, true, ck.hist < await histCount(this.fs, dir) ? 0 : ck.count);
+    const histNow = await histCount(this.fs, dir);
+    let blessed = false;   // the head was PROVEN not to lie on a replaced history, so an older checkpoint may be restated under the current count (below)
+    if (ck && last && layout.phys >= last.offset + last.len && ((count > ck.count && ckState.slotsOk === 2) || ck.hist < histNow)) {
+      const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(last.h), 0, true, ck.hist < histNow ? 0 : ck.count);
+      if (hit === null && ck.hist < histNow) blessed = true;
       if (hit !== null && hit !== 'unproven') throw new Damaged(`the index runs ahead of the checkpoint along the lines takeover ${hit} cut away, or the checkpoint predates it: older files put back, refusing to serve them`);
     }
     // the eviction record must agree with the index record of its last line (an independent, checksummed record)
@@ -424,7 +429,7 @@ export class ChatStore {
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv, marks, hw, rolledBack: null,
-      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), hist: ck ? ck.hist : await histCount(this.fs, dir), tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
+      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), hist: ck && !(blessed && badLine === null && !partial) ? ck.hist : histNow, tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
     };
     await this.restoreRedundancy(st);
     await this.checkRollback(st);
@@ -449,7 +454,7 @@ export class ChatStore {
       const want = this.ckOf(st);
       const cur = st.ck.ck;
       // DESTRUCTIVE-OK(verified-record): the head's chain values come from the CRC-checked index record and the load checks above; a lagging or damaged slot is replaced, a statement AHEAD of the index never reaches here
-      if (!cur || cur.count !== st.count || cur.stamp !== want.stamp || cur.evLines !== want.evLines || cur.evBytes !== want.evBytes || cur.lostRecs !== want.lostRecs || cur.staleBad !== want.staleBad || st.ck.slotsOk < 2) await writeCheckpoint(this.fs, st.dir, want, st.ck);
+      if (!cur || cur.count !== st.count || cur.stamp !== want.stamp || cur.evLines !== want.evLines || cur.evBytes !== want.evBytes || cur.lostRecs !== want.lostRecs || cur.staleBad !== want.staleBad || cur.hist !== want.hist || st.ck.slotsOk < 2) await writeCheckpoint(this.fs, st.dir, want, st.ck);
     } catch (e) { if (!isDiskFull(e)) throw e; }
   }
 

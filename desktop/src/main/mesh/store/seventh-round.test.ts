@@ -362,3 +362,20 @@ describe('an emptied (set-aside) version has a checkpoint again', () => {
     fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
   });
 });
+
+describe('an older checkpoint that passed the load-time proof is restated under the current history count', () => {
+  it('a checkpoint from before the takeover (count below the cut) put back: the version loads, and the checkpoint is rewritten with the current count', async () => {
+    const t = await tmpRoot('r7-bless2-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 8)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });                                   // checkpoint: 8 lines, history count 0
+    s = await open(t.dir);
+    await s.append(V(1), 0, 8, A.slice(8, 20)); await s.setAsideTail(TID, V(1), 10); await s.append(V(1), 0, 10, B.slice(10, 26)); await s.close();
+    putBack(t.dir, snap, ['ck']);
+    expect(await outcome(t.dir, truth(10, 26))).toBe('correct');
+    const b = fs.readFileSync(path.join(vdir(t.dir), 'checkpoint.bin'));
+    const newest = [0, 1].map((i) => ({ seq: Number(b.readBigUInt64BE(i * 236 + 8)), hist: b.readUInt32BE(i * 236 + 228) >>> 8 })).sort((x, y) => y.seq - x.seq)[0];
+    expect(newest.hist).toBe(1);
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+});

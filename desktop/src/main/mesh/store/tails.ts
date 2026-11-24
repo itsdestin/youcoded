@@ -51,6 +51,13 @@ async function historyNames(fs: Fs, dir: string): Promise<string[]> {
  */
 export async function histCount(fs: Fs, dir: string): Promise<number> { return (await historyNames(fs, dir)).length; }
 
+/** Takeovers whose intent is written but whose cut is not finished (`.begun` without `.done`). */
+export async function pendingTakeovers(fs: Fs, dir: string): Promise<number> {
+  let n = 0;
+  for (const id of await takeoverIds(fs, dir)) if (!(await fs.exists(marker(dir, id, 'done')))) n++;
+  return n;
+}
+
 /**
  * How many leading lines a checkpoint written BEFORE the latest history change can still vouch for (round 7, F1): a prefix shorter than every cut point is shared by every history, so a statement
  * about it is true whichever history is current. The bound is the smallest cut point of any takeover (the lines before `fromLine` of every tail), and 0 once the version has been quarantined (a

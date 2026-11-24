@@ -10,7 +10,7 @@ import { StoreError } from './errors';
 import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { isDiskFull } from './storeutil';
-import { cutAwayBranchHit, histCount, sharedPrefixBound } from './tails';
+import { cutAwayBranchHit, histCount, pendingTakeovers, sharedPrefixBound } from './tails';
 import { readHw } from './highwater';
 import { hex } from './chain';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, headerTag, indexHeader, recPos, type Rec } from './records';
@@ -343,6 +343,9 @@ export class BodyTools {
         ckptOlder = true;
         const b = await sharedPrefixBound(this.fs, dir, nodePath.basename(dir));
         usable = b === 'unproven' ? -1 : b;
+        // WHY (found by the final fuzz run): when every history change newer than the checkpoint can be a takeover that has only BEGUN (its cut is not finished, so the folder still holds what the checkpoint
+        // states), no finished change lies after it and nothing bounds it; counting an older, long finished quarantine against it made a stopped takeover plus one damaged index read as "nothing vouches"
+        if (histNow - ckpt.hist <= await pendingTakeovers(this.fs, dir)) usable = Infinity;
       } else if (ckpt && ckpt.hist > histNow) usable = -1;
       let pure = false;
       // WHY the second way in (review 6, found by the fuzz once it wrote DIVERGENT histories): an older index.bin from BEFORE a takeover can hold valid records BEYOND the checkpoint that describe the
