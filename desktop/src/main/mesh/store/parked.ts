@@ -17,7 +17,6 @@ const MAX_REJECTED = 1024;
  * prefix of what the head holds; `damaged` is a park that could not be read or is not what its name says; `released` is the caller giving up on it (releaseParked).
  */
 export type RejectReason = 'takeover' | 'quarantine' | 'stale-history' | 'conflict' | 'damaged' | 'released';
-export const REJECT_REASONS: RejectReason[] = ['takeover', 'quarantine', 'stale-history', 'conflict', 'damaged', 'released'];
 /** The reason and park name inside a rejected/ file name; a name without a reason prefix (kept by an older build) reads as `unknown`. */
 export function parseRejectedName(n: string): { reason: RejectReason | 'unknown'; name: string } | null {
   const m = /^(?:(takeover|quarantine|stale-history|conflict|damaged|released)--)?(?:older-\d+-)?(\d{16}-[0-9a-f]{16}\.park)$/.exec(n);
