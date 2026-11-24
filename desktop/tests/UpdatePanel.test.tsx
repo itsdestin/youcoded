@@ -160,12 +160,14 @@ describe('UpdatePanel — the version pill popup', () => {
       fromCache: false,
     };
 
-    it('an update shows only the version on offer, even when several are newer than the user', async () => {
+    it('an update shows the versions newer than the user, never ones they already have', async () => {
       (window as any).claude.update.changelog.mockResolvedValue(MANY);
-      const status = { current: '1.1.1', latest: '1.1.3', update_available: true, download_url: 'http://x' };
+      const status = { current: '1.1.2', latest: '1.1.3', update_available: true, download_url: 'http://x' };
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={status} />);
       await waitFor(() => expect(screen.getByText('Notes for 1.1.3')).toBeInTheDocument());
       expect(screen.queryByText('Notes for 1.1.2')).not.toBeInTheDocument();
+      expect(screen.queryByText('Notes for 1.1.1')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Claude Code CLI baseline/)).not.toBeInTheDocument();
     });
 
     it('up to date shows every version without the file title, intro, [Unreleased] or baseline line', async () => {

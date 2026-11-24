@@ -446,17 +446,28 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // placeholder showed at the top of the official notes. The parsed entries drop all three,
     // and both views now look the same. The raw-markdown branch below is only a fallback for a
     // file with no version headings at all.
+    // Filter by CHRONOLOGICAL position, not semver. CHANGELOG.md is authored
+    // top-newest-bottom-oldest, so source order is release order. Semver math breaks
+    // when a project resets its version numbers (e.g. YouCoded went 2.4.0 → 1.0.0);
+    // "older" entries can semver-compare as "newer." Position-based filter handles
+    // resets correctly.
+    const currentIdx = data.entries.findIndex(e => e.version === updateStatus.current);
     let shown: ChangelogEntry[];
     if (!updateStatus.update_available) {
       // No update waiting: every version, newest first.
       shown = data.entries;
+    } else if (currentIdx === -1) {
+      // User's current version isn't in the changelog (never-released local build,
+      // stale file, etc.) — fall back to newest entry only.
+      shown = data.entries.length > 0 ? [data.entries[0]] : [];
+    } else if (currentIdx === 0) {
+      // User is already at the top of the file — no newer entries. Fall back to the
+      // newest so the popup isn't empty when `update_available` is true (e.g. the
+      // CHANGELOG lags a fresh release).
+      shown = [data.entries[0]];
     } else {
-      // WHY only the version on offer (Destin, 2026-11-23: "only shows the whats new for latest
-      // update version"): this used to list every version between the user's and the newest.
-      // Prefer the entry named by the update itself; fall back to the newest in the file (the
-      // file is written newest-first) when the notes lag a fresh release.
-      const latest = data.entries.find(e => e.version === updateStatus.latest);
-      shown = latest ? [latest] : data.entries.slice(0, 1);
+      // Only the versions newer than the user's, never the ones they already have.
+      shown = data.entries.slice(0, currentIdx);
     }
     // WHY a labelled card per version (Destin, close-session-4#CS4-1; guide: nothing bare on
     // the popup — a group is a small label and a card): the notes sat bare on the popup under
