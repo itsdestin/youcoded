@@ -273,6 +273,11 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 - **Depends on:** CC stamping `"model": "<synthetic>"` — **in angle brackets** — on assistant lines CC composed itself rather than a model: "You've hit your session limit", "You're out of usage credits", "Please run /login · API Error: 401". The guard matches the bracket SHAPE (`/^<.*>$/`), not the literal string, so any future bracketed sentinel is covered. Verified 2026-08-26 against 2,933 local transcripts: `<synthetic>` is the only bracketed value present, and every API-error assistant line carries it.
 - **Break symptom:** If CC switches to an UNBRACKETED sentinel (`synthetic`, `none`, `unknown`), all six guards stop working at once with no test failure, and the placeholder returns as a model name in the Resume Browser chip, the per-turn metadata strip, and the status-bar pill — which also stops self-healing off its `unknown` sentinel. A poisoned value written to the Conversation Store then syncs to every other device and overrides the transcript scan there.
 
+### "No response requested." resume placeholder
+- **Files:** `desktop/src/main/transcript-watcher.ts` (`CC_RESUME_PLACEHOLDER_TEXT`, read as a `user-interrupt`)
+- **Depends on:** when a resumed chat's last turn got no reply (a crash, a restart, ESC), CC writes a `<synthetic>` assistant line, `stop_reason: "stop_sequence"`, zero tokens, no `isApiErrorMessage`, whose only text is exactly `No response requested.` before the next prompt. The TEXT is matched because the shape alone is not unique: 2 of 96 non-error `<synthetic>` lines on 2026-11-23 were real-looking replies.
+- **Break symptom:** if CC rewords it, the old look returns — a "No response requested." bubble with "Response stopped at a configured stop sequence." — and the cut-off reply loses its "Interrupted." notice. Nothing else breaks.
+
 ### CLI invocation flags
 - **Files:** `desktop/src/main/session-manager.ts`, `desktop/src/main/pty-worker.js` (shared by desktop and Android)
 - **Depends on:** `claude` CLI accepting the flags YouCoded passes at launch (notably `--resume <session-id>` and any default flags in the launch command)
