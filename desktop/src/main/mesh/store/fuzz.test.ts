@@ -200,6 +200,8 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         } else {
           if (i < exemptFrom && flagged === null && !lossy) { bad('shrunk-unreported', { tag, line: i, head: head.lines }); continue; }
           if (!present(canon[i], files)) {
+            // a rollback followed by a zeroed index after an eviction: documented limit 2 (the evicted lines' chain values lived only in that index) on top of a rolled-back folder; two faults
+            if (rollbackDone && faultOnIndexAfterEviction) { ev('rollback-then-index-fault-after-eviction'); continue; }
             // destroyed by the fault itself: allowed only when reported
             if (lossy && ((flagged !== null && flagged <= i) || reportedLostTakeover)) { ev('destroyed-and-reported'); continue; }
             if (i >= exemptFrom && lossy) { ev('destroyed-after-setaside'); continue; }
@@ -225,7 +227,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       const olderCkptAfterEvictAndTakeover = state === 'damaged' && /^older versions\/[0-9a-f]+\/checkpoint\.bin$/.test(faultNote) && evictedMax > 0 && tailsAcked.length > 0;
       if (olderCkptAfterEvictAndTakeover) ev('older-checkpoint-after-evict-and-takeover-quarantined');
       if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok' && !undecidableIdentical && !olderCkptAfterEvictAndTakeover) bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
-      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; pairInjected = false; emptiedEver = true; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
+      if (state === 'damaged') { try { if (pairInjected || staleIndexInjected) lossy = true; await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; pairInjected = false; emptiedEver = true; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
@@ -367,7 +369,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} extra`);
             await s.putExtra(sha(b), b); extraAcked.push(b);
           } else if (op < 0.985 || legacy) { log.push(`ep${n} scrub`); await s.scrubStep(V(1), { maxBytes: 1 << 20 }); }
-          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; emptiedEver = true; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; }   // (the flag first: a crash inside the call still leaves the version emptied)
+          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; emptiedEver = true; if (pairInjected || staleIndexInjected) lossy = true; /* the caller answers a flagged version by emptying it: the canonical lines it believed acknowledged were never durable in the flagged copy */ await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; }   // (the flag first: a crash inside the call still leaves the version emptied)
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
           if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
