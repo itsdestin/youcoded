@@ -10,7 +10,6 @@ import { StoreError } from './errors';
 import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { isDiskFull } from './storeutil';
-import { cutAwayBranchHit, histCount, pendingTakeovers, sharedPrefixBound } from './tails';
 import { readHw } from './highwater';
 import { hex } from './chain';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, headerTag, indexHeader, recPos, type Rec } from './records';
@@ -329,39 +328,6 @@ export class BodyTools {
       }
       let include = Math.max(lastValid + 1, ckpt ? ckpt.count : 0, evLines);
       const cursor = new BodyCursor(this.fs, dir, layout, handles);
-      // WHY the checkpoint as arbiter (review 5, found by the reviewer's fuzz: an OLDER index.bin whose records describe a history that a set-aside tail later replaced): old records that
-      // disagree with the bodies were being trusted as "the truth about a rotted line", which forked the head and cost every line after them. When the bodies, hashed from the start state, reach
-      // EXACTLY the checkpoint's chain value at its count, nothing is rotted and the checkpoint (a separate, current file) says the bodies are right: the old records are not used at all and
-      // every line is derived from its body, confirmed by that same value. (Only when no valid record lies beyond the checkpoint: those would be a crash between index and checkpoint.)
-      // WHY the checkpoint is graded by its history count (round 7, F1): a checkpoint written in the CURRENT history (count equal) is the newest statement there is, and an index or bodies that disagree with
-      // it are the old ones; a checkpoint written BEFORE a later takeover or quarantine (count lower) is the old one, and may only be believed for lines every history shares (the prefix bound,
-      // tails.ts); a count above the folder's means takeover evidence was lost, so nothing is believed. `usable` is how many lines the checkpoint may vouch for AS THE ONLY WITNESS of lines derived from the bodies (the
-      // derived-stretch check below); the pure path needs no such gate because the cut-away-branch check covers it (mutation check, round 7: removing the gate there changed no test and no fuzz seed).
-      const histNow = await histCount(this.fs, dir);
-      let usable = Infinity; let ckptOlder = false;
-      if (ckpt && ckpt.hist < histNow) {
-        ckptOlder = true;
-        const b = await sharedPrefixBound(this.fs, dir, nodePath.basename(dir));
-        usable = b === 'unproven' ? -1 : b;
-        // WHY (found by the final fuzz run): when every history change newer than the checkpoint can be a takeover that has only BEGUN (its cut is not finished, so the folder still holds what the checkpoint
-        // states), no finished change lies after it and nothing bounds it; counting an older, long finished quarantine against it made a stopped takeover plus one damaged index read as "nothing vouches"
-        if (histNow - ckpt.hist <= await pendingTakeovers(this.fs, dir)) usable = Infinity;
-      } else if (ckpt && ckpt.hist > histNow) usable = -1;
-      let pure = false;
-      // WHY the second way in (review 6, found by the fuzz once it wrote DIVERGENT histories): an older index.bin from BEFORE a takeover can hold valid records BEYOND the checkpoint that describe the
-      // old host's line of history. A crash between index and checkpoint also leaves records beyond the checkpoint, but then the record AT the checkpoint's count agrees with the checkpoint (the
-      // checkpoint is written after the index). So records beyond the checkpoint whose own record at the checkpoint's count DISAGREES with it are not "a crash that was ahead": they are another
-      // history, and when the bodies reach the checkpoint's chain value exactly, the bodies are right and none of those records is used.
-      if (ckpt && ckpt.count > evLines) {
-        const pc = new BodyCursor(this.fs, dir, layout, handles);
-        let hh: Buffer = Buffer.from(start.h); let at = start.off; let ok = true;
-        const atCk = lastValid + 1 > ckpt.count ? await refRec(ckpt.count - 1) : null;
-        if (lastValid + 1 <= ckpt.count || (atCk !== null && !atCk.rec.h.equals(ckpt.h))) {
-          for (let i = evLines; i < ckpt.count; i++) { const ln = await pc.takeLine(at); if (!ln) { ok = false; break; } hh = chainStep(hh, ln); at += ln.length; }
-          pure = ok && hh.equals(ckpt.h);
-          if (pure) include = ckpt.count;
-        }
-      }
       const s: BatchState = { ...start };
       const sum: SumFacts = { title: null, model: null, cwd: null };
       let gapStart = -1;                 // first slot of the current run of derived-only records, or -1
@@ -370,15 +336,10 @@ export class BodyTools {
       let pos = start.off;
       let stopAt = include;              // slots [evLines, stopAt) end up in the new index
       let ambiguous = false;
-      // WHY (round 7, F1): set when this rebuild SERVES something that a valid file contradicts: a valid index record whose chain value differs from the line derived from the body (the pure path), or a
-      // checkpoint whose chain value differs from the rebuilt one and is rewritten. Those are the two relaxations of rounds 5 and 6; they are right when ONE file is older, and wrong when TWO files are older
-      // together (an older index with older bodies and a newer checkpoint reads as "the checkpoint is the odd one out"). The cut-away-branch check below is what tells the two apart.
-      let overrode = false;
-      let derivedAny = false;            // some slot had no valid record and was derived from its body alone (review 6: then nothing but the checkpoint vouches for it)
       const out: Buffer[] = []; let outFrom = evLines;
       const flush = async (to: number) => { if (out.length) { await nf.write(Buffer.concat(out), recPos(outFrom)); out.length = 0; } outFrom = to; };
       for (let i = evLines; i < include; i++) {
-        const o = pure ? null : await refRec(i);
+        const o = await refRec(i);
         let line: Buffer | null;
         if (o) {
           if (o.rec.offset !== pos) { if (gapStart >= 0) { ambiguous = true; stopAt = gapStart; break; } throw new Damaged(`record ${i} says its line starts at byte ${o.rec.offset}, the body is at ${pos}`); }
@@ -416,7 +377,6 @@ export class BodyTools {
         const sb = { ...s };
         const { recs } = this.encodeBatch(runtime, s, [line], sum);
         let d = decodeRecord(recs, 0)!;
-        if (pure) { const seen = await refRec(i); if (seen && !seen.rec.h.equals(d.h)) overrode = true; }   // a valid record of another chain was not used (round 7, F1)
         if (o) {
           const rawOk = d.h.equals(o.rec.h);
           const fieldsSame = d.c.equals(o.rec.c) && d.convCount === o.rec.convCount && d.kind === o.rec.kind && d.confirms === o.rec.confirms && d.candN === o.rec.candN && d.candId === o.rec.candId && d.conversation === o.rec.conversation;
@@ -433,7 +393,7 @@ export class BodyTools {
             gapStart = -1;
             if (trust) { s.c = Buffer.from(o.rec.c); s.convCount = o.rec.convCount; s.rs = { cand: o.rec.candN === NONE ? null : { n: o.rec.candN, id: o.rec.candId } }; d = o.rec; }
           }
-        } else { derivedAny = true; if (gapStart < 0) gapStart = i; }
+        } else { if (gapStart < 0) gapStart = i; }
         const ob = Buffer.alloc(REC); encodeRecord(d, ob, 0); out.push(ob);
         pos += line.length;
         if (out.length >= 1024) await flush(i + 1);
@@ -443,15 +403,13 @@ export class BodyTools {
       // a derived-only stretch at the end is confirmed by the checkpoint's chain value or not at all
       if (!ambiguous && gapStart >= 0) {
         const lr = await this.recFromFile(nf, include - 1);
-        if (!ckpt || ckpt.count !== include || ckpt.count > usable || !lr || !lr.h.equals(ckpt.h)) { ambiguous = true; count = gapStart; }   // (an older checkpoint cannot confirm lines past the shared prefix, round 7 F1)
+        if (!ckpt || ckpt.count !== include || !lr || !lr.h.equals(ckpt.h)) { ambiguous = true; count = gapStart; }
       }
       if (!ambiguous && ckpt && ckpt.count > 0 && ckpt.count <= include) {
         const lr = await this.recFromFile(nf, ckpt.count - 1);
-        // WHY not Damaged when EVERY line has a valid record that its own body confirms (review 6, found by the fuzz with divergent histories): the index and the bodies agree with each other
-        // all the way, so the checkpoint is the odd one out. Time only runs one way (a takeover replaces a history, never the reverse), so a checkpoint of another history is an OLDER copy
-        // from before a takeover; it is not evidence and is rewritten from the index below. Rot cannot look like this: a rotted body breaks its record's chain value (that is `firstBad`). Only when the index is strictly AHEAD of the checkpoint: a checkpoint that states the head itself and disagrees is still quarantined (second-round N1 test).
-        if ((!lr || !lr.h.equals(ckpt.h)) && (pure || firstBad !== null || derivedAny || ckpt.count >= include || !ckptOlder)) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
-        if (!lr || !lr.h.equals(ckpt.h)) overrode = true;   // the checkpoint is overruled by an index and bodies that agree with each other (round 7, F1)
+        // WHY Damaged and never "the checkpoint is the odd one out": a version's history never changes (inventory.ts), so an OLDER checkpoint is a prefix of the truth and AGREES with the rebuilt chain
+        // at its own count; one that disagrees is not a copy of this version's past, and nothing re-derives it from verified bodies. Quarantine (kept, retired, recopied under a new id).
+        if (!lr || !lr.h.equals(ckpt.h)) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
       }
       if (ckpt && ckpt.count > include) throw new Damaged(`the checkpoint vouches for ${ckpt.count} lines but the body holds ${include}`);
       // nothing at all is verified (no valid record, and the one stretch the checkpoint covers does not match): refused as damaged, the whole version is kept intact in aside/
@@ -461,19 +419,6 @@ export class BodyTools {
       await nf.truncate(recPos(count));        // DESTRUCTIVE-OK(scratch): cuts only the scratch file
       // lines past what is vouched for: never acknowledged when a checkpoint says so, possibly acknowledged when it does not
       const lastRec = count > 0 ? await this.recFromFile(nf, count - 1) : null;
-      // WHY (round 7, F1, the class behind review 7's finding): the two relaxations above cannot know WHICH side of a disagreement is the older one; "time only runs one way" holds for one older file but
-      // not for two put back together. What CAN be proven, from evidence an older-file fault cannot forge, is whether the head we are about to serve lies on a history a takeover REPLACED: the takeover's
-      // tail file holds every line the old host had past the cut, so the chain value after each of them is on file (tails.ts cutAwayBranchHit). Older files from before a takeover are either shorter than
-      // the cut (a shared prefix: correct) or run along that tail's branch (a hit). So when a file was overridden and the head is on a replaced branch, or the evidence needed to say cannot be read
-      // (a tail missing or unreadable, or the high-water record counting takeovers tails/ no longer shows), the version stays LOUD: quarantined, recopied from a peer later. PROVEN: a served head is never a
-      // point of a replaced history after an override. NOT claimed: all files older together with the tails also gone (the lost-tails report above says so), or a restore from before a quarantine.
-      if ((overrode || (ambiguous && ckpt)) && lastRec && count > 0) {   // `ambiguous`: the checkpoint vouches for more than the files can confirm, so what is served cannot be reconciled with it either (found by the round-7 fuzz: an older index and bodies behind a newer checkpoint)
-        const key = nodePath.basename(dir);
-        const hv = (await readHw(this.fs, nodePath.dirname(nodePath.dirname(dir)), key)).st.value;
-        const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(lastRec.h), hv?.takeovers ?? 0);
-        if (hit === 'unproven') throw new Damaged('the files disagree and the takeover records that could say which are missing or unreadable: refusing to pick one');
-        if (hit !== null) throw new Damaged(`the index and bodies end where takeover ${hit} cut an older history away, while the checkpoint states another: older files put back together, refusing to serve them`);
-      }
       const endOff = lastRec ? lastRec.offset + lastRec.len : 0;
       const surplusLines = await this.countWholeLines(dir, endOff);
       let partial: { fromLine: number; lost: number } | null = null;
@@ -514,7 +459,7 @@ export class BodyTools {
       let boundary: Boundary | null = null;
       if (evLines > 0) { const br = await this.recFromFile(nf, evLines - 1); if (br) boundary = { h: Buffer.from(br.h), c: Buffer.from(br.c), convCount: br.convCount, candN: br.candN, candId: br.candId }; }
       // DESTRUCTIVE-OK(verified-record): the new statement is the chain value of a verified record; an older, higher statement was copied to torn/ above whenever it is being lowered
-      await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, evLines: boundary ? evLines : 0, evBytes: boundary ? evBytesOut : 0, boundary, lostRecs: boundary && synthesized ? evLines : 0, staleBad: convStaleNow ? firstBad : null, hist: histNow, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
+      await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, evLines: boundary ? evLines : 0, evBytes: boundary ? evBytesOut : 0, boundary, lostRecs: boundary && synthesized ? evLines : 0, staleBad: convStaleNow ? firstBad : null, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
       await finishSwap();
       // scrub.json: the old mark described the old index. Point the scrub at the first bad line so the next open reports it at once.
       await writeSideFor(this.fs, nodePath.join(dir, 'scrub.json'), { role: 'scrub', key: keyOfDir(dir) }, { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint

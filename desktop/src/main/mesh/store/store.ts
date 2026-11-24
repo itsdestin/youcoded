@@ -25,6 +25,7 @@
 // only an unresolvable disagreement quarantines the whole version (aside/<vhex>-q<n>/, typed `damaged`). A full disk is one typed `disk-full` refusal; reads never write anything that can fail.
 // No file handles are kept open between calls. One in-process lock serialises all calls and lock.ts keeps other processes out.
 import * as nodePath from 'node:path';
+import { createHash } from 'node:crypto';
 import { realFs, writeFileAtomic, sweepTemps, mkdirDurable, type Fs } from './fsio';
 import { StoreError } from './errors';
 import { acquireLock, type StoreLock } from './lock';
@@ -33,11 +34,10 @@ import { acquireLock, type StoreLock } from './lock';
 const writeSide0 = (fs: Fs, path: string, text: string): Promise<void> => writeFileAtomic(fs, path, Buffer.from(text));
 import { readCheckpoint, readCheckpointState, appendCheckpoint, writeCheckpoint, type Boundary, type Checkpoint } from './checkpoint';
 import { readSideFor, writeSideFor, keepBadSideFile, formatLine, parseFormat } from './sidefile';
-import { readMarksState, readPartial, readDamaged, setMarks } from './marks';
-import { resetHw, checkRollback, noteHw, lowerHwTo, readHw, recordTakeovers, type HwEnv } from './highwater';
+import { readMarksState, readPartial, setMarks } from './marks';
+import { checkRollback, noteHw, readHw, type HwEnv } from './highwater';
 import { Extras, bytesUnder } from './extras';
-import { asLine, isDiskFull, validateProofShape, ForeignTail, type TailFile } from './storeutil';
-import { setAsideTailLocked, readTailFile, readEpoch, tailWasProtected, takeoverIds, histCount, cutAwayBranchHit, lostTakeovers, LOST_TAIL, type TailEnv } from './tails';
+import { asLine, isDiskFull, validateProofShape } from './storeutil';
 import { chainStep, defaultChainSeeds, hex, unhex, versionTag, type ChainSeedFn, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, type ReplyEndOptions } from './classify';
 import { HDR, REC, NONE, decodeRecord, indexHeader, recPos, unframeLines, type Rec } from './records';
@@ -45,25 +45,33 @@ import { Parked, parseRejectedName, type RejectReason } from './parked';
 import { openEnv } from './envelope';
 import { Asides } from './asides';
 import { ControlStore, type ControlDamage, type ControlEntry } from './control';
-import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
+import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, VerifyReport, VersionId, VersionMeta } from './types';
 import type { VState } from './vstate';
 import { readMeta, readScrubMark, lineVerifies } from './versionfiles';
 import { BodyTools, Damaged, NeedsRebuild, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
-export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, TailRecord, VerifyReport, ScrubReport } from './types';
+export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, VerifyReport, ScrubReport } from './types';
 
 const DEFAULT_CHUNK = 16 * 1024 * 1024;
 const SCAN_BATCH = 4096;
 const MIB = 1024 * 1024;
 /** summary.json is also rewritten every this many lines even when no fact changed, so open() never re-scans far. */
 const SUMMARY_SAVE_EVERY = 2048;
-const TAKEOVER_RE = /^[0-9a-f]{8,128}$/;
 /** Longest version id the store accepts (see keyOf). */
 const MAX_VERSION_ID_BYTES = 64;
 const MAX_REJECTED_BYTES = 256 * MIB;
 const DEFAULT_MAX_EXTRAS = 4 * 1024 * MIB;
 const LOAD_SCRUB_RECORDS = 8192;
 const STEP_SCRUB_RECORDS = 65536;
+
+/**
+ * The rule every device uses to name the child of a takeover (see forkVersion): SHA-256 over a label, the parent id, the fork line, the chain value at that line and `takeoverToken`, a string all
+ * devices already agree on for THIS takeover (the id of the control-log entry that records it). Same inputs give the same 32-byte id on every device, so two devices never create two siblings
+ * for one takeover; a different takeover (another token) of the same parent and line gets another id.
+ */
+export function deriveForkId(parent: Uint8Array, fromLine: number, chainHashAtFromLine: string, takeoverToken: string): Buffer {
+  return createHash('sha256').update('youcoded-mesh/v1/fork-id\0').update(Buffer.from(parent)).update(`\0${fromLine}\0${chainHashAtFromLine}\0${takeoverToken}`).digest();
+}
 
 export class ChatStore {
   private readonly fs: Fs;
@@ -110,7 +118,7 @@ export class ChatStore {
     this.stamp = ((CLASSIFIER_VERSION << 1) | ((this.replyOpts.apiErrorsEndReplies ?? true) ? 1 : 0)) >>> 0;
     this.tools = new BodyTools(this.fs, this.replyOpts);
     this.parkedStore = new Parked(this.fs, this.tools, { maxFiles: this.maxParkedFiles, maxBytes: this.maxParked, maxRejectedBytes: this.maxRejectedBytes, bytesUnder: (p) => this.bytesUnder(p) }, (st, from, lines) => this.applyLines(st, from, lines));
-    this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); }, ensureIndex: async (d) => { await this.ensureIndex(d); await this.ensureEmptyCheckpoint(d); }, resetHw: (k) => this.resetHwFor(k), rejectParks: (d) => this.parkedStore.rejectAllOnDisk(d) });
+    this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); } });
     this.extras = new Extras(this.fs, this.tools, root, this.maxExtraBytes, this.maxExtrasBytes);
     this.control = new ControlStore(this.fs, nodePath.join(root, 'control'), { maxParked: o.maxParkedControl });
   }
@@ -140,6 +148,8 @@ export class ChatStore {
       // WHY safe now: with the lock held no other process has temp files in flight (review C2: this sweep
       // used to delete a second process's in-flight temp files).
       await sweepTemps(fs, root);
+      // WHY (fork crash table, step 1-2): a fork that stopped leaves an invisible work folder; its files are copies of lines the parent still holds, so they are cleared here (the empty folder stays)
+      for (const n of await fs.readdir(nodePath.join(root, 'forks'))) await s.clearForkFiles(nodePath.join(root, 'forks', n));
     } catch (e) { await s.lock.release().catch(() => undefined); s.lock = null; throw e; }
     return s;
   }
@@ -207,6 +217,9 @@ export class ChatStore {
       if (meta.runtime !== 'claude-code' && meta.runtime !== 'native') throw new StoreError('bad-argument', 'runtime');
       return this.exclusive(() => this.mutate(key, async () => {
         const dir = this.vdir(key);
+        // WHY (restructure): a retired id is never registered or refilled again; the caller uses a new id
+        const retired = await this.asides.retiredName(key);
+        if (retired) throw new StoreError('damaged', retired);
         const existing = await readMeta(this.fs, dir);
         const parent = meta.parent ? hex(meta.parent) : null;
         if (existing) {
@@ -223,23 +236,10 @@ export class ChatStore {
         // WHY a checkpoint from the very start: "no checkpoint" must always mean a fault, never "nothing was written yet" (review 3, F3)
         const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
         // DESTRUCTIVE-OK(verified-record): only when no checkpoint exists yet (a new version has none)
-        if (!(await readCheckpoint(this.fs, dir))) await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, hist: await histCount(this.fs, dir), h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
+        if (!(await readCheckpoint(this.fs, dir))) await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
         await this.fs.fsyncDir(nodePath.join(this.root, 'versions'));
       }));
     });
-  }
-
-  /**
-   * WHY (round 7, F1, found by the fuzz): a set-aside moves the checkpoint away with the rest and nothing wrote a new one, so the emptied version had NO checkpoint until its first append, and older index
-   * and bodies put back into it had nothing to be compared with. The empty statement (count 0, the history count with the new aside folder in it) is written here, as at registration, so "no checkpoint" keeps meaning "a fault".
-   */
-  private async ensureEmptyCheckpoint(dir: string): Promise<void> {
-    let meta: Awaited<ReturnType<typeof readMeta>> = null;
-    try { meta = await readMeta(this.fs, dir); } catch (e) { if (!(e instanceof StoreError)) throw e; }
-    if (!meta || await readCheckpoint(this.fs, dir)) return;
-    const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(nodePath.basename(dir)), segment: 0 });
-    // DESTRUCTIVE-OK(verified-record): only when no checkpoint exists (the set-aside just moved it away)
-    await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, hist: await histCount(this.fs, dir), h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
   }
 
   private async ensureIndex(dir: string): Promise<void> {
@@ -283,16 +283,14 @@ export class ChatStore {
 
   private async loadOnce(key: string): Promise<VState> {
     const dir = this.vdir(key);
+    await sweepTemps(this.fs, dir);
+    await this.asides.finishAside(key, dir); // a retirement interrupted half way is completed first
+    // WHY BEFORE anything else is read (restructure, review 8 F4): a retired id is never served, whatever files were put back into its folder afterwards. The aside folder and retired.json (asides.ts) say so.
+    const retired = await this.asides.retiredName(key);
+    if (retired) throw new StoreError('damaged', retired);
     const meta = await readMeta(this.fs, dir);
     if (!meta) throw new StoreError('unknown-version', key.slice(0, 8));
-    await sweepTemps(this.fs, dir);
-    await this.asides.finishAside(key, dir); // a set-aside interrupted half way is completed first
     const marks = await readMarksState(this.fs, dir);
-    const dmg = await readDamaged(this.fs, dir, marks);
-    if (dmg) throw new StoreError('damaged', dmg.asideName);
-    // WHY (review 4, F5 class): a damaged marker that survives next to a live index.bin is an OLDER copy of a marker (a quarantine really moves the index away); readDamaged ignores it.
-    // Review 5: it is cleared by writing a newer statement into marks.bin (nothing is deleted). Best effort: a read never fails for lack of space.
-    if (marks.kind === 'ok' && marks.value?.damaged) { try { await setMarks(this.fs, dir, { damaged: null }, marks); } catch (e) { if (!isDiskFull(e)) throw e; } }
     const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
 
     // 0. What was evicted ON PURPOSE. The only authority is the eviction state inside the checkpoint (checkpoint.ts), which is rewritten in place at every acknowledgement and carries this
@@ -343,8 +341,6 @@ export class ChatStore {
       if (!r) throw new NeedsRebuild(`record ${ck.count - 1} fails its checksum`);
       if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
     }
-    // (An older checkpoint whose head passed this proof, with no damage found, is then restated under the current count by restoreRedundancy: the proof is what makes it true, and without it the older count would
-    // stay forever and degrade every later repair. When the proof could not run, the older count is kept: a catch-up must never bless content it did not check.)
     // WHY (round 7, F1, found by the fuzz): an index AHEAD of the checkpoint looks exactly like a crash between the index write and the checkpoint write, and the checkpoint was then simply "caught up" to
     // it. After a takeover whose cut FINISHED (`.done`) it is also what an older index and older bodies put back look like when the checkpoint was lowered at the cut and agrees at the cut point. A restored
     // one runs along the tail of a finished takeover (the tail holds every line the old host had past the cut, with the chain value at each) while the checkpoint says the version has nothing past the cut
@@ -355,13 +351,7 @@ export class ChatStore {
     // have been put back) when the index and bodies were put back with it: all three older, nothing disagrees, and only the tail says the head is a replaced history's. A checkpoint with one damaged slot
     // (`slotsOk` 1) lags by one append through nothing but that damage, so the lag alone is not evidence there.
     // Only when the BODIES hold what the index head claims (`layout.phys`): an older index alone, whose extra records point past the trimmed bodies, would serve nothing old, and the rebuild below deals with it.
-    const histNow = await histCount(this.fs, dir);
-    let blessed = false;   // the head was PROVEN not to lie on a replaced history, so an older checkpoint may be restated under the current count (below)
-    if (ck && last && layout.phys >= last.offset + last.len && ((count > ck.count && ckState.slotsOk === 2) || ck.hist < histNow)) {
-      const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(last.h), 0, true, ck.hist < histNow ? 0 : ck.count);
-      if (hit === null && ck.hist < histNow) blessed = true;
-      if (hit !== null && hit !== 'unproven') throw new Damaged(`the index runs ahead of the checkpoint along the lines takeover ${hit} cut away, or the checkpoint predates it: older files put back, refusing to serve them`);
-    }
+    // (An older checkpoint is a PREFIX of the truth: it agrees with the index at its own count, which the check above proved, and the file is then restated level with the head by restoreRedundancy.)
     // the eviction record must agree with the index record of its last line (an independent, checksummed record)
     if (ev.lines > 0) {
       const r = decodeRecord(await this.readAt(this.ixPath(dir), recPos(ev.lines - 1), REC), 0);
@@ -429,7 +419,7 @@ export class ChatStore {
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv, marks, hw, rolledBack: null,
-      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), hist: ck && !(blessed && badLine === null && !partial) ? ck.hist : histNow, tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
+      parked: new Map(), parkedBytes: 0, rejected: 0,
     };
     await this.restoreRedundancy(st);
     await this.checkRollback(st);
@@ -454,23 +444,19 @@ export class ChatStore {
       const want = this.ckOf(st);
       const cur = st.ck.ck;
       // DESTRUCTIVE-OK(verified-record): the head's chain values come from the CRC-checked index record and the load checks above; a lagging or damaged slot is replaced, a statement AHEAD of the index never reaches here
-      if (!cur || cur.count !== st.count || cur.stamp !== want.stamp || cur.evLines !== want.evLines || cur.evBytes !== want.evBytes || cur.lostRecs !== want.lostRecs || cur.staleBad !== want.staleBad || cur.hist !== want.hist || st.ck.slotsOk < 2) await writeCheckpoint(this.fs, st.dir, want, st.ck);
+      if (!cur || cur.count !== st.count || cur.stamp !== want.stamp || cur.evLines !== want.evLines || cur.evBytes !== want.evBytes || cur.lostRecs !== want.lostRecs || cur.staleBad !== want.staleBad || st.ck.slotsOk < 2) await writeCheckpoint(this.fs, st.dir, want, st.ck);
     } catch (e) { if (!isDiskFull(e)) throw e; }
   }
 
   /** The checkpoint statement for what `st` holds now (`over` changes single fields: a new head, a new eviction state). One place, so no site can forget the boundary or the stale bit. */
   private ckOf(st: VState, over: Partial<Checkpoint> = {}): Checkpoint {
-    return { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, boundary: st.evictedLines > 0 ? st.evB : null, lostRecs: st.evictedLines > 0 ? st.lostRecs : 0, staleBad: st.staleConv ? st.staleBad : null, hist: st.hist, h: st.h, c: st.c, ...over };
+    return { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, boundary: st.evictedLines > 0 ? st.evB : null, lostRecs: st.evictedLines > 0 ? st.lostRecs : 0, staleBad: st.staleConv ? st.staleBad : null, h: st.h, c: st.c, ...over };
   }
 
   // ---- high-water record (highwater.ts: ChatStore only forwards, the record is advisory) ------------
   private hwEnv(): HwEnv { return { fs: this.fs, root: this.root, readRecordHash: async (st, n) => { const r = decodeRecord(await this.readAt(this.ixPath(st.dir), recPos(n - 1), REC), 0); return r ? hex(r.h) : null; } }; }
-  private resetHwFor(key: string): Promise<void> {
-    return resetHw(this.hwEnv(), key, async () => { const meta = await readMeta(this.fs, this.vdir(key)); return meta ? hex(this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 }).raw) : null; });
-  }
   private checkRollback(st: VState): Promise<void> { return checkRollback(this.hwEnv(), st); }
   private noteHw(st: VState, force = false): Promise<void> { return noteHw(this.hwEnv(), st, force); }
-  private lowerHwTo(st: VState, count: number): Promise<void> { return lowerHwTo(this.hwEnv(), st, count); }
 
   // ---- index and body recovery (recovery.ts: settleIndex, rebuildIndex) --------------------------------
   private async rebuildIndex(key: string, reason: string): Promise<RebuildResult> {
@@ -614,6 +600,7 @@ export class ChatStore {
         if (to > st.count) throw new StoreError('bad-argument', `range ends at ${to}, the head is ${st.count}`);
         if (from >= to) return [];
         if (from < st.evictedLines) return 'evicted';
+        this.assertServable(st, to);
         return this.readRange(st, from, to, true);
       });
     });
@@ -639,6 +626,7 @@ export class ChatStore {
               const r = this.mustRec(buf, i * REC);
               if (!r.conversation) continue;
               if (n < st.evictedLines) throw new StoreError('evicted', `line ${n}`);
+              this.assertServable(st, n + 1);
               out.push({ line: n, bytes: (await this.readRange(st, n, n + 1, true))[0] });
             }
           }
@@ -649,6 +637,15 @@ export class ChatStore {
       if (batch.length === 0) return;
       yield batch;
     }
+  }
+
+  /**
+   * WHY (review 8 F3): read() must never serve a line the store itself reports as suspect. Wherever head() says `damagedFromLine` (a body that failed its chain, lines a rebuild set aside, a folder
+   * put back older than the high-water record), a read that reaches that line throws `corrupt`, so a caller cannot spread bad lines by forgetting to look at head() first.
+   */
+  private assertServable(st: VState, to: number): void {
+    const bad = this.damagedFrom(st);
+    if (bad !== null && to > bad) throw new StoreError('corrupt', `line ${bad} is reported damaged (head.damagedFromLine); nothing from there on is served`);
   }
 
   /** Slots [0, lostRecs) of the index hold no real record (review 5, F4); every scan starts at this slot. 0 normally. */
@@ -724,9 +721,7 @@ export class ChatStore {
    *  - 'not-a-prefix' some overlapping line differs from what the store holds; nothing was changed
    * Returns only after the write is fsynced (INV-18); throws on ENOSPC and the like.
    *
-   * RULE FOR THE NEXT LAYER (round 7, F4; no behaviour here): the store cannot know WHO sent these lines. A park is sealed with the history (epoch) that is current when the store RECEIVES it, so a
-   * late append from a host that was already deposed, arriving after the takeover, is sealed with the NEW history and will drain onto the new host's lines. The caller (the replicator) must therefore
-   * fence the deposed host BEFORE calling append(): refuse its lines at the door, never hand them to the store. The store only fences parks that were RECEIVED before a takeover or a quarantine.
+   * A late append from a host that was deposed addresses the OLD version id and extends that fork; the new host writes to the new id (forkVersion). The store never needs to know who sent lines.
    */
   append(version: VersionId, segment: number, fromLine: number, lines: Uint8Array[]): Promise<AppendResult> {
     return this.guard(() => {
@@ -1113,14 +1108,14 @@ export class ChatStore {
           const meta = await this.readMetaIfPresent(this.vdir(key)); // registration may never have finished
           if (!meta) continue;
           base = { version: unhex(key), chatId: meta.chatId, runtime: meta.runtime, parent: meta.parent ? unhex(meta.parent) : null };
-          const dmg = await readDamaged(this.fs, this.vdir(key));
-          if (dmg) { out.push({ ...base, head: null, damaged: dmg.asideName }); continue; }
+          const retired = await this.asides.retiredName(key);
+          if (retired) { out.push({ ...base, head: null, damaged: retired }); continue; }
           let st = this.versions.get(key);
           if (!st) { st = await this.load(key); this.versions.set(key, st); }
           out.push({ ...base, head: this.headOf(st), damaged: null });
         } catch (e) {
           this.versions.delete(key);
-          if (e instanceof StoreError && e.code === 'damaged') { out.push({ ...base, head: null, damaged: (await readDamaged(this.fs, this.vdir(key)).catch(() => null))?.asideName ?? 'damaged' }); continue; }
+          if (e instanceof StoreError && e.code === 'damaged') { out.push({ ...base, head: null, damaged: (await this.asides.retiredName(key).catch(() => null)) ?? 'damaged' }); continue; }
           out.push({ ...base, head: null, damaged: `unreadable: ${e instanceof StoreError ? e.code : ((e as { code?: string })?.code ?? 'error')}` });
         }
       }
@@ -1129,41 +1124,109 @@ export class ChatStore {
   }
   private async readMetaIfPresent(dir: string) { return (await this.fs.exists(nodePath.join(dir, 'meta.json'))) || (await this.fs.exists(nodePath.join(dir, 'meta.copy'))) ? readMeta(this.fs, dir) : null; }
 
-  // ---- set-asides ----------------------------------------------------------------------------------
+  // ---- forking a version (a takeover) -------------------------------------------------------------
   /**
-   * An old host's tail: save lines [fromLine, head) under `takeoverId` (sealed with the version AND the id, review 5 F2) and cut the version back. IDEMPOTENT per takeover id: a retry returns the
-   * original result and cuts only when the version still holds exactly the saved tail. The ordered steps, what a crash behind each leaves and what the retry does are in tails.ts (review 6).
-   * Every call ALSO starts a new history for parked appends, even when there is nothing to cut (tails.ts, invariant H).
+   * TAKEOVER = FORK (restructure). A version folder never shortens and never changes history; when a new host takes a chat over from line `fromLine`, the store builds a NEW version folder `child`
+   * holding the verified lines [0, fromLine) of `parent` (a plain COPY, not hard links: a scrub or restoreBody writes chunk files in place) and the new host appends to that. The parent is not
+   * touched at all: it IS the kept other ending (design section 2: a leftover different ending is kept as a second version, never merged, never deleted), and the old host's late lines still address
+   * it. Idempotent: the same call again returns `created: false` once the child exists with the same first `fromLine` lines.
+   *
+   * THE CALLER OWNS THE CHILD ID, and every device must derive the SAME id for the same takeover or two devices create two siblings (a visible duplicate fork, never a loss). `deriveForkId` below is the
+   * rule to use: it hashes the parent id, the fork line, the chain value there and a token every device agrees on (the id of the control-log entry that records the takeover).
+   * The caller also owns: the control entry that says which version is current (the store has no "current version"), and a retention rule for abandoned forks (each is a full copy of the prefix).
+   *
+   * Refused (typed): the parent has evicted lines (`evicted`: restoreBody first, a copy needs the bodies), the parent is damaged or rolled back anywhere below `fromLine` (`corrupt`), `fromLine` is past
+   * the head (`bad-argument`), the child id already exists with another parent or another prefix (`version-conflict`), the child id is retired (`damaged`), a custom seed rule that depends on the
+   * version id (`bad-argument`: the copied chain values would not be valid under the child's seed).
+   *
+   * CRASH TABLE (the child is built in forks/<childhex>/, a folder no listing, load or read ever looks at, and appears in versions/ by ONE directory rename):
+   *   step                                                        a crash right after it leaves                          the next open / retry does
+   *   ----------------------------------------------------------  -----------------------------------------------------  ----------------------------------------------------------------------
+   *   0 nothing                                                   no child                                               retry runs from step 1
+   *   1 forks/<child>/ created, old leftovers in it cleared       empty or half-built forks/<child>/                     open() clears its files; a retry clears them again and rebuilds
+   *   2 meta, index, body files, checkpoint written and fsynced   a complete but INVISIBLE forks/<child>/                  same: rebuilt (the parent is untouched, so the work is repeatable)
+   *   3 forks/<child>/ renamed to versions/<child>/ (one atomic   a complete, visible child; no high-water record yet    it loads like any version (no record = no evidence, never an alarm); the
+   *     rename), versions/ and forks/ fsynced                                                                            retry finds it, checks the prefix and answers `created: false`
+   *   4 high-water record written (advisory)                      everything finished                                    retry answers `created: false`
+   * There is no destructive step and no intent marker: the only thing a crash can leave behind is an invisible half-built folder.
    */
-  setAsideTail(takeoverId: string, version: VersionId, fromLine: number): Promise<{ lines: number }> {
+  forkVersion(parent: VersionId, fromLine: number, child: VersionId): Promise<{ lines: number; created: boolean }> {
     return this.guard(() => {
-      if (!TAKEOVER_RE.test(takeoverId)) throw new StoreError('bad-argument', 'takeover id must be hex');
       if (!Number.isSafeInteger(fromLine) || fromLine < 0) throw new StoreError('bad-argument', 'fromLine');
-      const key = this.keyOf(version);
-      return this.exclusive(() => this.mutate(key, async () => setAsideTailLocked(this.tailEnv(), await this.state(version), takeoverId, fromLine)));
-    });
-  }
-  private tailEnv(): TailEnv {
-    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n), recordTakeovers: (st) => recordTakeovers(this.hwEnv(), st, st.tailsShown), stampHistory: async (st) => { const live = this.versions.get(st.key) ?? st; live.hist = await histCount(this.fs, live.dir); await appendCheckpoint(this.fs, live.dir, live.ck, this.ckOf(live)); } };   // the live state: cutTo replaced it
-  }
-
-  /** A previously set-aside tail, with the chain values around it, or null. Pass `version` to look in one version only. */
-  tail(takeoverId: string, version?: VersionId): Promise<TailRecord | null> {
-    return this.guard(() => {
-      if (!TAKEOVER_RE.test(takeoverId)) throw new StoreError('bad-argument', 'takeover id must be hex');
-      const only = version ? this.keyOf(version) : null;
-      return this.exclusive(async () => {
-        const keys = only ? [only] : await this.fs.readdir(nodePath.join(this.root, 'versions'));
-        for (const key of keys) {
-          let t: TailFile | null;
-          // asked of ONE version: a file that is not that version's tail for this id throws `corrupt`. Looking across versions, a tail for THIS id sealed for another version is found under its own folder, so it is skipped here; any other file under this name is an overwritten tail and throws
-          try { t = await readTailFile(this.fs, nodePath.join(this.vdir(key), 'tails', `${takeoverId}.tail`), key, takeoverId); } catch (e) { if (only || !(e instanceof ForeignTail && e.elsewhere)) throw e; continue; }
-          if (!t && await tailWasProtected(this.fs, this.vdir(key), takeoverId)) throw LOST_TAIL();   // review 6 B2: the intent marker counts too, not only `.done`
-          if (t) return { version: unhex(key), fromLine: t.fromLine, fromHash: t.fromHash, fromConversationHash: t.fromConv, headHash: t.headHash, headConversationHash: t.headConv, lines: t.lines, replyEnds: t.replyEnds, pendingReplyEnd: t.pending };
+      const pk = this.keyOf(parent); const ck = this.keyOf(child);
+      if (pk === ck) throw new StoreError('bad-argument', 'a version cannot be forked into itself');
+      return this.exclusive(() => this.mutate(ck, async () => {
+        const retired = await this.asides.retiredName(ck);
+        if (retired) throw new StoreError('damaged', retired);
+        const st = await this.state(parent);
+        if (fromLine > st.count) throw new StoreError('bad-argument', `fromLine ${fromLine} is past the parent's head ${st.count}`);
+        const bad = this.damagedFrom(st);
+        if (bad !== null && bad < fromLine) throw new StoreError('corrupt', `the parent is reported damaged from line ${bad}; nothing is copied from it`);
+        const want = (await this.stateAtLine(st, fromLine)).h;
+        const cdir = this.vdir(ck);
+        if (await this.fs.exists(nodePath.join(cdir, 'meta.json')) || await this.fs.exists(nodePath.join(cdir, 'meta.copy'))) {
+          // the child exists: it must be THIS fork (same parent, same first fromLine lines), otherwise the id was used for something else
+          const cm = await readMeta(this.fs, cdir);
+          if (!cm || cm.chatId !== st.meta.chatId || cm.parent !== pk) throw new StoreError('version-conflict', 'the child id exists with another parent');
+          const cs = await this.state(child);
+          if (cs.count < fromLine || !(await this.stateAtLine(cs, fromLine)).h.equals(want)) throw new StoreError('version-conflict', 'the child id exists and does not start with the same lines');
+          return { lines: fromLine, created: false };
         }
-        return null;
-      });
+        if (st.evictedLines > 0) throw new StoreError('evicted', 'the parent has evicted lines; restoreBody them first');
+        if (st.staleConv) throw new StoreError('corrupt', 'the parent\'s conversation chain is stale; nothing is copied from it');
+        const cseeds = this.seedFn({ chatId: st.meta.chatId, version: unhex(ck), segment: 0 });
+        if (!cseeds.raw.equals(st.seeds.raw) || !cseeds.conversation.equals(st.seeds.conversation)) throw new StoreError('bad-argument', 'the chain seed depends on the version id: a fork cannot reuse the parent\'s chain values');
+        // step 1: a fresh work folder. WHY under forks/<childhex> (basename = the final key): every envelope and tag of the child is sealed with the folder name, so the work folder must carry the final name.
+        const forks = nodePath.join(this.root, 'forks'); const work = nodePath.join(forks, ck);
+        await mkdirDurable(this.fs, work);
+        await this.clearForkFiles(work);
+        // step 2: meta (two copies), then the verified prefix. Each line is read WITH its chain check, so a rotted line stops the fork instead of being copied.
+        const meta = { format: 1, chatId: st.meta.chatId, runtime: st.meta.runtime, parent: pk, createdMs: this.now() };
+        await writeSideFor(this.fs, nodePath.join(work, 'meta.json'), { role: 'meta', key: ck }, meta); // DESTRUCTIVE-OK(verified-record): a NEW file in a work folder that was just emptied
+        await writeSideFor(this.fs, nodePath.join(work, 'meta.copy'), { role: 'meta', key: ck }, meta); // DESTRUCTIVE-OK(verified-record): a NEW file in a work folder that was just emptied
+        const xf = await this.fs.open(this.ixPath(work), { create: true });
+        let chunkStart = 0; let chunkFile: Awaited<ReturnType<Fs['open']>> | null = null;
+        let lastRec: Rec | null = null;
+        try {
+          await xf.write(indexHeader(this.stamp, versionTag(ck)), 0);
+          const pf = await this.fs.open(this.ixPath(st.dir), { create: false });
+          try {
+            for (let a = 0; a < fromLine; a += 256) {
+              const b = Math.min(fromLine, a + 256);
+              const lines = await this.readRange(st, a, b, true);
+              const recs = await pf.read(recPos(a), (b - a) * REC);
+              await xf.write(recs, recPos(a));
+              for (let k = 0; k < b - a; k++) {
+                const r = this.mustRec(recs, k * REC);
+                // the same chunk rule as an append: a new chunk file starts once the active one holds chunkBytes
+                if (!chunkFile || r.offset - chunkStart >= this.chunkBytes) { if (chunkFile) { await chunkFile.sync(); await chunkFile.close(); } chunkStart = r.offset; chunkFile = await this.fs.open(this.chunkPath({ dir: work }, chunkStart), { create: true }); }
+                await chunkFile.write(lines[k], r.offset - chunkStart);
+                lastRec = r;
+              }
+            }
+          } finally { await pf.close(); }
+          if (chunkFile) await chunkFile.sync();
+          await xf.sync();
+        } finally { await chunkFile?.close().catch(() => undefined); await xf.close(); }
+        // DESTRUCTIVE-OK(verified-record): the first statement of a NEW folder; its chain values are those of the verified index record
+        await writeCheckpoint(this.fs, work, { count: fromLine, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, h: lastRec ? lastRec.h : Buffer.from(st.seeds.raw), c: lastRec ? lastRec.c : Buffer.from(st.seeds.conversation) });
+        await this.fs.fsyncDir(work); await this.fs.fsyncDir(forks);
+        // step 3: the one atomic step that makes the child exist
+        await mkdirDurable(this.fs, nodePath.join(this.root, 'versions'));
+        // DESTRUCTIVE-OK(kept-copy-first): the target does not exist (checked above, and nothing else writes under this lock)
+        await this.fs.rename(work, cdir);
+        await this.fs.fsyncDir(nodePath.join(this.root, 'versions')); await this.fs.fsyncDir(forks);
+        // step 4 (advisory): the high-water record, so a later rollback of the child is reported
+        const cst = await this.state(child);
+        await this.noteHw(cst, true);
+        return { lines: fromLine, created: true };
+      }));
     });
+  }
+  /** Empty a fork work folder of whatever a stopped attempt left (the files are copies of data the parent still holds; the folder itself stays). */
+  private async clearForkFiles(work: string): Promise<void> {
+    // DESTRUCTIVE-OK(scratch): files of an unfinished, invisible work folder; the parent holds every line they contain
+    for (const n of await this.fs.readdir(work)) await this.fs.unlink(nodePath.join(work, n));
   }
 
   private async stateAtLine(st: VState, n: number): Promise<{ h: Buffer; c: Buffer }> {
@@ -1172,54 +1235,10 @@ export class ChatStore {
     try { const r = this.mustRec(await f.read(recPos(n - 1), REC)); return { h: r.h, c: r.c }; } finally { await f.close(); }
   }
 
-  private async confirmedBetween(st: VState, from: number, to: number): Promise<number[]> {
-    const out: number[] = [];
-    const f = await this.fs.open(this.ixPath(st.dir), { create: false });
-    try {
-      for (let n = from; n < to; n += SCAN_BATCH) {
-        const take = Math.min(SCAN_BATCH, to - n);
-        const buf = await f.read(recPos(n), take * REC);
-        for (let i = 0; i < take; i++) { const r = this.mustRec(buf, i * REC); if (r.confirms !== NONE) out.push(r.confirms); }
-      }
-    } finally { await f.close(); }
-    return out;
-  }
-
   /**
-   * The only operation that shortens a version, and only after the cut lines are safe in a tail file. Index
-   * first (the cut is committed by it), then the body is trimmed to match here, explicitly: open() would
-   * otherwise treat the body as unindexed lines. A kill between the two is harmless: the next open re-adopts
-   * the lines (the tail file still holds them) and the retried set-aside cuts again (H1 rule).
-   */
-  private async cutTo(st: VState, n: number): Promise<void> {
-    if (n < st.evictedLines) throw new StoreError('evicted', 'cannot cut into evicted lines');
-    const lastKept = n === 0 ? null : this.mustRec(await this.readAt(this.ixPath(st.dir), recPos(n - 1), REC));
-    const endOff = lastKept ? lastKept.offset + lastKept.len : 0;
-    // WHY the high-water record is lowered BEFORE the cut (review 5, F3): the cut is deliberate, so the shorter head must not later be reported as a rollback; lowered first, a kill between the two
-    // steps leaves the record merely lower than the head (it can only under-report)
-    await this.lowerHwTo(st, n);
-    // WHY the checkpoint is lowered BEFORE the cut (N1): a checkpoint that outlives the cut would claim lines that are gone, and
-    // the next load would call the version damaged. Lowered first, a kill between the two steps leaves it merely behind the index.
-    if (st.ck.ck && st.ck.ck.count > n) {
-      // DESTRUCTIVE-OK(verified-record): lowers the statement to the chain value of record n-1, read from the checksummed index; the caller saved the cut lines in a verified tail file
-      await writeCheckpoint(this.fs, st.dir, this.ckOf(st, { count: n, h: lastKept ? lastKept.h : st.seeds.raw, c: lastKept ? lastKept.c : st.seeds.conversation }), st.ck);
-    }
-    const f = await this.fs.open(this.ixPath(st.dir), { create: false });
-    // DESTRUCTIVE-OK(kept-copy-first): the lines past n were saved in a tail file that was read back and compared before this call (setAsideTail)
-    try { await f.truncate(recPos(n)); await f.sync(); } finally { await f.close(); }
-    await this.tools.trimBody(st.dir, endOff, false);
-    this.versions.delete(st.key);
-    const fresh = await this.load(st.key); // re-derives the state
-    // The summary may mention facts from the removed tail: recompute it from the kept lines.
-    fresh.summary = { title: null, model: null, cwd: null, lastAppendMs: fresh.summary.lastAppendMs, lines: 0 };
-    await this.loadSummary(fresh);
-    await this.saveSummary(fresh);
-    this.versions.set(st.key, fresh);
-  }
-
-  /**
-   * The copy is damaged (its bytes no longer match its chain): move everything into aside/ (kept, never deleted, retention rule 5.3) and start the version empty so it can be recopied.
-   * For a version the store already quarantined (`damaged`), this only clears the marker: the quarantined copy is already aside, intact. Parked appends stay. (asides.ts)
+   * The copy is damaged (its bytes no longer match its chain): move everything into aside/ (kept, never deleted, retention rule 5.3) and RETIRE the version id: it is never refilled (asides.ts).
+   * The replicator recopies from a peer into a NEW version id. Idempotent: for an id that is already retired (set aside by the caller or quarantined by the store) it returns the aside folder's name and
+   * changes nothing. Parked appends stay where they are and are never applied (no load of a retired id succeeds).
    */
   setAsideDamaged(version: VersionId): Promise<{ asideName: string }> {
     return this.guard(() => {
@@ -1459,15 +1478,15 @@ export class ChatStore {
 
   /**
    * Disk used by everything the store KEEPS and never deletes (N11), so the replicator can own a disk budget:
-   * set-aside copies, rejected parks, tails, replaced indexes, healed bytes, torn bytes, rotted extras, and extras.
+   * set-aside copies, rejected parks, replaced indexes, healed bytes, torn bytes, rotted extras, and extras.
    */
-  keptBytes(): Promise<{ aside: number; extrasBad: number; extras: number; perVersion: { version: string; rejected: number; tails: number; replacedIndex: number; healed: number; torn: number; parked: number }[] }> {
+  keptBytes(): Promise<{ aside: number; extrasBad: number; extras: number; perVersion: { version: string; rejected: number; replacedIndex: number; healed: number; torn: number; parked: number }[] }> {
     return this.exclusive(async () => {
       const perVersion = [];
       for (const key of (await this.fs.readdir(nodePath.join(this.root, 'versions'))).sort()) {
         const d = this.vdir(key);
         const sz = (n: string) => this.bytesUnder(nodePath.join(d, n));
-        perVersion.push({ version: key, rejected: await sz('rejected'), tails: await sz('tails'), replacedIndex: await sz('replaced-index'), healed: await sz('healed'), torn: await sz('torn'), parked: await sz('parked') });
+        perVersion.push({ version: key, rejected: await sz('rejected'), replacedIndex: await sz('replaced-index'), healed: await sz('healed'), torn: await sz('torn'), parked: await sz('parked') });
       }
       return { aside: await this.bytesUnder(nodePath.join(this.root, 'aside')), extrasBad: await this.bytesUnder(nodePath.join(this.root, 'extras-bad')), extras: await this.extras.bytes(), perVersion };
     });
@@ -1495,6 +1514,6 @@ export class ChatStore {
   private rolledBackOf(st: VState): { from: number; had: number } | null { return st.rolledBack && st.count < st.rolledBack.had ? st.rolledBack : null; }
 
   private headOf(st: VState): Head {
-    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv, rolledBack: this.rolledBackOf(st), rejectedParks: st.rejected, lostTakeovers: lostTakeovers(st) };
+    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv, rolledBack: this.rolledBackOf(st), rejectedParks: st.rejected };
   }
 }

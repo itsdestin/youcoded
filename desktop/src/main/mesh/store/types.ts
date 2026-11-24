@@ -80,15 +80,10 @@ export interface Head {
    */
   rolledBack: { from: number; had: number } | null;
   /**
-   * Round 7 (F5): how many parked appends are kept in rejected/ (moved there by a takeover, a quarantine, a conflict, a damaged file or releaseParked). A caller reads this instead of polling a folder;
+   * Round 7 (F5): how many parked appends are kept in rejected/ (moved there by a conflict, a damaged file, a full cap or releaseParked). A caller reads this instead of polling a folder;
    * when it is above what the caller last saw, `rejectedList` says which, why and where they start, and the caller resends those lines (the store never applies them).
    */
   rejectedParks: number;
-  /**
-   * Round 7 (F3): how many takeovers the high-water record (outside the chat folder) counted that tails/ no longer shows. Above 0 means a tail (the only copy of cut lines) and its markers were lost:
-   * `setAsideTail` then refuses with `corrupt` (it never writes an empty tail over the loss). 0 when nothing is known: a record that was itself lost can only under-report.
-   */
-  lostTakeovers: number;
 }
 
 export type AppendResult = 'ok' | 'parked' | 'not-a-prefix';
@@ -125,19 +120,6 @@ export interface EvictionProof {
   through: number;
   hash: string;
   acks: ProofAck[];
-}
-
-export interface TailRecord {
-  version: VersionId;
-  fromLine: number;
-  fromHash: string;
-  fromConversationHash: string;
-  headHash: string;
-  headConversationHash: string;
-  lines: Buffer[];
-  /** Reply ends confirmed inside the tail (absolute line numbers) and the unconfirmed candidate, if any. */
-  replyEnds: number[];
-  pendingReplyEnd: number | null;
 }
 
 export interface VerifyReport { ok: boolean; lines: number; firstBadLine: number | null; reason?: string }

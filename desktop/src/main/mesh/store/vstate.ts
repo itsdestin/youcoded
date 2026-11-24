@@ -50,23 +50,13 @@ export interface VState {
   partial: { fromLine: number; lost: number } | null;
   /** The conversation chain of the evicted prefix was written by another classifier (N4); the bit lives in the checkpoint stamp. */
   staleConv: boolean;
-  /** marks.bin as read (partial / damaged markers). */
+  /** marks.bin as read (the partial marker). */
   marks: SlotState<Marks>;
   /** The high-water record kept outside the chat folders (highwater.ts), the head count it last stated, and a head count it reported as rolled back from (null: none). */
   hw: HighWater;
   /** The head was found behind the high-water record (a whole folder put back): reported through damagedFromLine and head.rolledBack until the head passes `had`. Never persisted: it is re-derived at each open. */
   rolledBack: { from: number; had: number } | null;
   /** Parked append files: name -> size, kept in memory so a park never rescans the folder (M4). */
-  /** The history identity (tails.ts readEpoch), read from disk at load and after a takeover begins: parks are sealed with it and applied only while it is unchanged. */
-  epoch: string;
-  /**
-   * The history COUNT every checkpoint statement written from this state carries (round 7, F1). It is the count of the checkpoint that was LOADED, and moves to the folder's count only where the store has just
-   * made the content current: after a takeover's cut, at a rebuild that passed its checks, and at registration. WHY not simply the folder's count: a load that catches an older checkpoint up to an older
-   * index would otherwise restate OLD content under the CURRENT count, and that lie could never be told from a true statement again.
-   */
-  hist: number;
-  /** How many takeovers tails/ shows evidence of (tails.ts takeoverIds); compared with the high-water record's count to see a lost tails/ (round 7, F3). */
-  tailsShown: number;
   /** How many files rejected/ holds (round 7, F5): a cheap signal for head(), kept in memory so a caller need not poll a folder. */
   rejected: number;
   parked: Map<string, number>;

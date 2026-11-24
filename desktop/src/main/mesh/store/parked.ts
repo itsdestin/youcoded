@@ -12,23 +12,24 @@ import type { VState } from './vstate';
 const MAX_REJECTED = 1024;
 
 /**
- * Why a park was moved to rejected/ (round 7, F5): it is the first part of the file's name (`<reason>--<park name>`), so the reason survives a reopen and needs no second file. `stale-history` is a park
- * found at read time to belong to another history (a put-back copy); `takeover` and `quarantine` are the two history changes that move every old park at once; `conflict` is a park whose lines are not a
- * prefix of what the head holds; `damaged` is a park that could not be read or is not what its name says; `released` is the caller giving up on it (releaseParked).
+ * Why a park was moved to rejected/: it is the first part of the file's name (`<reason>--<park name>`), so the reason survives a reopen and needs no second file. `conflict` is a park whose lines are not a
+ * prefix of what the head holds (the version's lines never change, so these lines can never be applied here: the caller resends them to the version they belong to); `damaged` is a park that could not be
+ * read, is not what its name says, or was replaced; `released` is the caller giving up on it (releaseParked).
+ * (The reasons `takeover`, `quarantine` and `stale-history` are gone with the machinery that needed them: a park belongs to ONE version id, and a version's history never changes, so no park can be stale.)
  */
-export type RejectReason = 'takeover' | 'quarantine' | 'stale-history' | 'conflict' | 'damaged' | 'released';
-/** The reason and park name inside a rejected/ file name; a name without a reason prefix (kept by an older build) reads as `unknown`. */
+export type RejectReason = 'conflict' | 'damaged' | 'released';
+/** The reason and park name inside a rejected/ file name; a name without a reason prefix reads as `unknown`. */
 export function parseRejectedName(n: string): { reason: RejectReason | 'unknown'; name: string } | null {
-  const m = /^(?:(takeover|quarantine|stale-history|conflict|damaged|released)--)?(?:older-\d+-)?(\d{16}-[0-9a-f]{16}\.park)$/.exec(n);
+  const m = /^(?:(conflict|damaged|released)--)?(?:older-\d+-)?(\d{16}-[0-9a-f]{16}\.park)$/.exec(n);
   return m ? { reason: (m[1] as RejectReason | undefined) ?? 'unknown', name: m[2] } : null;
 }
 
 /**
- * WHY the epoch is part of the sealed id (review 6, B1): a park used to be bound to its position and lines but not to the HISTORY it was parked against, so after a takeover the old host's
- * park was drained onto the new host's lines. The id is now `<position>-<line hash>@<epoch>` (tails.ts: the epoch is read from disk and changes at every takeover), so the invariant is:
- * a parked append is only ever drained onto the history it was parked against. Every other place that touches parks (cut time, open, drain) is a second layer on top of this one.
+ * A park is sealed with the version key and its POSITION and LINE HASH (the name's stem `<position>-<hash>`). It belongs to ONE version id and is only ever drained into it. WHY no history is sealed any
+ * more (restructure): a version folder is append-only in history, so the version a park was parked for cannot later hold different lines at that position; the worst a park can meet is a conflict, which
+ * the drain already moves to rejected/.
  */
-export const parkId = (name: string, epoch: string): string => `${name.slice(0, -5)}@${epoch}`;
+export const parkId = (name: string): string => name.slice(0, -5);
 
 export class Parked {
   constructor(
@@ -51,9 +52,6 @@ export class Parked {
   }
 
   /**
-   * RULE FOR THE NEXT LAYER (round 7, F4; no behaviour here): the epoch sealed into a park below is the one current when the store RECEIVES it (st.epoch), not one the sender names. A late park from a host that
-   * was deposed before the takeover but delivered after it is therefore sealed with the NEW history and will drain onto the new host's lines. The replicator must reject a deposed host's lines before append().
-   *
    * M4: duplicate check, file count and byte total come from memory (built once at load), so a park costs
    * one file write instead of a rescan of every parked file; the count and byte caps make the total bounded.
    */
@@ -64,7 +62,7 @@ export class Parked {
     // WHY the envelope (review 5, F1): a park used to carry only a version tag; its POSITION lived in the file NAME alone, so a valid park placed under another park's name was drained at the
     // wrong place with no report. Now the position and the line hash (the name's stem `<position>-<hash>`) are sealed INSIDE the file with the version key, and the drain compares them
     // with the name: a file that is not the one its name says (another position, another version, another kind) is rejected, never applied.
-    const data = sealEnv({ role: 'park', version: st.key, id: parkId(name, st.epoch) }, frameLines(lines));
+    const data = sealEnv({ role: 'park', version: st.key, id: parkId(name) }, frameLines(lines));
     if (st.parked.has(name)) {
       // WHY not simply "already parked" (the file could have rotted since): an intact copy is enough, a damaged one is kept in rejected/ and replaced
       const have = await this.fs.readFile(nodePath.join(st.dir, 'parked', name));
@@ -81,32 +79,6 @@ export class Parked {
     // DESTRUCTIVE-OK(verified-record): the name is derived from the lines' hash, so a file of this name holds the same lines; a rotted one was moved to rejected/ above
     await writeFileAtomic(this.fs, nodePath.join(dir, name), data);
     st.parked.set(name, data.length); st.parkedBytes += data.length;
-  }
-
-  /**
-   * At a takeover (tails.ts step 4): every park that does not belong to the CURRENT history is moved to rejected/ (kept, never deleted, never applied). A park that cannot be read at all is
-   * moved too (it is in rejected/ for a human to find). At the rejected/ cap a park stays in parked/, where the epoch still refuses it on read.
-   */
-  async rejectOutsideEpoch(st: VState): Promise<void> {
-    for (const name of [...st.parked.keys()].sort()) {
-      const path = nodePath.join(st.dir, 'parked', name);
-      const raw = await this.fs.readFile(path);
-      if (raw === null) { this.forget(st, name); continue; }
-      if (openEnv(raw, { role: 'park', version: st.key, id: parkId(name, st.epoch) }).kind === 'ok') continue;   // parked in this history: it stays
-      await this.moveAway(st, path, name, 'takeover');
-    }
-  }
-
-  /**
-   * A quarantine or set-aside (asides.ts): the version's history just changed under its parks, so EVERY park goes to rejected/ with the reason `quarantine` (kept, never deleted, never applied). Works on the
-   * folder alone (the version's memory was dropped). At the rejected/ cap a park stays where it is; the epoch (tails.ts readEpoch, which names the aside folder) refuses it on read anyway.
-   */
-  async rejectAllOnDisk(vdir: string): Promise<void> {
-    const dir = nodePath.join(vdir, 'parked');
-    for (const name of (await this.fs.readdir(dir)).filter((n) => n.endsWith('.park')).sort()) {
-      const size = await this.tools.fileSize(nodePath.join(dir, name));
-      await this.moveFile(vdir, nodePath.join(dir, name), name, size, 'quarantine', false);
-    }
   }
 
   forget(st: VState, name: string): void {
@@ -128,14 +100,12 @@ export class Parked {
         const raw = await this.fs.readFile(path);
         if (raw === null) { this.forget(st, name); progressed = true; continue; }   // the file is gone (parks are provisional): nothing to apply or move
         // every field is checked against what the NAME claims (envelope.ts): kind, version, and the position-and-hash id. A mismatch is a misplaced park: rejected (kept), never applied.
-        const env = openEnv(raw, { role: 'park', version: st.key, id: parkId(name, st.epoch) });
+        const env = openEnv(raw, { role: 'park', version: st.key, id: parkId(name) });
         let lines = env.kind === 'ok' ? unframeLines(env.payload) : null;
         // the line hash in the id must also be the hash of the lines the file really holds (a forged or mixed-up file cannot pass with matching framing alone)
         if (lines) { const h = createHash('sha256'); for (const l of lines) h.update(l); if (h.digest('hex').slice(0, 16) !== name.slice(17, 33)) lines = null; }
         if (!lines) {
-          // a park sealed for THIS version and position but another history is a stale one (a put-back copy); anything else is not what its name says
-          const stale = env.kind === 'foreign' && env.seen.role === 'park' && env.seen.version === st.key && typeof env.seen.id === 'string' && env.seen.id.startsWith(name.slice(0, -5) + '@');
-          if (await this.moveAway(st, path, name, stale ? 'stale-history' : 'damaged')) progressed = true; else skip.add(name);
+          if (await this.moveAway(st, path, name, 'damaged')) progressed = true; else skip.add(name);
           continue;
         }
         const res = await this.apply(st, from, lines);
@@ -148,14 +118,11 @@ export class Parked {
   }
 
   /**
-   * A parked append that is not a prefix is KEPT (retention rule) under rejected/, never deleted, with the reason in its name. At the cap it stays in parked/ instead (it counts toward the parked cap,
-   * the epoch still refuses it, and `park()` refuses a new park that would need its place). Returns whether it was moved.
+   * A parked append that is not a prefix is KEPT (retention rule) under rejected/, never deleted, with the reason in its name. At the cap it stays in parked/ instead (it counts toward the parked cap
+   * and `park()` refuses a new park that would need its place). Returns whether it was moved.
    */
-  moveAway(st: VState, path: string, name: string, reason: RejectReason, damaged = false): Promise<boolean> {
-    return this.moveFile(st.dir, path, name, st.parked.get(name) ?? 0, reason, damaged, st);
-  }
-
-  private async moveFile(vdir: string, path: string, name: string, size: number, reason: RejectReason, damaged: boolean, st?: VState): Promise<boolean> {
+  async moveAway(st: VState, path: string, name: string, reason: RejectReason, damaged = false): Promise<boolean> {
+    const vdir = st.dir; const size = st.parked.get(name) ?? 0;
     const rej = nodePath.join(vdir, 'rejected');
     await mkdirDurable(this.fs, rej);
     if ((await this.fs.readdir(rej)).length >= MAX_REJECTED) return false;
@@ -167,7 +134,7 @@ export class Parked {
     // DESTRUCTIVE-OK(kept-copy-first): a rename to a name nothing uses; the parked bytes are kept in rejected/, never deleted
     await this.fs.rename(path, target);
     await this.fs.fsyncDir(rej); await this.fs.fsyncDir(nodePath.join(vdir, 'parked'));
-    if (st) { this.forget(st, name); st.rejected++; }
+    this.forget(st, name); st.rejected++;
     return true;
   }
 }

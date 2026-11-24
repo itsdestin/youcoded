@@ -43,13 +43,6 @@ export interface Boundary { h: Buffer; c: Buffer; convCount: number; candN: numb
 /** `evLines`/`evBytes`: the evicted prefix (lines whose bodies were dropped on a proven eviction); 0/0 and `boundary` null when nothing is evicted. */
 export interface Checkpoint {
   count: number; stamp: number; h: Buffer; c: Buffer; evLines: number; evBytes: number; boundary: Boundary | null; lostRecs: number; staleBad: number | null;
-  /**
-   * HISTORY COUNT (round 7, F1): how many history changes (takeovers begun + quarantines / set-asides, tails.ts histCount) the version had when this statement was written. It lives in the upper 24 bits of the
-   * flags word (bits 8..31), which older slots wrote as zero, so no slot layout changed and an old slot simply reads as "written before any history change". WHY: the checkpoint and the index carry no
-   * identity of the history they describe, so after a takeover an OLDER checkpoint and a newer one looked alike. A statement whose count is below the version's current count was written before a later
-   * takeover (or quarantine); one equal to it was written in the current history; one above it means takeover evidence has been lost.
-   */
-  hist: number;
 }
 /** The identity every file of the version folder `dir` carries (the folder name is the version key). */
 const tagOf = (dir: string): Buffer => versionTag(nodePath.basename(dir));
@@ -73,7 +66,6 @@ function encodeSlot(k: Checkpoint, seq: number, tag: Buffer): Buffer {
     if (x.candId) Buffer.from(x.candId, 'hex').copy(b, 220, 0, 8);
     b.writeUInt32BE((x.candN >= 0 && x.candId === null ? 2 : 0) | 1, 228);   // bit 0: a boundary is present; bit 1: a candidate with a null id
   }
-  b.writeUInt32BE((b.readUInt32BE(228) | (Math.min(k.hist, 0xffffff) << 8)) >>> 0, 228);   // bits 8..31: the history count (see Checkpoint.hist)
   b.writeUInt32BE(crc32(b, 0, SLOT - 4), SLOT - 4);
   return b;
 }
@@ -89,7 +81,6 @@ function decodeSlot(b: Buffer, at: number, tag: Buffer): { seq: number; ck: Chec
   const lostRecs = Number(s.readBigUInt64BE(44)); const sb = s.readBigUInt64BE(52);
   if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(count) || !Number.isSafeInteger(evLines) || !Number.isSafeInteger(evBytes) || !Number.isSafeInteger(lostRecs) || evLines > count || (evLines === 0) !== (evBytes === 0) || lostRecs > evLines) return null;
   const flags = s.readUInt32BE(228);
-  const hist = flags >>> 8;
   // the boundary is present exactly when something is evicted: anything else is a slot that contradicts itself
   if (((flags & 1) !== 0) !== (evLines > 0)) return null;
   let boundary: Boundary | null = null;
@@ -97,7 +88,7 @@ function decodeSlot(b: Buffer, at: number, tag: Buffer): { seq: number; ck: Chec
     const cn = s.readBigUInt64BE(212);
     boundary = { h: Buffer.from(s.subarray(140, 172)), c: Buffer.from(s.subarray(172, 204)), convCount: Number(s.readBigUInt64BE(204)), candN: cn === NONE64 ? -1 : Number(cn), candId: cn === NONE64 || (flags & 2) ? null : s.subarray(220, 228).toString('hex') };
   }
-  return { seq, ck: { count, stamp: s.readUInt32BE(24), evLines, evBytes, boundary, lostRecs, staleBad: sb === NONE64 ? null : Number(sb), hist, h: Buffer.from(s.subarray(76, 108)), c: Buffer.from(s.subarray(108, 140)) } };
+  return { seq, ck: { count, stamp: s.readUInt32BE(24), evLines, evBytes, boundary, lostRecs, staleBad: sb === NONE64 ? null : Number(sb), h: Buffer.from(s.subarray(76, 108)), c: Buffer.from(s.subarray(108, 140)) } };
 }
 
 /** Read both slots: the newest valid statement (or null: absent or damaged is simply no evidence), and where the next write goes. */
