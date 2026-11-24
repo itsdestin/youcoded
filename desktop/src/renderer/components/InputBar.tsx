@@ -22,6 +22,8 @@ import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceListeningStrip, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { NativeStartupNotice } from './NativeStartupNotice';
+import { ChatNoticeStrip } from './ChatNoticeStrip';
+import { chatNoticeUserActed, clearChatNotice } from '../state/chat-notice-store';
 import { ConnectionStrip, type ConnectionStripProps } from './ConnectionStrip';
 import { useRemeasureOnFontOrWidth } from '../hooks/use-remeasure-on-font-or-width';
 import { useNativeStartup } from '../hooks/use-native-startup';
@@ -1004,6 +1006,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (sendBlocked) return;
+    // A send puts this chat's strip notice away (Destin, K-1: "leaves once the question is answered or you send");
+    // if this send is refused again, the refusal raises a fresh one.
+    if (sessionId) clearChatNotice(sessionId);
     if (minimal && sessionId) {
       const val = inputRef.current?.value ?? text;
       // pty-worker auto-splits text+\r with a 600ms gap so Enter isn't
@@ -1141,6 +1146,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       {/* A model chosen at setup that is still downloading (first-run local
           models, Q-4/Q-7): the same thin band, above the box. */}
       <NativeStartupNotice sessionId={sessionId} enabled={provider === 'native'} />
+      {/* This chat's own notice (held-back send, can't do that here, a command that failed): chat-notice-store.ts. */}
+      <ChatNoticeStrip sessionId={sessionId} />
       {!minimal && <LocalModelDownloadStrip sessionId={sessionId} />}
       {/* Feedback B: the app's thin status band, above the box, while listening. */}
       {voiceListening && voiceStyle.feedback === 'strip' && (
@@ -1235,6 +1242,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             }}
             onChange={(e) => {
               const val = e.target.value;
+              // Typing is "your next action" (Destin, K-3): a can't-do-that notice leaves; a held-back one stays.
+              if (sessionId) chatNoticeUserActed(sessionId);
               if (minimal && sessionId && consumeCtrlLetter(sessionId, text, val)) return;   // a held Ctrl: sent as Ctrl+letter
               // Typing while the mic is open ends dictation, and EVERYTHING in the
               // box stays — including the grey, still-being-reconsidered words.

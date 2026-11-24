@@ -19,11 +19,13 @@ import BrailleSpinner from '../BrailleSpinner';
  * theme-independent by standing rule (desktop/CLAUDE.md).
  */
 
-export type StatusTone = 'ok' | 'warn' | 'idle' | 'busy';
+// error: a chat's own failure notice (ChatNoticeStrip) — the same red dot the toast and ErrorState use.
+export type StatusTone = 'ok' | 'warn' | 'error' | 'idle' | 'busy';
 
 const DOT: Record<Exclude<StatusTone, 'busy'>, string> = {
   ok: 'bg-green-500',
   warn: 'bg-amber-500',
+  error: 'bg-destructive',
   idle: 'bg-fg-muted/40',
 };
 

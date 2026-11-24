@@ -11,12 +11,31 @@ import { announceSettingsRepaired } from '../../utils/settings-repair-notice';
 import { announceSessionLost } from '../../utils/session-lost-notice';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 import { NOTICE_CATALOGUE } from './notice-catalogue';
+import { showChatNotice, type ChatNotice } from '../../state/chat-notice-store';
+
+// Waiting-notice deck round 4: the per-chat strip above the message box, with each kind's real words (`?strip=<which>`).
+const noop = () => {};
+const STRIPS: Record<string, ChatNotice> = {
+  // K-1 held back: stays until the question is answered or you send.
+  held: { key: 'held', tone: 'warn', leave: 'resolved', text: 'Claude Code is waiting on something — answer it first. Your message is still in the box.',
+    actions: [{ label: 'Send anyway', onClick: noop }, { label: 'Show card', onClick: noop, primary: true }] },
+  // K-3 can't be done now: leaves on your next action.
+  cant: { key: 'cant', tone: 'warn', leave: 'next-action', text: "Can't compact while your assistant is still working. Stop the current turn, or wait for it to finish." },
+  // K-4 failed before anything was sent: red dot, Try again.
+  failed: { key: 'failed', tone: 'error', leave: 'next-action', text: "Couldn't run /review: two installed skills have that name (a:review, b:review).",
+    actions: [{ label: 'Try again', onClick: noop, primary: true }] },
+};
 
 export default function ToastPractice() {
   const [shown, setShown] = useState(false);
   useScreenOpen('dev/toast', () => {
     const which = new URLSearchParams(location.search).get('toast');
     // Waiting-notice review deck: any notice from the catalogue, by id (`?toast=n:<id>`), held on screen for the picture.
+    const strip = new URLSearchParams(location.search).get('strip');
+    if (strip && STRIPS[strip]) { showChatNotice('wb-1', STRIPS[strip]); setShown(true); return; }
+    // K-7 (needs you, app-wide): stays until closed, outlined Dismiss left, its own button filled right (`?toast=k7:<id>`).
+    const heads = which?.startsWith('k7:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(3)) : undefined;
+    if (heads) { announce(heads.text, undefined, heads.button ? { label: heads.button, onClick: () => {} } : undefined, { untilClosed: true }); setShown(true); return; }
     const listed = which?.startsWith('n:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(2)) : undefined;
     if (listed) announce(listed.text, 60_000, listed.button ? { label: listed.button, onClick: () => {} } : undefined);
     else if (which === 'turned-off') announcePluginTurnedOff(60_000);

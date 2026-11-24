@@ -654,7 +654,7 @@ function AppInner() {
   // 3s. Omit it for the common 3s case; the primitive supplies that default.
   type ToastState =
     | string
-    | { message: string; durationMs?: number; action?: ToastAction; actions?: ToastAction[] };
+    | { message: string; durationMs?: number | null; action?: ToastAction; actions?: ToastAction[]; dismissible?: boolean };
   const [toast, setToast] = useState<ToastState | null>(null);
   // Components with no prop path to this state (the file drawer's Download and
   // Copy path, the too-big card) announce through a window event — see
@@ -665,6 +665,8 @@ function AppInner() {
       if (!d?.message) return;
       // The action's own click also puts the toast away, like "Send anyway" does.
       const action = d.action ? { label: d.action.label, onClick: () => { setToast(null); d.action!.onClick(); } } : undefined;
+      // K-7 (needs you, app-wide): no timer, an outlined Dismiss on the left, its own button filled on the right.
+      if (d.untilClosed) { setToast({ message: d.message, durationMs: null, dismissible: true, actions: action ? [{ ...action, primary: true }] : undefined }); return; }
       setToast(d.durationMs || action ? { message: d.message, durationMs: d.durationMs, action } : d.message);
     };
     window.addEventListener(APP_NOTICE_EVENT, onNotice);
@@ -4424,6 +4426,7 @@ function AppInner() {
             <Button variant="secondary" size="sm" onClick={toast.action.onClick}>{toast.action.label}</Button>
           ) : undefined}
           actions={typeof toast === 'string' ? undefined : toast.actions}
+          dismissible={typeof toast !== 'string' && !!toast.dismissible}
         />
       )}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,

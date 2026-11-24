@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { OverlayPanel } from '../overlays/Overlay';
 import { Button } from './Button';
 
@@ -40,6 +40,9 @@ export type ToastProps = {
   variant?: 'global' | 'anchored';
   /** Auto-dismiss delay. Pass null to require an explicit dismiss. */
   durationMs?: number | null;
+  /** Adds an outlined Dismiss button, leftmost (Destin, waiting-notice deck K-7: "dismiss should be the leftmost
+   *  button and not filled in. primary action should be filled rightmost button"). */
+  dismissible?: boolean;
 };
 
 export function Toast({
@@ -50,14 +53,23 @@ export function Toast({
   tone = 'default',
   variant = 'global',
   durationMs = 3000,
+  dismissible = false,
 }: ToastProps) {
+  // WHY a ref (the "waiting on something" notice that never went away, 2026-11-21): App passes a fresh
+  // `() => setToast(null)` on every render, and with onDismiss in the timer's dependencies every App redraw
+  // (many per second while a reply streams) restarted the countdown, so the notice could stay forever.
+  // The timer now restarts only for a new message or duration; the ref still calls the latest onDismiss.
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
   useEffect(() => {
     if (durationMs == null) return;
-    const id = setTimeout(onDismiss, durationMs);
+    const id = setTimeout(() => onDismissRef.current(), durationMs);
     return () => clearTimeout(id);
     // Re-arm when the message changes so a second toast gets its own full
     // window rather than inheriting the first one's remaining time.
-  }, [message, durationMs, onDismiss]);
+  }, [message, durationMs]);
+  // Outlined buttons first, the filled main one last (Destin, K-7), whatever order the caller listed them in.
+  const ordered = actions ? [...actions.filter((x) => !x.primary), ...actions.filter((x) => x.primary)] : [];
 
   return (
     <OverlayPanel
@@ -97,9 +109,10 @@ export function Toast({
         <span className="min-w-0">{message}</span>
       </span>
       {action && <span className="pointer-events-auto shrink-0 ml-auto">{action}</span>}
-      {!action && actions && actions.length > 0 && (
+      {!action && (ordered.length > 0 || dismissible) && (
         <span className="pointer-events-auto shrink-0 flex items-center gap-1.5 ml-auto">
-          {actions.map((x) => (
+          {dismissible && <Button variant="secondary" size="sm" onClick={() => onDismissRef.current()}>Dismiss</Button>}
+          {ordered.map((x) => (
             <Button key={x.label} variant={x.primary ? 'primary' : 'secondary'} size="sm" onClick={x.onClick}>{x.label}</Button>
           ))}
         </span>

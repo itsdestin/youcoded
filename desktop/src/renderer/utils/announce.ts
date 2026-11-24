@@ -18,11 +18,14 @@ export interface AppNoticeDetail {
    *  argument and not a new event: the plugin off-switch heads-up needs "Show", and every
    *  plain announcement stays exactly as it was. */
   action?: { label: string; onClick: () => void };
+  /** A notice that needs you, app-wide (Destin, waiting-notice deck K-7): it stays until you act or press its
+   *  outlined Dismiss (leftmost); its own button becomes the filled one on the right. */
+  untilClosed?: boolean;
 }
 
-export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action']): void {
+export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action'], opts?: { untilClosed?: boolean }): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action } }));
+  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action, untilClosed: opts?.untilClosed } }));
 }
 
 /**
