@@ -10,7 +10,6 @@ import { StoreError } from './errors';
 import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { isDiskFull } from './storeutil';
-import { readHw } from './highwater';
 import { hex } from './chain';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, headerTag, indexHeader, recPos, type Rec } from './records';
 

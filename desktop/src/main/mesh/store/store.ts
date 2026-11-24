@@ -9,20 +9,23 @@
 // file name alone. A mismatch is typed `foreign` and the file is kept, never adopted, never deleted. The index header, the checkpoint slots and the body/chain values are the same rule in fixed-width
 // binary (magic = role, version tag, record position, sequence number). inventory.ts lists every file, and matrix.test.ts swaps a valid same-kind sibling into every one of them.
 //
-// Honest limits (inventory.ts): (1) a fault that destroys the ONLY copy of some bytes (a body chunk, a control log, an extra, a kept tail) destroys them; the store never serves them wrong and always
+// THE HISTORY INVARIANT (restructure): a version folder is append-only in history. It never shortens and never changes a line; a takeover is forkVersion (a NEW folder), a damaged version is RETIRED (asides.ts).
+// Read the header of inventory.ts first: it holds the invariants, the file kinds and the limits.
+//
+// Honest limits (inventory.ts): (1) a fault that destroys the ONLY copy of some bytes (a body chunk, a control log, an extra) destroys them; the store never serves them wrong and always
 // reports it so a peer's copy can heal it. (2) After an eviction AND the loss of the whole index, the chain values of the evicted lines are gone (the boundary survives in the checkpoint): the kept
 // lines stay served and re-derived from their bodies. (3) Parked appends are provisional. (4) A whole chat folder put back is REPORTED against the high-water record kept outside it (highwater.ts);
 // a rollback of the whole store root is undetectable. (5) Two faults are not promised, except that the store repairs every second copy it finds damaged AS IT LOADS.
 //
 // Layout (names computed from validated ids, never from peer strings): <root>/FORMAT, LOCK, highwater/<vhex>.hw, versions/<vhex>/ (meta.json+copy, index.bin, checkpoint.bin, marks.bin, summary.json,
-// scrub.json, body-<startByte>.bin, parked/, rejected/, tails/, torn/, healed/, replaced-index/), aside/<vhex>-<n>/ and -q<n>/ (set-aside and quarantined copies), extras/, extras-bad/, control/<sha256(chat)>/.
+// scrub.json, retired.json, body-<startByte>.bin, parked/, rejected/, torn/, healed/, replaced-index/), forks/<vhex>/ (a fork being built), aside/<vhex>-<n>/ and -q<n>/ (retired copies), extras/, extras-bad/, control/<sha256(chat)>/.
 //
 // Crash rules: 1. A line exists exactly when its index record is whole and CRC-correct AND its body is on disk. An append writes BODY, fsync, INDEX, fsync, CHECKPOINT slot, fsync, and only then
 // returns; the checkpoint is the independent record of what was acknowledged. 2. Whole-file replacements are temp file + fsync + rename + directory fsync; every NEW directory has its parent fsynced.
-// 3. Multi-step operations (set aside, evict, restore) are ordered so that every prefix of their steps is a state open() understands. 4. After any failed operation the cached state of that version is dropped.
+// 3. Multi-step operations (retire, fork, evict, restore) are ordered so that every prefix of their steps is a state open() understands. 4. After any failed operation the cached state of that version is dropped.
 // Recovery: open() NEVER deletes or truncates an acknowledged line, and copies bytes to torn/ (fsynced) before any cut. A bad index tail is cut back (bytes kept); anything else is rebuilt from the bodies
 // keeping every valid record, confirmed against the checkpoint (which, when the bodies reach exactly its chain value, is believed over an older index); a missing/short body costs exactly the lines it held;
-// only an unresolvable disagreement quarantines the whole version (aside/<vhex>-q<n>/, typed `damaged`). A full disk is one typed `disk-full` refusal; reads never write anything that can fail.
+// only an unresolvable disagreement quarantines the whole version (aside/<vhex>-q<n>/, typed `damaged`, the id is retired). A full disk is one typed `disk-full` refusal; reads never write anything that can fail.
 // No file handles are kept open between calls. One in-process lock serialises all calls and lock.ts keeps other processes out.
 import * as nodePath from 'node:path';
 import { createHash } from 'node:crypto';
@@ -48,6 +51,7 @@ import { ControlStore, type ControlDamage, type ControlEntry } from './control';
 import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, VerifyReport, VersionId, VersionMeta } from './types';
 import type { VState } from './vstate';
 import { readMeta, readScrubMark, lineVerifies } from './versionfiles';
+import { buildFork, clearForkFiles } from './fork';
 import { BodyTools, Damaged, NeedsRebuild, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
 export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, VerifyReport, ScrubReport } from './types';
@@ -149,7 +153,7 @@ export class ChatStore {
       // used to delete a second process's in-flight temp files).
       await sweepTemps(fs, root);
       // WHY (fork crash table, step 1-2): a fork that stopped leaves an invisible work folder; its files are copies of lines the parent still holds, so they are cleared here (the empty folder stays)
-      for (const n of await fs.readdir(nodePath.join(root, 'forks'))) await s.clearForkFiles(nodePath.join(root, 'forks', n));
+      for (const n of await fs.readdir(nodePath.join(root, 'forks'))) await clearForkFiles(fs, nodePath.join(root, 'forks', n));
     } catch (e) { await s.lock.release().catch(() => undefined); s.lock = null; throw isDiskFull(e) ? new StoreError('disk-full', String((e as Error).message)) : e; }   // WHY (restructure fuzz): a full disk at open is one typed refusal like everywhere else
     return s;
   }
@@ -341,17 +345,8 @@ export class ChatStore {
       if (!r) throw new NeedsRebuild(`record ${ck.count - 1} fails its checksum`);
       if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
     }
-    // WHY (round 7, F1, found by the fuzz): an index AHEAD of the checkpoint looks exactly like a crash between the index write and the checkpoint write, and the checkpoint was then simply "caught up" to
-    // it. After a takeover whose cut FINISHED (`.done`) it is also what an older index and older bodies put back look like when the checkpoint was lowered at the cut and agrees at the cut point. A restored
-    // one runs along the tail of a finished takeover (the tail holds every line the old host had past the cut, with the chain value at each) while the checkpoint says the version has nothing past the cut
-    // (`ck.count <= fromLine`). So an index ahead of the checkpoint whose head is a point on such a tail is refused (quarantined), never caught up to. A takeover whose evidence cannot be read does not
-    // decide this: only a definite hit does. Equal chain values mean equal lines, so a hit is either the old history or a byte-identical rewrite by the new host that crashed before its checkpoint
-    // write (the first batch after the cut): the store cannot tell those two apart and the rule is to stay loud when it cannot (a quarantine, recopied from a peer; never a quiet answer).
-    // The same proof covers a checkpoint written BEFORE the takeover (its history count is below the folder's; after a takeover the checkpoint is restated at once, tails.ts step 3c, so an older one can only
-    // have been put back) when the index and bodies were put back with it: all three older, nothing disagrees, and only the tail says the head is a replaced history's. A checkpoint with one damaged slot
-    // (`slotsOk` 1) lags by one append through nothing but that damage, so the lag alone is not evidence there.
-    // Only when the BODIES hold what the index head claims (`layout.phys`): an older index alone, whose extra records point past the trimmed bodies, would serve nothing old, and the rebuild below deals with it.
-    // (An older checkpoint is a PREFIX of the truth: it agrees with the index at its own count, which the check above proved, and the file is then restated level with the head by restoreRedundancy.)
+    // An index AHEAD of the checkpoint is a crash between the index write and the checkpoint write (the body and index are written first, the checkpoint last): the lines are whole and are caught up to.
+    // (An older checkpoint is a PREFIX of the truth: it agrees with the index at its own count, which the check above proved, and is then restated level with the head by restoreRedundancy.)
     // the eviction record must agree with the index record of its last line (an independent, checksummed record)
     if (ev.lines > 0) {
       const r = decodeRecord(await this.readAt(this.ixPath(dir), recPos(ev.lines - 1), REC), 0);
@@ -1180,46 +1175,8 @@ export class ChatStore {
         if (st.staleConv) throw new StoreError('corrupt', 'the parent\'s conversation chain is stale; nothing is copied from it');
         const cseeds = this.seedFn({ chatId: st.meta.chatId, version: unhex(ck), segment: 0 });
         if (!cseeds.raw.equals(st.seeds.raw) || !cseeds.conversation.equals(st.seeds.conversation)) throw new StoreError('bad-argument', 'the chain seed depends on the version id: a fork cannot reuse the parent\'s chain values');
-        // step 1: a fresh work folder. WHY under forks/<childhex> (basename = the final key): every envelope and tag of the child is sealed with the folder name, so the work folder must carry the final name.
-        const forks = nodePath.join(this.root, 'forks'); const work = nodePath.join(forks, ck);
-        await mkdirDurable(this.fs, work);
-        await this.clearForkFiles(work);
-        // step 2: meta (two copies), then the verified prefix. Each line is read WITH its chain check, so a rotted line stops the fork instead of being copied.
-        const meta = { format: 1, chatId: st.meta.chatId, runtime: st.meta.runtime, parent: pk, createdMs: this.now() };
-        await writeSideFor(this.fs, nodePath.join(work, 'meta.json'), { role: 'meta', key: ck }, meta); // DESTRUCTIVE-OK(verified-record): a NEW file in a work folder that was just emptied
-        await writeSideFor(this.fs, nodePath.join(work, 'meta.copy'), { role: 'meta', key: ck }, meta); // DESTRUCTIVE-OK(verified-record): a NEW file in a work folder that was just emptied
-        const xf = await this.fs.open(this.ixPath(work), { create: true });
-        let chunkStart = 0; let chunkFile: Awaited<ReturnType<Fs['open']>> | null = null;
-        let lastRec: Rec | null = null;
-        try {
-          await xf.write(indexHeader(this.stamp, versionTag(ck)), 0);
-          const pf = await this.fs.open(this.ixPath(st.dir), { create: false });
-          try {
-            for (let a = 0; a < fromLine; a += 256) {
-              const b = Math.min(fromLine, a + 256);
-              const lines = await this.readRange(st, a, b, true);
-              const recs = await pf.read(recPos(a), (b - a) * REC);
-              await xf.write(recs, recPos(a));
-              for (let k = 0; k < b - a; k++) {
-                const r = this.mustRec(recs, k * REC);
-                // the same chunk rule as an append: a new chunk file starts once the active one holds chunkBytes
-                if (!chunkFile || r.offset - chunkStart >= this.chunkBytes) { if (chunkFile) { await chunkFile.sync(); await chunkFile.close(); } chunkStart = r.offset; chunkFile = await this.fs.open(this.chunkPath({ dir: work }, chunkStart), { create: true }); }
-                await chunkFile.write(lines[k], r.offset - chunkStart);
-                lastRec = r;
-              }
-            }
-          } finally { await pf.close(); }
-          if (chunkFile) await chunkFile.sync();
-          await xf.sync();
-        } finally { await chunkFile?.close().catch(() => undefined); await xf.close(); }
-        // DESTRUCTIVE-OK(verified-record): the first statement of a NEW folder; its chain values are those of the verified index record
-        await writeCheckpoint(this.fs, work, { count: fromLine, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, h: lastRec ? lastRec.h : Buffer.from(st.seeds.raw), c: lastRec ? lastRec.c : Buffer.from(st.seeds.conversation) });
-        await this.fs.fsyncDir(work); await this.fs.fsyncDir(forks);
-        // step 3: the one atomic step that makes the child exist
-        await mkdirDurable(this.fs, nodePath.join(this.root, 'versions'));
-        // DESTRUCTIVE-OK(kept-copy-first): the target does not exist (checked above, and nothing else writes under this lock)
-        await this.fs.rename(work, cdir);
-        await this.fs.fsyncDir(nodePath.join(this.root, 'versions')); await this.fs.fsyncDir(forks);
+        // steps 1 to 3 (fork.ts): build the child in forks/<childhex>/ and rename it into versions/
+        await buildFork({ fs: this.fs, root: this.root, stamp: this.stamp, chunkBytes: this.chunkBytes, now: this.now(), readRange: (x, from, to) => this.readRange(x, from, to, true), mustRec: (b, pos) => this.mustRec(b, pos), ixPath: (d) => this.ixPath(d), chunkPath: (d, start) => this.chunkPath({ dir: d }, start) }, st, ck, fromLine);
         // step 4 (advisory): the high-water record, so a later rollback of the child is reported
         const cst = await this.state(child);
         await this.noteHw(cst, true);
@@ -1227,12 +1184,6 @@ export class ChatStore {
       }));
     });
   }
-  /** Empty a fork work folder of whatever a stopped attempt left (the files are copies of data the parent still holds; the folder itself stays). */
-  private async clearForkFiles(work: string): Promise<void> {
-    // DESTRUCTIVE-OK(scratch): files of an unfinished, invisible work folder; the parent holds every line they contain
-    for (const n of await this.fs.readdir(work)) await this.fs.unlink(nodePath.join(work, n));
-  }
-
   private async stateAtLine(st: VState, n: number): Promise<{ h: Buffer; c: Buffer }> {
     if (n === 0) return { h: st.seeds.raw, c: st.seeds.conversation };
     const f = await this.fs.open(this.ixPath(st.dir), { create: false });

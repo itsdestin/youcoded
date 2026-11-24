@@ -14,6 +14,7 @@
 // The only excuses kept (each is a documented limit, named in the inventory.ts header, and counted in the events):
 //   limit-1  `destroyed-single-copy`: a fault destroyed the only copy of some bytes and the store reported it (that IS the promise: reported, never served wrong)
 //   limit-2  `evict-exempt`: a line below an eviction has no body here (it is held by a peer); it is served as `evicted`
+//   limit-3  `conflict-park-won`: a park is provisional and the caller's: with other lines than the true ones it can win only where the true lines were never acknowledged (a crash lost them) or a fault took them away
 //   limit-4  `rollback-with-record-lost`: a family of older files put back AND the high-water record (outside the folder) lost or changed too: two faults, a shorter chat cannot be told from a short chat
 //
 //   fast slice (normal suite): fixed seeds
@@ -208,8 +209,8 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         const g = await lineAt(i);
         if (g === 'evicted') { ev('evict-exempt'); continue; }
         if (g === null) continue;     // typed corrupt: a report
-        const won = v.conflicts.find((c) => i >= c.from && i < c.from + c.lines.length && i >= c.ackedAt && g.equals(c.lines[i - c.from]));
-        if (won) { ev('conflict-park-won'); continue; }
+        const won = v.conflicts.find((c) => i >= c.from && i < c.from + c.lines.length && (i >= c.ackedAt || v.faulted) && g.equals(c.lines[i - c.from]));
+        if (won) { ev('conflict-park-won'); v.lines[i] = g; continue; }   // the winner IS the version's line from now on: a fork of it copies it
         if (i >= v.lines.length || !g.equals(v.lines[i])) { bad('WRONG-BYTES-SERVED', { tag, v: v.hex.slice(0, 4), line: i, headLines: head.lines, rollback: v.rollback }); break; }
       }
       for (let i = v.evicted; i < ackedNow; i++) {
@@ -274,7 +275,11 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (v === other || v.acked < 2) return;
         const from = 1 + Math.floor(r() * v.acked);
         const diff = r() < 0.6;
-        const child = mkVer(V(idc++), v.chat, diff ? [...v.lines.slice(0, from), ...makeCanon(rng(seed * 17 + tagc++), `f${seed}`, canonLen, big).slice(from)] : v.lines, v);
+        // the child's prefix is what the parent really holds (a park that won a position IS that position's line); a parent that cannot serve it is not forked
+        const real = await s.read(v.id, 0, 0, from).catch(() => null);
+        if (!Array.isArray(real)) return;
+        const pre = [...real, ...v.lines.slice(from)];
+        const child = mkVer(V(idc++), v.chat, diff ? [...real, ...makeCanon(rng(seed * 17 + tagc++), `f${seed}`, canonLen, big).slice(from)] : pre, v);
         child.pendingFrom = from; vers.push(child);       // pending until the call answers; a crash leaves it pending for the retry
         ev(diff ? 'fork-diff' : 'fork-same'); log.push(`ep${n} fork ${v.hex.slice(0, 4)} at ${from} ${diff ? 'diff' : 'same'}`);
         const res = await s.forkVersion(v.id, from, child.id);
