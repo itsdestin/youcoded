@@ -59,6 +59,8 @@ export interface VState {
   /** Parked append files: name -> size, kept in memory so a park never rescans the folder (M4). */
   /** The history identity (tails.ts readEpoch), read from disk at load and after a takeover begins: parks are sealed with it and applied only while it is unchanged. */
   epoch: string;
+  /** The history COUNT (tails.ts histCount) read at load and after a takeover begins: every checkpoint statement written from this state carries it (round 7, F1). */
+  hist: number;
   /** How many takeovers tails/ shows evidence of (tails.ts takeoverIds); compared with the high-water record's count to see a lost tails/ (round 7, F3). */
   tailsShown: number;
   /** How many files rejected/ holds (round 7, F5): a cheap signal for head(), kept in memory so a caller need not poll a folder. */

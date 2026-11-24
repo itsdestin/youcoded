@@ -163,11 +163,13 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       // reports every line as damaged from 0 (its bodies are not there), which is at or before the first line where the two histories differ, so a caller refetches from there; and no line is
       // served from it (the read oracle below stays strict). Any head that differs WITHOUT such a report is still a violation.
       // Round 7 (review 7, item 5): the excuse now CHECKS the cause it names: the fault just dealt was an older index.bin (faultNote), the version was emptied after a divergent takeover, and the store flagged damage from 0..first divergence.
+      // (`Math.max(firstDiverge, evictedLines)`: lines below the evicted boundary have no body to be flagged, so the first line the store CAN flag is the boundary; the older index's evicted-prefix chain values
+      // are the documented limit 2 of inventory.ts, the head hash differs from every peer's, and the flag is raised.)
       const staleIndexCause = diverged && staleIndexInjected;
       if (head.lostTakeovers > 0) lostReported = true;
       // Round 7 (F3): a rollback or loss of tails/ across a takeover is REPORTED by head().lostTakeovers (the count outside the folder), which is the promise for that case; the lines served are then not trusted.
       const reportedLostTakeover = head.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault);
-      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= firstDiverge && staleIndexCause) ev('stale-history-head-reported'); else if (reportedLostTakeover) ev('head-of-another-history-lost-takeover-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine, faultNote, lostTakeovers: head.lostTakeovers }); }
+      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= Math.max(firstDiverge, head.evictedLines) && staleIndexCause) ev('stale-history-head-reported'); else if (reportedLostTakeover) ev('head-of-another-history-lost-takeover-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine, faultNote, lostTakeovers: head.lostTakeovers }); }
       if (head.hash === ref.raw[head.lines]) staleIndexInjected = false;   // the version shows the canonical history again: the cause is spent
       if (head.lostTakeovers > 0 && !rotted && !lossy) bad('false-alarm-lost-takeovers-without-any-fault', { tag, lost: head.lostTakeovers });
       if (head.lostTakeovers > 0 && !reportedLostTakeover) bad('lost-takeovers-reported-for-no-reason-we-dealt', { tag, lost: head.lostTakeovers, fault: faultNote });
@@ -405,6 +407,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         for (const p of changed) { const old = sn.get(p); if (old === undefined) fs.unlinkSync(path.join(root, p)); else { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), old); } }
         rotted = true; if (fam.includes('body') || fam.startsWith('tail')) lossy = true; if (fam.startsWith('tail')) lostTakeoverFault = true;
         if (diverged && fam.startsWith('index')) staleIndexInjected = true;
+        if (fam !== 'index+ck' && !fam.startsWith('tail')) pending = null;   // WHY: like a rollback, a takeover still waiting for its retry is moot when bodies are put back to before it (its `from` would be clamped to the shorter head and write a legitimately shorter tail)
         if (fam === 'index+ck') { rollbackActive = true; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax); }   // an older index AND checkpoint is a rolled-back HEAD (the bodies stay): promised like a rollback, i.e. reported when the head is below what the high-water record saw at the last clean close
         faultsSinceClean += 2; faultNote = `pair ${fam}`; pairDone = true; log.push(`PAIR FAULT ${fam} (${changed.length} files)`); ev('rot'); ev('pair-' + fam);
       }

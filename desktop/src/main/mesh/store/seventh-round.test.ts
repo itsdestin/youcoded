@@ -201,3 +201,46 @@ describe('a takeover that is still pending when older files return finishes its 
     await s.close(); fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
   });
 });
+
+describe('the checkpoint carries the history it was written in, and an index ahead of it is not trusted blindly', () => {
+  it('older checkpoint + older bodies with a NEWER, SHORTER index (found by the fuzz): the old history is not served; the version is loud or holds only the shared prefix', async () => {
+    const t = await tmpRoot('r7-hist-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 40)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });                                  // 40 lines of A
+    s = await open(t.dir);
+    await s.setAsideTail(TID, V(1), 10); await s.append(V(1), 0, 10, B.slice(10, 20)); await s.close();   // the index now has 20 records
+    putBack(t.dir, snap, ['ck', 'body']);                                         // the checkpoint says 40, the bodies hold 40 lines of A, the index says 20
+    let s2: ChatStore | null = null; let verdict = 'unset';
+    try {
+      s2 = await open(t.dir); const h = await s2.head(V(1));
+      const served: Buffer[] = []; for (let i = 0; i < h.lines; i++) served.push(((await s2.read(V(1), 0, i, i + 1)) as Buffer[])[0]);
+      const right = served.every((b, i) => b.equals(truth(10, 20)[i]));
+      verdict = right ? (h.lines <= 20 ? 'prefix-ok' : 'WRONG-LONG') : (h.damagedFromLine !== null ? 'flagged' : 'WRONG');
+    } catch (e: any) { verdict = e?.code === 'damaged' || e?.code === 'corrupt' ? 'quarantined' : 'WRONG-' + e?.code; }
+    finally { if (s2) await s2.close().catch(() => undefined); }
+    expect(['prefix-ok', 'flagged', 'quarantined']).toContain(verdict);
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+  it('older index + bodies after a FINISHED takeover, checkpoint lowered at the cut and agreeing there (it looks like a crash-ahead index): refused, never caught up to', async () => {
+    const t = await tmpRoot('r7-lag-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 40)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });
+    s = await open(t.dir);
+    await s.setAsideTail(TID, V(1), 10); await s.close();                         // cut at 10; the checkpoint says 10
+    putBack(t.dir, snap, ['index', 'body']);                                      // 40 lines of A come back
+    expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, truth(10, 10)));
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+  it('a crash-ahead index (lines written since the checkpoint, NOT on any tail) is still caught up to, after a takeover', async () => {
+    const t = await tmpRoot('r7-lag2-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 40)); await s.setAsideTail(TID, V(1), 10); await s.append(V(1), 0, 10, B.slice(10, 30)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });                                   // the checkpoint says 30 lines, in the current history
+    s = await open(t.dir); await s.append(V(1), 0, 30, B.slice(30, 45)); await s.close();
+    putBack(t.dir, snap, ['ck']);                                                  // as if the crash came between the index write and the checkpoint write of the last append
+    expect(await outcome(t.dir, truth(10, 45))).toBe('correct');
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+});

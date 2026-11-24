@@ -37,7 +37,7 @@ import { readMarksState, readPartial, readDamaged, setMarks } from './marks';
 import { resetHw, checkRollback, noteHw, lowerHwTo, readHw, recordTakeovers, type HwEnv } from './highwater';
 import { Extras, bytesUnder } from './extras';
 import { asLine, isDiskFull, validateProofShape, ForeignTail, type TailFile } from './storeutil';
-import { setAsideTailLocked, readTailFile, readEpoch, tailWasProtected, takeoverIds, lostTakeovers, LOST_TAIL, type TailEnv } from './tails';
+import { setAsideTailLocked, readTailFile, readEpoch, tailWasProtected, takeoverIds, histCount, cutAwayBranchHit, lostTakeovers, LOST_TAIL, type TailEnv } from './tails';
 import { chainStep, defaultChainSeeds, hex, unhex, versionTag, type ChainSeedFn, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, type ReplyEndOptions } from './classify';
 import { HDR, REC, NONE, decodeRecord, indexHeader, recPos, unframeLines, type Rec } from './records';
@@ -223,7 +223,7 @@ export class ChatStore {
         // WHY a checkpoint from the very start: "no checkpoint" must always mean a fault, never "nothing was written yet" (review 3, F3)
         const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
         // DESTRUCTIVE-OK(verified-record): only when no checkpoint exists yet (a new version has none)
-        if (!(await readCheckpoint(this.fs, dir))) await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
+        if (!(await readCheckpoint(this.fs, dir))) await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, hist: await histCount(this.fs, dir), h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
         await this.fs.fsyncDir(nodePath.join(this.root, 'versions'));
       }));
     });
@@ -330,6 +330,15 @@ export class ChatStore {
       if (!r) throw new NeedsRebuild(`record ${ck.count - 1} fails its checksum`);
       if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
     }
+    // WHY (round 7, F1, found by the fuzz): an index AHEAD of the checkpoint looks exactly like a crash between the index write and the checkpoint write, and the checkpoint was then simply "caught up" to
+    // it. After a takeover whose cut FINISHED (`.done`) it is also what an older index and older bodies put back look like when the checkpoint was lowered at the cut and agrees at the cut point. The two
+    // differ in one provable way: a crash-ahead index holds lines the version wrote since the checkpoint, while a restored one runs along the tail of a finished takeover (the tail holds every line the old
+    // host had past the cut, with the chain value at each). So an index ahead of the checkpoint whose head is a point on a finished takeover's tail is refused (quarantined), never caught up to. A takeover
+    // whose evidence cannot be read does not decide this: only a definite hit does. (Cost: a crash-ahead index whose new lines are byte-identical to the old host's tail is also refused: loud, rare.)
+    if (ck && count > ck.count && last) {
+      const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(last.h), 0, true);
+      if (hit !== null && hit !== 'unproven') throw new Damaged(`the index runs ahead of the checkpoint along the lines takeover ${hit} cut away: older files put back, refusing to catch the checkpoint up to them`);
+    }
     // the eviction record must agree with the index record of its last line (an independent, checksummed record)
     if (ev.lines > 0) {
       const r = decodeRecord(await this.readAt(this.ixPath(dir), recPos(ev.lines - 1), REC), 0);
@@ -397,7 +406,7 @@ export class ChatStore {
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv, marks, hw, rolledBack: null,
-      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
+      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), hist: await histCount(this.fs, dir), tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
     };
     await this.restoreRedundancy(st);
     await this.checkRollback(st);
@@ -428,7 +437,7 @@ export class ChatStore {
 
   /** The checkpoint statement for what `st` holds now (`over` changes single fields: a new head, a new eviction state). One place, so no site can forget the boundary or the stale bit. */
   private ckOf(st: VState, over: Partial<Checkpoint> = {}): Checkpoint {
-    return { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, boundary: st.evictedLines > 0 ? st.evB : null, lostRecs: st.evictedLines > 0 ? st.lostRecs : 0, staleBad: st.staleConv ? st.staleBad : null, h: st.h, c: st.c, ...over };
+    return { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, boundary: st.evictedLines > 0 ? st.evB : null, lostRecs: st.evictedLines > 0 ? st.lostRecs : 0, staleBad: st.staleConv ? st.staleBad : null, hist: st.hist, h: st.h, c: st.c, ...over };
   }
 
   // ---- high-water record (highwater.ts: ChatStore only forwards, the record is advisory) ------------
@@ -1112,7 +1121,7 @@ export class ChatStore {
     });
   }
   private tailEnv(): TailEnv {
-    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n), recordTakeovers: (st) => recordTakeovers(this.hwEnv(), st, st.tailsShown) };
+    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n), recordTakeovers: (st) => recordTakeovers(this.hwEnv(), st, st.tailsShown), stampHistory: (st) => appendCheckpoint(this.fs, st.dir, st.ck, this.ckOf(st)) };
   }
 
   /** A previously set-aside tail, with the chain values around it, or null. Pass `version` to look in one version only. */
