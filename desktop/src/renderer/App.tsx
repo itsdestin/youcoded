@@ -219,8 +219,18 @@ interface StatusDataState {
   syncWarnings: SyncWarning[] | null;
   lastSyncEpoch: number | null;
   syncInProgress: boolean;
+  /** Backups a copy is running for right now; only the desktop backend sends it (absent = none). */
+  copyingBackendIds?: string[];
   backupMeta: any;
 }
+
+/** Keep the previous list when the new one has the same ids (so an unchanged push redraws nothing); [] when absent. */
+function sameIds(prev: string[] | undefined, next: unknown): string[] {
+  const n = Array.isArray(next) ? (next as string[]) : [];
+  const p = prev ?? NO_IDS;
+  return p.length === n.length && p.every((id, i) => id === n[i]) ? p : n.length === 0 ? NO_IDS : n;
+}
+const NO_IDS: string[] = [];
 
 // Match a raw model id (e.g. 'claude-sonnet-4-6') back to a status-bar
 // ModelAlias (e.g. 'claude-sonnet-4-6' → 'sonnet'). Returns 'unknown' — never
@@ -1533,6 +1543,8 @@ function AppInner() {
         syncWarnings: Array.isArray(data.syncWarnings) ? data.syncWarnings : [],
         lastSyncEpoch: data.lastSyncEpoch ?? prev.lastSyncEpoch,
         syncInProgress: data.syncInProgress ?? prev.syncInProgress,
+        // WHY the identity check: this push lands every 10 s; a fresh [] each time would redraw the status bar for nothing.
+        copyingBackendIds: sameIds(prev.copyingBackendIds, data.copyingBackendIds),
         backupMeta: data.backupMeta ?? prev.backupMeta,
         contextMap: data.contextMap || prev.contextMap,
         gitBranchMap: data.gitBranchMap || prev.gitBranchMap,

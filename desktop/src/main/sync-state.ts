@@ -32,6 +32,7 @@ import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing, space
 // sync-spaces-vs-legacy-marker precedence rule.
 import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 import { atomicWrite } from './atomic-write';
+import { configNotice } from '../shared/backup-config-notices';
 import { readBackupConfig, updateBackupConfig, startFreshBackupConfig, readRecoveryNote, clearRecoveryNote } from './backup-config';
 import { syncSpacesBackupNow } from './sync-spaces/service';
 import { targetForBackend } from './sync-spaces/backup-targets';
@@ -383,37 +384,18 @@ export const CONFIG_HEALTH_CODES = [CONFIG_RESTORED_CODE, CONFIG_SALVAGED_CODE, 
 export async function configHealthWarnings(file: string = configPath): Promise<SyncWarning[]> {
   const now = Math.floor(Date.now() / 1000);
   const read = await readBackupConfig(file);
-  if (!read.ok) {
-    return [{
-      code: CONFIG_DAMAGED_CODE, level: 'danger',
-      title: "Backup settings couldn't be read",
-      body: "Nothing was changed, so nothing was lost. Start fresh sets the unreadable file aside (it is kept, not deleted) so you can set up your backups again.",
-      fixAction: { label: 'Start fresh', kind: 'start-fresh' },
-      dismissible: false, createdEpoch: now,
-    }];
-  }
+  if (!read.ok) return [{ ...configNotice('damaged'), createdEpoch: now }];
   const note = await readRecoveryNote(file);
   if (!note) return [];
-  if (note.kind === 'restored') {
-    return [{
-      code: CONFIG_RESTORED_CODE, level: 'warn',
-      title: 'Backup settings restored',
-      body: "Your backup settings file was damaged, so YouCoded brought back the last copy it had saved. The damaged file was kept next to it in case you need it.",
-      dismissible: true, createdEpoch: Math.floor(Date.parse(note.at) / 1000) || now,
-    }];
-  }
-  const n = note.backups;
-  return [{
-    code: CONFIG_SALVAGED_CODE, level: 'warn',
-    title: 'Please check your backups',
-    body: `Your backup settings file was damaged and no earlier copy was saved. YouCoded kept the ${n === 1 ? '1 backup' : `${n} backups`} it could still read. Please check the list is complete and add any that are missing. The damaged file was kept.`,
-    dismissible: true, createdEpoch: Math.floor(Date.parse(note.at) / 1000) || now,
-  }];
+  return [{ ...configNotice(note.kind, note.backups), createdEpoch: Math.floor(Date.parse(note.at) / 1000) || now }];
 }
 
 /** "Start fresh": set a damaged, unrepairable settings file aside. Resolves true when it did. */
 export async function startFreshBackupSettings(): Promise<boolean> {
-  return (await startFreshBackupConfig(configPath)) !== null;
+  const moved = (await startFreshBackupConfig(configPath)) !== null;
+  // The red notice is stored with the other warnings; it must not outlive the problem until the next 5-minute check.
+  if (moved) await clearWarningsByCode(CONFIG_DAMAGED_CODE);
+  return moved;
 }
 
 // --- Warning store ---
@@ -481,7 +463,7 @@ export async function clearWarningsByCode(code: string): Promise<void> {
  * This is the primary data source for the Sync Management UI.
  */
 export async function getSyncStatus(): Promise<SyncStatus> {
-  const [backends, markerText, meta, warnings, lockExists, copyingBackendIds] =
+  const [backends, markerText, meta, storedWarnings, lockExists, copyingBackendIds] =
     await Promise.all([
       readBackendInstances(),
       readText(syncMarkerPath),
@@ -490,6 +472,11 @@ export async function getSyncStatus(): Promise<SyncStatus> {
       dirExists(syncLockDir),
       getCopyingBackendIds(),
     ]);
+
+  // The settings file's own notices are asked of the file itself, not read back from the store: opening the panel is
+  // what may have just repaired it, and the notice must be there at once (the stored copy only feeds the status bar).
+  const configWarnings = await configHealthWarnings();
+  const warnings = [...storedWarnings.filter((w) => !CONFIG_HEALTH_CODES.includes(w.code)), ...configWarnings];
 
   const backendStatuses: BackendInstanceStatus[] = await Promise.all(
     backends.map(async (b) => {

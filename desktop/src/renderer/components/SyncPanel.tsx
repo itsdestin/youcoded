@@ -19,7 +19,7 @@ import { deriveSettingsRowState, isSyncAlarm, type SyncDisplayState } from '../s
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { BackupLogo } from './BackupLogo';
-import SyncSetupWizard, { WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
+import SyncSetupWizard, { WizardHeaderContext, type WizardHeaderInfo } from './SyncSetupWizard';
 import { backupTypeOffered, backupEntryNotice, backupEntryText, onOwnPhone, reconnectDriveBackend } from './backup-availability';
 import { BackupTypePicker } from './BackupTypePicker';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -120,6 +120,8 @@ interface BackendInstanceStatus {
   connected: boolean;
   lastPushEpoch: number | null;
   lastError: string | null;
+  /** A backup copy to this destination is running right now (the backend's own state; absent from an older backend). */
+  syncing?: boolean;
 }
 
 interface SyncStatus {
@@ -130,6 +132,7 @@ interface SyncStatus {
   warnings: SyncWarning[];
   syncInProgress: boolean;
   syncingBackendId: string | null;
+  copyingBackendIds?: string[];
   syncedCategories: string[];
   // Per-device sync recency: key = device machineId (= the row's `d.id`), value =
   // epoch-ms of that device's most recent successful sync. Carried over the
@@ -619,6 +622,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 ...prev,
                 lastSyncEpoch: epoch ?? prev.lastSyncEpoch,
                 syncInProgress: data.syncInProgress ?? prev.syncInProgress,
+                // The same push says which backups are copying, so a row's "Uploading..." follows the backend between refreshes.
+                backends: Array.isArray(data.copyingBackendIds)
+                  ? (prev.backends ?? []).map(b => (!!b.syncing === data.copyingBackendIds.includes(b.id) ? b : { ...b, syncing: data.copyingBackendIds.includes(b.id) }))
+                  : prev.backends,
                 backupMeta: data.backupMeta ?? prev.backupMeta,
                 // Per-device recency rides the same push (feeds the device list).
                 lastSyncByDevice: data.lastSyncByDevice ?? prev.lastSyncByDevice,
@@ -631,6 +638,16 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       if (handler) (window as any).claude?.off?.('status:data', handler);
     };
   }, [refreshStatus]);
+
+  // WHY a short poll while a copy runs (backup fixes 2026-11-18, B-1): the row's "Uploading..." comes from the backend,
+  // and the ~10 s status push is too slow to show the moment a long first upload finishes (or its failure). Only while
+  // some backup is copying; it stops by itself.
+  const anyCopying = !!status?.backends?.some(b => b.syncing);
+  useEffect(() => {
+    if (!anyCopying) return;
+    const timer = setInterval(() => { void refreshStatus(); }, 3000);
+    return () => clearInterval(timer);
+  }, [anyCopying, refreshStatus]);
 
   // Force sync all sync-enabled backends
   const handleForceSync = useCallback(async () => {
@@ -751,8 +768,16 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       case 'dismiss':
         await handleDismiss(w.code);
         break;
+      case 'start-fresh':
+        // Sets the unreadable settings file aside (kept, dated) so backups can be set up again; the notice goes with it.
+        try {
+          await claude.sync.startFresh();
+          setActionFailure(null);
+          await refreshStatus();
+        } catch (e) { failAction("Couldn't set the damaged file aside", e, () => { void handleFixAction(w); }); }
+        break;
     }
-  }, [status, claude, handleDismiss, handlePushBackend]);
+  }, [status, claude, handleDismiss, handlePushBackend, refreshStatus, failAction]);
 
   // Close overflow menu on outside click
   useEffect(() => {
@@ -1070,49 +1095,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           <SyncSetupWizard
             initialType={addType ?? undefined}
             existingBackends={(status?.backends ?? []).map(b => ({ type: b.type, config: b.config }))}
-            onComplete={async (instance): Promise<FirstBackup> => {
+            onComplete={async (instance) => {
               // WHY no catch (error inventory 2026-09-10, false message 2): a `catch {}`
               // here swallowed a failed save, and the wizard shows its error box ONLY when
               // this rejects — so it announced "You're all set!" for a backup never written.
               const added = await claude.sync.addBackend(instance);
-              let first: FirstBackup;
-              if (!instance.syncEnabled) {
-                // Auto-backup is off. The old force() skipped this destination entirely,
-                // yet the done step said its first backup was syncing. Attempt nothing,
-                // claim nothing.
-                first = { kind: 'paused' };
-              } else if (typeof added?.id !== 'string') {
-                // Saved, but with no id there is no way to back up THIS destination.
-                first = { kind: 'unknown' };
-              } else {
-                // WHY pushBackend(id), not force(): force() re-uploads EVERY enabled
-                // destination, so a failure in an older one was reported as this one
-                // failing. pushBackend never throws on a failed upload — it answers
-                // { success: false } — so the answer is read, not assumed.
-                try {
-                  const r = await claude.sync.pushBackend(added.id);
-                  first = r?.success ? { kind: 'finished' } : { kind: 'failed', error: r?.error ?? '' };
-                } catch {
-                  // No answer is not a failure: over remote access a timed-out request
-                  // may still have run.
-                  first = { kind: 'unknown' };
-                }
-              }
               await refreshStatus();
-              // WHY (small-fixes-3#SF3-5, Destin: "we can probably just remove this page and dump
-              // them back on the main backup & sync page"): the wizard has no Done page now — it
-              // closes onto this list, where the new backup's row shows how its first upload went.
-              // A first upload that failed or went unconfirmed is the same error box under its row
-              // as a failed "Upload now" (handlePushBackend's three sentences).
-              if (typeof added?.id === 'string') {
-                const fail = first.kind === 'failed'
-                  ? (first.error
-                    ? { message: `Upload failed: ${plainMessage(first.error)}`, reportable: true }
-                    : { message: "Upload hasn't run yet — try again in a moment.", reportable: false })
-                  : first.kind === 'unknown' ? { message: "Couldn't confirm the upload finished.", reportable: true } : null;
-                if (fail) setUploadFailure(prev => ({ ...prev, [added.id]: fail }));
-              }
-              return first;
+              // WHY the first upload runs in the background (backup fixes 2026-11-18, B-1; Destin: close, show progress
+              // on the row): with conversations and project files now copied as well, a first upload can take many
+              // minutes, and the wizard sat open the whole time. It closes the moment the backup is SAVED. The row says
+              // "Uploading…" from the backend's own state, and a failure lands in the same red box under the row as a
+              // failed "Upload now" — exactly what Sign in again (onReconnect below) already does.
+              // Auto-backup off: nothing is attempted and nothing is claimed.
+              if (instance.syncEnabled && typeof added?.id === 'string') void handlePushBackend(added.id);
             }}
             onClose={closeWizard}
             preselectedBackendId={wizardPreselect?.id}
@@ -1562,7 +1557,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       {list.map(b => {
                         // Pending = sync-enabled backend that can't currently push (offline or errored).
                         const isPending = b.syncEnabled && (b.lastError != null || isOffline);
-                        const inFlight = actionFeedback[b.id]?.includes('ing');
+                        // A copy is running when this panel started one OR the backend says so (survives closing and reopening the panel).
+                        const copying = !!b.syncing && actionFeedback[b.id] !== 'uploaded';
+                        const inFlight = actionFeedback[b.id]?.includes('ing') || copying;
                         // Status light: blue in-flight / red error / green healthy / gray paused-or-disconnected.
                         const lightClass = inFlight ? 'bg-blue-400 animate-pulse'
                           : b.lastError ? 'bg-red-500 ring-2 ring-red-500/25'
@@ -1603,12 +1600,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                   no coloured body text for messages; matches
                                   the status light above, which already
                                   carries the state). */}
-                              {isPending && !actionFeedback[b.id] && (
+                              {isPending && !actionFeedback[b.id] && !copying && (
                                 <span className="text-4xs font-medium text-fg-muted">Changes pending upload</span>
                               )}
-                              {actionFeedback[b.id] && (
+                              {(actionFeedback[b.id] || copying) && (
                                 <span className="text-4xs font-medium text-fg-muted">
-                                  {actionFeedback[b.id] === 'uploading' ? 'Uploading...' : 'Uploaded!'}
+                                  {actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' : 'Uploading...'}
                                 </span>
                               )}
                             </div>

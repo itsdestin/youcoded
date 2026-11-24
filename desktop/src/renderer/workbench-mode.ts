@@ -179,6 +179,13 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     : null;
 }
 
+/** `?backupChip=1` — draws the optional status-bar "Backing up…" chip (state/backup-progress.ts) so its picture can be
+ *  taken while the shipping switch is still off. False outside the workbench and the photo-only build. */
+export function workbenchBackupChip(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('backupChip') === '1';
+}
+
 /** `?liked=1` — a theme page opens with its heart already liked (marketplace-detail friction,
  *  proposal 10): the practice backend has no per-user like, so the liked state could never be
  *  photographed. False outside the workbench and the photo-only build. */

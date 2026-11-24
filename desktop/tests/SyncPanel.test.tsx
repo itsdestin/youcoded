@@ -241,6 +241,77 @@ describe('Backup & sync reports only what the backend confirmed', () => {
   });
 });
 
+// B-1 (backup fixes 2026-11-18): the wizard closes at once; the first upload runs in the background and the ROW says so.
+describe('the first upload after adding a backup runs in the background', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('closes the wizard as soon as the backup is saved, while the upload is still running, and the row says "Uploading..."', async () => {
+    let finish!: (v: { success: boolean; error: string }) => void;
+    const upload = new Promise<{ success: boolean; error: string }>((r) => { finish = r; });
+    const api = stub({ pushBackend: vi.fn(() => upload) }, [SETUP_WARNING]);
+    fireEvent.click(await openSetup());
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull()); // closed, not waiting
+    expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
+    expect(await screen.findByText('Uploading...')).toBeInTheDocument();
+    finish({ success: true, error: '' });
+    expect(await screen.findByText('Uploaded!')).toBeInTheDocument();
+  });
+
+  it('a failure after the wizard closed lands in the red box under the row, with Try again', async () => {
+    stub({ pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })) }, [SETUP_WARNING]);
+    fireEvent.click(await openSetup());
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/Upload failed: Some files didn.t upload/);
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
+  it('a row whose backup the backend says is copying shows "Uploading..." even in a freshly opened panel, and stops when it ends', async () => {
+    const api = stub({}, []);
+    const drive = (await api.getStatus()).backends[0];
+    drive.syncing = true; // the backend's own state, as after closing and reopening the panel
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      render(<SyncSection autoOpen />);
+      expect(await screen.findByText('Uploading...')).toBeInTheDocument();
+      drive.syncing = false; drive.lastPushEpoch = Math.floor(Date.now() / 1000);
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(screen.queryByText('Uploading...')).toBeNull());
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('shows nothing about uploading when no backup is copying', async () => {
+    stub({}, []);
+    render(<SyncSection autoOpen />);
+    await screen.findByText('My Drive');
+    expect(screen.queryByText('Uploading...')).toBeNull();
+  });
+});
+
+// B-2: the notices about the saved backup settings.
+describe('the saved-settings notices', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+  const DAMAGED = {
+    code: 'CONFIG_DAMAGED', level: 'danger', title: "Backup settings couldn't be read", body: 'Nothing was changed.',
+    fixAction: { label: 'Start fresh', kind: 'start-fresh' }, dismissible: false, createdEpoch: 0,
+  };
+  it('"Start fresh" asks the backend to set the damaged file aside and then refreshes', async () => {
+    const startFresh = vi.fn(async () => true);
+    const api = stub({ startFresh }, [DAMAGED]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start fresh' }));
+    await waitFor(() => expect(startFresh).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getStatus.mock.calls.length).toBeGreaterThan(1));
+  });
+  it('a failed "Start fresh" says so and offers Try again', async () => {
+    stub({ startFresh: vi.fn(async () => { throw new Error('EACCES: permission denied'); }) }, [DAMAGED]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start fresh' }));
+    expect(await screen.findByText(/Couldn.t set the damaged file aside/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+});
+
 // Regression test for "YouCoded failed to start" when opening Backup & sync
 // (reported by Destin 2026-09-04, seen on the PUBLIC landing page's live demo).
 //

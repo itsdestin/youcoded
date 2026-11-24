@@ -16,6 +16,8 @@ import { FastIcon } from './Icons';
 import UpdatePanel from './UpdatePanel';
 import ContextPopup from './ContextPopup';
 import OpenTasksChip from './OpenTasksChip';
+import { BACKUP_PROGRESS_CHIP_ENABLED, showBackupProgressChip } from '../state/backup-progress';
+import { workbenchBackupChip } from '../workbench-mode';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
@@ -70,6 +72,8 @@ interface StatusData {
   gitBranch: string | null;
   sessionStats: SessionStats | null;
   syncWarnings: SyncWarning[] | null;
+  /** Ids of the backups a copy is running for right now (empty when none) — feeds the optional "Backing up…" chip. */
+  copyingBackendIds?: string[];
 }
 
 // Model aliases sent to the CC CLI via `/model <alias>`. Canonical list lives
@@ -891,7 +895,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   openTasksCounts, onOpenOpenTasks,
   nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
 }: Props) {
-  const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncWarnings } = statusData;
+  const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncWarnings, copyingBackendIds } = statusData;
 
   // Dev-instance label (run-dev.sh --label → preload's devLabel). Read here rather
   // than at module scope because the remote shim assigns window.claude during
@@ -1555,6 +1559,21 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
 
       {/* The background restore-pull chip was removed in sync-legacy-demolition —
           there is no pull/restore path feeding it anymore. */}
+
+      {/* "Backing up…" chip — only while a backup copy is really running (the backend says so), and only when the
+          chip is switched on (state/backup-progress.ts; Destin picks after comparing pictures). It rides the same
+          'sync-warnings' switch as the pill beside it, so there is no extra Customize row, and it is neutral: nothing
+          is wrong. Same pill markup as the sync pill below. */}
+      {show('sync-warnings') && showBackupProgressChip(copyingBackendIds, BACKUP_PROGRESS_CHIP_ENABLED || workbenchBackupChip()) && (
+        <Tooltip text="A backup is copying your files — click to see it">
+        <button
+          onClick={onOpenSync || onRunSync}
+          className={`px-1.5 py-0.5 rounded-sm border text-4xs sm:text-3xs ${warnStyles.neutral} ${(onOpenSync || onRunSync) ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
+        >
+          Backing up…
+        </button>
+        </Tooltip>
+      )}
 
       {/* Sync status pill — at most one badge total.
           Red "Sync failing" for any danger-level warning,

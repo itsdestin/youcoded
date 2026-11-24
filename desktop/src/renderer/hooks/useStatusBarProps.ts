@@ -24,6 +24,7 @@ export interface StatusFeed<S> {
   gitBranchMap: Record<string, string>;
   sessionStatsMap: Record<string, S>;
   syncWarnings: SyncWarning[] | null;
+  copyingBackendIds?: string[];
 }
 
 export function useStatusBarData<S>(feed: StatusFeed<S>, sessionId: string | null, onChatGptPlan: boolean) {
@@ -31,10 +32,10 @@ export function useStatusBarData<S>(feed: StatusFeed<S>, sessionId: string | nul
   const contextPercent = sessionId ? (feed.contextMap[sessionId] ?? null) : null;
   const gitBranch = sessionId ? (feed.gitBranchMap[sessionId] ?? null) : null;
   const sessionStats: S | null = sessionId ? (feed.sessionStatsMap[sessionId] ?? null) : null;
-  const { updateStatus, announcement, syncWarnings } = feed;
+  const { updateStatus, announcement, syncWarnings, copyingBackendIds } = feed;
   return useMemo(
-    () => ({ usage, updateStatus, announcement, contextPercent, gitBranch, sessionStats, syncWarnings }),
-    [usage, updateStatus, announcement, contextPercent, gitBranch, sessionStats, syncWarnings],
+    () => ({ usage, updateStatus, announcement, contextPercent, gitBranch, sessionStats, syncWarnings, copyingBackendIds }),
+    [usage, updateStatus, announcement, contextPercent, gitBranch, sessionStats, syncWarnings, copyingBackendIds],
   );
 }
 

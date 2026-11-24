@@ -89,24 +89,6 @@ function WizardHeader({ title, onBack, onClose }: { title: string; onBack?: () =
 
 // --- Main wizard component ---
 
-/**
- * What became of the new destination's first backup, as the done step reports it.
- *
- * WHY four outcomes (error inventory 2026-09-10, false message 2): the done step used to
- * say "Your first backup is syncing now" whatever happened — after a failed backup, and
- * even with auto-backup off, when nothing was uploaded at all. Each outcome below is a
- * different true sentence, so each is a different value.
- *   finished — the backend confirmed the upload.
- *   failed   — the backend answered that it did not finish; `error` is its own words.
- *   unknown  — no answer came back (e.g. a remote timeout); it may or may not have run.
- *   paused   — auto-backup is off for this destination, so no upload was attempted.
- */
-export type FirstBackup =
-  | { kind: 'finished' }
-  | { kind: 'failed'; error: string }
-  | { kind: 'unknown' }
-  | { kind: 'paused' };
-
 interface SyncSetupWizardProps {
   /** Pre-selected backend type from the type picker (skips step 1) */
   initialType?: BackendType;
@@ -115,14 +97,15 @@ interface SyncSetupWizardProps {
   /**
    * Called when setup completes — passes the assembled backend instance.
    * REJECT when the destination could not be saved: rejection is the only thing that
-   * keeps the wizard open on its error box. Resolve with the first backup's outcome.
+   * keeps the wizard open on its error box. Resolve once it is SAVED: the first upload runs
+   * in the background (the row under Backup & sync shows it), so the wizard never waits for it.
    */
   onComplete: (instance: {
     type: BackendType;
     label: string;
     syncEnabled: boolean;
     config: Record<string, string>;
-  }) => Promise<FirstBackup>;
+  }) => Promise<void>;
   onClose: () => void;
   /**
    * When set, skip the provider picker and land directly on the reconnect

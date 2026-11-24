@@ -16,6 +16,7 @@ const svcMock = vi.hoisted(() => ({
 vi.mock('../src/main/sync-spaces/service', () => ({
   getSelfLastSyncEpochMs: () => svcMock.selfLastSyncMs,
   isSyncSpacesSyncing: () => svcMock.syncing,
+  spacesBackupCopyingTargets: () => [] as string[],
   getLastSyncByDevice: () => svcMock.lastSyncByDevice,
 }));
 
