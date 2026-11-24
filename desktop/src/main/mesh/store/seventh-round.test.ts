@@ -79,6 +79,15 @@ describe('F1 two older files put back together are never served quietly', () => 
       fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
     }
   });
+  it('the WHOLE folder (tails/ and markers too) put back from before a takeover: head() states the lost takeover (the count lives outside the folder)', async () => {
+    const t = await tmpRoot('r7-whole-'); const snap = t.dir + '-snap';
+    await build(t.dir, snap, 4);
+    fs.rmSync(vdir(t.dir), { recursive: true }); fs.cpSync(path.join(snap, 'versions', keyOf(V(1))), vdir(t.dir), { recursive: true });
+    fs.rmSync(path.join(t.dir, 'LOCK'), { force: true });
+    const s = await open(t.dir);
+    expect((await s.head(V(1))).lostTakeovers).toBe(1);
+    await s.close(); fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
   it('a takeover with the SAME lines afterwards, then a rotted index: rebuilt, no false alarm (the guard only fires when a file was overridden)', async () => {
     const t = await tmpRoot('r7-f1s-');
     let s = await open(t.dir); await s.append(V(1), 0, 0, A.slice(0, 20)); await s.setAsideTail(TID, V(1), 10); await s.append(V(1), 0, 10, A.slice(10, 20)); await s.close();
@@ -231,6 +240,13 @@ describe('the checkpoint carries the history it was written in, and an index ahe
     await s.setAsideTail(TID, V(1), 10); await s.close();                         // cut at 10; the checkpoint says 10
     putBack(t.dir, snap, ['index', 'body']);                                      // 40 lines of A come back
     expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, truth(10, 10)));
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+  it('index + checkpoint + bodies ALL put back from before a finished takeover (nothing disagrees; only the takeover count and the tail know): loud', async () => {
+    const t = await tmpRoot('r7-all3-'); const snap = t.dir + '-snap';
+    await build(t.dir, snap, 4);
+    putBack(t.dir, snap, ['index', 'ck', 'body']);
+    expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, truth(10, 20)));
     fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
   });
   it('a crash-ahead index (lines written since the checkpoint, NOT on any tail) is still caught up to, after a takeover', async () => {

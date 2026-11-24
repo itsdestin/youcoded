@@ -331,13 +331,18 @@ export class ChatStore {
       if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
     }
     // WHY (round 7, F1, found by the fuzz): an index AHEAD of the checkpoint looks exactly like a crash between the index write and the checkpoint write, and the checkpoint was then simply "caught up" to
-    // it. After a takeover whose cut FINISHED (`.done`) it is also what an older index and older bodies put back look like when the checkpoint was lowered at the cut and agrees at the cut point. The two
-    // differ in one provable way: a crash-ahead index holds lines the version wrote since the checkpoint, while a restored one runs along the tail of a finished takeover (the tail holds every line the old
-    // host had past the cut, with the chain value at each). So an index ahead of the checkpoint whose head is a point on a finished takeover's tail is refused (quarantined), never caught up to. A takeover
-    // whose evidence cannot be read does not decide this: only a definite hit does. (Cost: a crash-ahead index whose new lines are byte-identical to the old host's tail is also refused: loud, rare.)
-    if (ck && count > ck.count && last) {
-      const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(last.h), 0, true);
-      if (hit !== null && hit !== 'unproven') throw new Damaged(`the index runs ahead of the checkpoint along the lines takeover ${hit} cut away: older files put back, refusing to catch the checkpoint up to them`);
+    // it. After a takeover whose cut FINISHED (`.done`) it is also what an older index and older bodies put back look like when the checkpoint was lowered at the cut and agrees at the cut point. A restored
+    // one runs along the tail of a finished takeover (the tail holds every line the old host had past the cut, with the chain value at each) while the checkpoint says the version has nothing past the cut
+    // (`ck.count <= fromLine`). So an index ahead of the checkpoint whose head is a point on such a tail is refused (quarantined), never caught up to. A takeover whose evidence cannot be read does not
+    // decide this: only a definite hit does. Equal chain values mean equal lines, so a hit is either the old history or a byte-identical rewrite by the new host that crashed before its checkpoint
+    // write (the first batch after the cut): the store cannot tell those two apart and the rule is to stay loud when it cannot (a quarantine, recopied from a peer; never a quiet answer).
+    // The same proof covers a checkpoint written BEFORE the takeover (its history count is below the folder's; after a takeover the checkpoint is restated at once, tails.ts step 3c, so an older one can only
+    // have been put back) when the index and bodies were put back with it: all three older, nothing disagrees, and only the tail says the head is a replaced history's. A checkpoint with one damaged slot
+    // (`slotsOk` 1) lags by one append through nothing but that damage, so the lag alone is not evidence there.
+    // Only when the BODIES hold what the index head claims (`layout.phys`): an older index alone, whose extra records point past the trimmed bodies, would serve nothing old, and the rebuild below deals with it.
+    if (ck && last && layout.phys >= last.offset + last.len && ((count > ck.count && ckState.slotsOk === 2) || ck.hist < await histCount(this.fs, dir))) {
+      const hit = await cutAwayBranchHit(this.fs, dir, key, count, hex(last.h), 0, true, ck.hist < await histCount(this.fs, dir) ? 0 : ck.count);
+      if (hit !== null && hit !== 'unproven') throw new Damaged(`the index runs ahead of the checkpoint along the lines takeover ${hit} cut away, or the checkpoint predates it: older files put back, refusing to serve them`);
     }
     // the eviction record must agree with the index record of its last line (an independent, checksummed record)
     if (ev.lines > 0) {

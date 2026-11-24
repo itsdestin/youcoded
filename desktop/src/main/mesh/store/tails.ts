@@ -44,8 +44,18 @@ async function historyNames(fs: Fs, dir: string): Promise<string[]> {
   const asides = (await fs.readdir(nodePath.join(nodePath.dirname(nodePath.dirname(dir)), 'aside'))).filter((n) => asideRe.test(n)).sort().map((n) => `aside:${n}`);
   return [...begun, ...asides];
 }
-/** The history COUNT: how many history changes the folder shows now. It only rises (markers and aside folders are never deleted); the checkpoint records it (checkpoint.ts Checkpoint.hist). */
-export async function histCount(fs: Fs, dir: string): Promise<number> { return (await historyNames(fs, dir)).length; }
+/**
+ * The history COUNT: how many history changes have FINISHED in this folder: takeovers begun, plus quarantines / set-asides whose aside folder carries its COMPLETE mark. It only rises (markers and aside
+ * folders are never deleted); the checkpoint records it (checkpoint.ts Checkpoint.hist). WHY COMPLETE and not the folder alone (found by the fuzz): a set-aside that crashed before it moved anything leaves an
+ * empty aside folder and an intact version; counting it would make every checkpoint look "older than a history change" that never happened. (The epoch counts the bare folder on purpose: for parks, refusing too much is the safe direction.)
+ */
+export async function histCount(fs: Fs, dir: string): Promise<number> {
+  const names = await historyNames(fs, dir);
+  const asideRoot = nodePath.join(nodePath.dirname(nodePath.dirname(dir)), 'aside');
+  let n = 0;
+  for (const name of names) { if (!name.startsWith('aside:')) n++; else if (await fs.exists(nodePath.join(asideRoot, name.slice(6), 'COMPLETE'))) n++; }
+  return n;
+}
 
 /**
  * How many leading lines a checkpoint written BEFORE the latest history change can still vouch for (round 7, F1): a prefix shorter than every cut point is shared by every history, so a statement
@@ -54,8 +64,8 @@ export async function histCount(fs: Fs, dir: string): Promise<number> { return (
  * smaller bound only makes the version more cautious. `'unproven'` when a takeover's tail cannot be read.
  */
 export async function sharedPrefixBound(fs: Fs, dir: string, key: string): Promise<number | 'unproven'> {
-  const names = await historyNames(fs, dir);
-  if (names.some((n) => n.startsWith('aside:'))) return 0;
+  const asideRoot = nodePath.join(nodePath.dirname(nodePath.dirname(dir)), 'aside');
+  for (const name of await historyNames(fs, dir)) if (name.startsWith('aside:') && await fs.exists(nodePath.join(asideRoot, name.slice(6), 'COMPLETE'))) return 0;
   let bound = Infinity;
   for (const id of await takeoverIds(fs, dir)) {
     if (!(await fs.exists(marker(dir, id, 'begun'))) && !(await fs.exists(marker(dir, id, 'done')))) continue;
@@ -83,7 +93,7 @@ export async function takeoverIds(fs: Fs, dir: string): Promise<string[]> {
  * values mean equal lines, so a hit can only be old content or an identical rewrite; the caller asks only when it has overridden a file, so a hit is a loud answer, never a quiet one.
  * Markers: any tail with a `.begun` or `.done` counts (a cut may have happened); a tail written but not yet marked has cut nothing and is not a branch yet.
  */
-export async function cutAwayBranchHit(fs: Fs, dir: string, key: string, count: number, headHex: string, recordedTakeovers: number, onlyDone = false): Promise<string | 'unproven' | null> {
+export async function cutAwayBranchHit(fs: Fs, dir: string, key: string, count: number, headHex: string, recordedTakeovers: number, onlyDone = false, atOrAbove = 0): Promise<string | 'unproven' | null> {
   const ids = await takeoverIds(fs, dir);
   if (recordedTakeovers > ids.length) return 'unproven';
   for (const id of ids) {
@@ -92,7 +102,7 @@ export async function cutAwayBranchHit(fs: Fs, dir: string, key: string, count: 
     let tail: TailFile | null = null;
     try { tail = await readTailFile(fs, nodePath.join(tailsDir(dir), `${id}.tail`), key, id); } catch { tail = null; }
     if (!tail) return 'unproven';
-    if (count <= tail.fromLine || count > tail.fromLine + tail.lines.length) continue;
+    if (count <= tail.fromLine || count > tail.fromLine + tail.lines.length || tail.fromLine < atOrAbove) continue;   // `atOrAbove`: only tails whose cut is at or above this count (the load-time check, see store.ts)
     let h: Buffer = unhex(tail.fromHash);
     for (let i = 0; i < count - tail.fromLine; i++) h = chainStep(h, tail.lines[i]);
     if (hex(h) === headHex) return id;
