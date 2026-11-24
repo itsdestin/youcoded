@@ -105,7 +105,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (e instanceof InjectedCrash) throw e;
         if (e?.code === 'damaged') { if (!v.retired) { v.retired = true; if (!v.faulted) bad('false-quarantine-at-registration', { v: v.hex.slice(0, 4) }); } continue; }
         // a crash in the very first registration leaves ONE meta copy and nothing acknowledged: a fault in it makes the id unusable; the caller starts under a new id (nothing to recopy)
-        if (v.acked === 0 && ['corrupt', 'version-conflict'].includes(e?.code)) { v.retired = true; ev('registration-unreadable-before-any-data'); const nv = mkVer(V(idc++), v.chat, v.lines, v.parent); vers.push(nv); continue; }
+        if (v.acked === 0 && ['corrupt', 'version-conflict'].includes(e?.code)) { v.retired = true; ev('registration-unreadable-before-any-data'); const nv = mkVer(V(idc++), v.chat, [...v.lines], v.parent); vers.push(nv); continue; }
         await s.close().catch(() => undefined); throw e;
       }
     }
@@ -133,7 +133,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   /** Everything the caller does to a version that was found damaged (or that it set aside): a replacement id, refilled from the acknowledged lines. */
   function planRecopy(v: Ver): void {
     if (vers.some((x) => x.recopyOf === v)) return;
-    const nv = mkVer(V(idc++), v.chat, v.lines, null); nv.recopyOf = v; vers.push(nv); ev('recopy-planned');
+    const nv = mkVer(V(idc++), v.chat, [...v.lines], null); nv.recopyOf = v;   // (a COPY of the lines: a conflict park that wins in one version must not rewrite the truth of another) vers.push(nv); ev('recopy-planned');
   }
   async function runRecopies(s: ChatStore): Promise<void> {
     for (const nv of vers.filter((x) => x.recopyOf && !x.retired)) {
