@@ -219,7 +219,11 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       let undecidableIdentical = false;
       try { undecidableIdentical = sameRewriteTakeover && state === 'damaged' && fs.readFileSync(path.join(root, 'versions', key, 'marks.bin')).includes('older files put back'); } catch { /* no marks file: not this case */ }
       if (undecidableIdentical) ev('undecidable-identical-rewrite-quarantined');
-      if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok' && !undecidableIdentical) bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
+      // The other documented cost (it dates from round 6 and is unchanged): an OLDER CHECKPOINT put back after a takeover AND an eviction. The round-6 relaxation that rewrites a stale checkpoint from an index and
+      // bodies that agree with each other does not cover an eviction boundary the older statement does not know, so the version is quarantined (loud, recopied from a peer), never served.
+      const olderCkptAfterEvictAndTakeover = state === 'damaged' && /^older versions\/[0-9a-f]+\/checkpoint\.bin$/.test(faultNote) && evictedMax > 0 && tailsAcked.length > 0;
+      if (olderCkptAfterEvictAndTakeover) ev('older-checkpoint-after-evict-and-takeover-quarantined');
+      if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok' && !undecidableIdentical && !olderCkptAfterEvictAndTakeover) bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
       if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; pairInjected = false; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
