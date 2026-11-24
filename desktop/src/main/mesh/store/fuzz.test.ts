@@ -367,7 +367,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} extra`);
             await s.putExtra(sha(b), b); extraAcked.push(b);
           } else if (op < 0.985 || legacy) { log.push(`ep${n} scrub`); await s.scrubStep(V(1), { maxBytes: 1 << 20 }); }
-          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; emptiedEver = true; }
+          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; emptiedEver = true; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; }   // (the flag first: a crash inside the call still leaves the version emptied)
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
           if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
