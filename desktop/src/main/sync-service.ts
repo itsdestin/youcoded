@@ -24,12 +24,15 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
+import { acquireOwnedLock, pidExists, type LockHandle } from './owned-lock';
+import { atomicWrite as atomicWriteAsync } from './atomic-write';
 import { promisify } from 'util';
 import {
   type BackendInstance,
   type SyncWarning,
   addOrReplaceWarning,
   clearWarningsByBackend,
+  clearWarningsByCode,
   migrateConfigToV2,
   readWarnings,
   syncLegacyKeys,
@@ -78,6 +81,11 @@ interface SnapshotGate {
 // --- Constants ---
 
 const PUSH_DEBOUNCE_MIN = 15;
+// L-1 (Destin 2026-11-18): a backup lock whose owner cannot be verified is taken over after 2 hours.
+const STALE_LOCK_TAKEOVER_MS = 2 * 60 * 60 * 1000;
+// L-2: this long with every backup skipped for a held lock shows the red warning.
+const BACKUP_SKIPPED_WARN_MS = 24 * 60 * 60 * 1000;
+const BACKUP_SKIPPED_CODE = 'BACKUP_SKIPPED';
 // 10 min — generous because individual conversation slugs can grow to
 // hundreds of MB (one user has a 25 MB single .jsonl in a 156 MB slug).
 // The previous 60s value silently killed rclone mid-upload on big slugs,
@@ -110,14 +118,6 @@ const SNAPSHOT_POLL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const HEALTH_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const HEALTH_RETRY_INTERVAL_MS = 60 * 1000;
 
-// How old a backup lock may be before it is taken over even though its owner looks alive (backup fixes 2026-11-18, D-18).
-// WHY 24 hours: the lock covers ONE personal push — at most a few dozen copy commands, each cut off after 10 minutes
-// (conversations and project files are copied outside the lock, by the spaces backup). Even a first-ever upload of a huge
-// history on a slow line finishes in hours; a shorter limit would take the lock from a push still running and let two run
-// at once. Longer only delays recovery from a recycled process id (a lock left by a crash whose id something else now
-// uses) by a day. A dead owner is reclaimed at once, whatever the age; this limit only covers an owner we cannot disprove.
-export const LOCK_STALE_MS = 24 * 60 * 60 * 1000;
-
 /**
  * Do two warning lists say the same thing? Used to skip the write when a
  * health re-check found nothing new.
@@ -149,6 +149,8 @@ export class SyncService extends EventEmitter {
   // once per day even though the daily-snapshot poll calls push() hourly.
   private snapshotMarkerPath: string;
   private lockDir: string;
+  private lock: LockHandle | null = null;
+  private skippedSincePath: string;
   private backupLogPath: string;
   private appSyncMarkerPath: string;
   private syncSpacesStatePath: string;
@@ -220,6 +222,7 @@ export class SyncService extends EventEmitter {
     this.syncMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.sync-marker');
     this.snapshotMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.snapshot-marker');
     this.lockDir = path.join(this.claudeDir, 'toolkit-state', '.sync-lock');
+    this.skippedSincePath = path.join(this.claudeDir, 'toolkit-state', '.sync-skipped-since');
     this.backupLogPath = path.join(this.claudeDir, 'backup.log');
     this.appSyncMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.app-sync-active');
     // Owned by SpaceManager (sync-spaces/space-manager.ts) — read-only here.
@@ -314,8 +317,8 @@ export class SyncService extends EventEmitter {
       this.healthTimer = null;
     }
 
-    // Release the lock only if this service holds it (see releaseLock)
-    void this.releaseLock();
+    // Release lock if held (sync: the app is exiting)
+    this.releaseLockSync();
 
     // Remove .app-sync-active marker so hooks resume normal operation
     try { fs.unlinkSync(this.appSyncMarkerPath); } catch {}
@@ -493,103 +496,59 @@ export class SyncService extends EventEmitter {
   // Mutex (mkdir-based, portable)
   // =========================================================================
 
-  // WHY the lock is async and owner-checked (backup fixes 2026-11-18, D-18 / B-3): it used to trust any live process
-  // with the recorded id (no age limit, so a lock left by a crash whose id something else reused blocked every backup
-  // forever, silently), judged "alive" on Windows by parsing English tasklist text (never reclaimed on a translated
-  // Windows), and was released by whoever called — even by a service that did not take it, so quitting or toggling
-  // could pull the lock out from under a push still running. Now: a lock records who took it, when, and a private token;
-  // it is reclaimed when its owner is gone, when it carries this very process's id without this service holding it, or
-  // when it is older than LOCK_STALE_MS; and release removes only the lock this service took.
-  private lockToken: string | null = null;
-
-  /** A fingerprint of the lock folder as it is right now: its inode plus what its owner wrote. A brand-new lock made
-   *  after this one was inspected can never match it (new folder, new inode). */
-  private async lockFingerprint(dir: string): Promise<string> {
-    const read = async (name: string) => { try { return (await fs.promises.readFile(path.join(dir, name), 'utf8')).trim(); } catch { return ''; } };
-    let ino = '';
-    try { ino = String((await fs.promises.stat(dir)).ino); } catch { /* gone */ }
-    return `${ino}|${await read('pid')}|${await read('started')}|${await read('owner')}`;
-  }
-
-  /** Is the existing lock leftover (safe to take over)? Answers with the fingerprint of what was inspected, so the
-   *  take-over can prove it moved aside THAT lock and not a newer one. */
-  private async lockIsStale(): Promise<{ stale: boolean; fingerprint: string }> {
-    const fingerprint = await this.lockFingerprint(this.lockDir);
-    const read = async (name: string) => { try { return (await fs.promises.readFile(path.join(this.lockDir, name), 'utf8')).trim(); } catch { return ''; } };
-    const verdict = async (): Promise<boolean> => {
-      const pid = parseInt(await read('pid'), 10);
-      let startedAt = parseInt(await read('started'), 10);
-      if (!(startedAt > 0)) {
-        try { startedAt = (await fs.promises.stat(this.lockDir)).mtimeMs; } catch { return false; } // vanished: the next try finds it free
-      }
-      const tooOld = Date.now() - startedAt > LOCK_STALE_MS;
-      if (!(pid > 0)) return tooOld; // no readable owner: a fresh folder may be a push that is about to write its id
-      if (pid === process.pid) {
-        // Ours only if THIS service took it; otherwise this id was recycled after a restart.
-        return !(this.lockToken && (await read('owner')) === this.lockToken);
-      }
-      if (!this.isPidAlive(pid)) return true;
-      return tooOld;
-    };
-    return { stale: await verdict(), fingerprint };
-  }
-
-  /** Acquire sync lock. Returns true if acquired, false if another sync is running. */
+  /** Acquire sync lock. Returns true if acquired, false if another sync is running.
+   *
+   *  WHY owned-lock (R-4 / L-1, Destin 2026-11-18): this used to trust any process that reused the old owner's number, so a
+   *  crash could leave backups skipped forever with no sign. The lock now records its owner and takes over a dead owner's
+   *  lock, and a lock whose owner cannot be verified (Windows/macOS give no cheap start time) after 2 hours. */
   private async acquireLock(): Promise<boolean> {
-    try {
-      await fs.promises.mkdir(this.lockDir, { recursive: false });
-    } catch (e: any) {
-      if (e.code !== 'EEXIST') return false;
-      const { stale, fingerprint } = await this.lockIsStale();
-      if (!stale) return false; // Another sync is genuinely running
-      // Stale lock. Move it aside, then CHECK what was moved is the lock that was inspected.
-      // WHY the check (backup fixes 2026-11-18, review F1): a rename is atomic, but two processes can both judge the
-      // same lock stale; the first renames it away and makes its own NEW lock, and the second's rename then moved
-      // that live lock aside and deleted it — both pushes ran at once. Now the second finds the folder it moved is
-      // not the one it inspected, puts it back and backs off.
-      const aside = `${this.lockDir}.stale.${process.pid}.${Date.now()}`;
-      try { await fs.promises.rename(this.lockDir, aside); } catch { return false; }
-      if ((await this.lockFingerprint(aside)) !== fingerprint) {
-        try { await fs.promises.rename(aside, this.lockDir); } catch { /* the lock was already remade; the live owner still releases by its own token */ }
-        return false;
-      }
-      await fs.promises.rm(aside, { recursive: true, force: true }).catch(() => {});
-      try { await fs.promises.mkdir(this.lockDir, { recursive: false }); } catch { return false; }
-      this.logBackup('INFO', 'Took over a leftover backup lock', 'sync.lock');
+    const result = await acquireOwnedLock(this.lockDir, { unverifiableStaleAfterMs: STALE_LOCK_TAKEOVER_MS, label: 'backup' });
+    if (!result.ok) {
+      await this.noteBackupSkipped();
+      return false;
     }
-
-    const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    try {
-      await fs.promises.writeFile(path.join(this.lockDir, 'pid'), String(process.pid));
-      await fs.promises.writeFile(path.join(this.lockDir, 'started'), String(Date.now()));
-      await fs.promises.writeFile(path.join(this.lockDir, 'owner'), token);
-    } catch {}
-    this.lockToken = token;
+    if (result.tookOver) this.logBackup('INFO', `Took over a stale backup lock (${result.tookOver})`, 'sync.lock');
+    this.lock = result.lock;
+    await this.noteBackupRan();
     return true;
   }
 
-  /** Release sync lock — only the one this service took. */
+  /** Release sync lock (only ever removes a lock this process still owns). */
   private async releaseLock(): Promise<void> {
-    const token = this.lockToken;
-    if (!token) return;
-    this.lockToken = null;
-    try {
-      const owner = (await fs.promises.readFile(path.join(this.lockDir, 'owner'), 'utf8')).trim();
-      if (owner !== token) return; // someone else holds it now (ours was judged stale and taken over)
-    } catch { /* no owner file (write failed): the folder is ours by creation */ }
-    await fs.promises.rm(this.lockDir, { recursive: true, force: true }).catch(() => {});
+    const lock = this.lock; this.lock = null;
+    if (lock) await lock.release();
   }
 
-  /** Check if a PID is alive (cross-platform). */
+  /** Shutdown-only twin of releaseLock: the app is exiting and cannot wait. */
+  private releaseLockSync(): void {
+    const lock = this.lock; this.lock = null;
+    lock?.releaseSync();
+  }
+
+  /** L-2 (Destin 2026-11-18): remember when backups first started being skipped; after 24 hours show the red warning. */
+  private async noteBackupSkipped(): Promise<void> {
+    const now = Date.now();
+    let since = now;
+    try { const t = parseInt(await fs.promises.readFile(this.skippedSincePath, 'utf8'), 10); if (t > 0) since = t; } catch { /* first skip */ }
+    if (since === now) { try { await atomicWriteAsync(this.skippedSincePath, String(now)); } catch { /* best effort */ } }
+    if (now - since < BACKUP_SKIPPED_WARN_MS) return;
+    await addOrReplaceWarning({
+      code: BACKUP_SKIPPED_CODE, level: 'danger',
+      title: "Backups haven't run for over a day",
+      body: 'Every attempt was skipped because another backup still looks like it is running.',
+      dismissible: false, createdEpoch: Math.floor(now / 1000),
+    });
+  }
+
+  /** A backup got the lock: the skipping streak is over, so its marker and its warning go. */
+  private async noteBackupRan(): Promise<void> {
+    try { await fs.promises.unlink(this.skippedSincePath); } catch { /* none */ }
+    await clearWarningsByCode(BACKUP_SKIPPED_CODE);
+  }
+
+  /** Is a process with this number running? WHY not `tasklist`: its English "No tasks" text misread a dead process as alive on other Windows languages. */
   private isPidAlive(pid: number): boolean {
-    // WHY process.kill(pid, 0) on Windows too (D-18): Node supports it there, and it does not depend on the language of
-    // tasklist's "No tasks are running" message. EPERM means the process exists but belongs to someone else: alive.
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e: any) {
-      return e?.code === 'EPERM';
-    }
+    return pidExists(pid);
   }
 
   // =========================================================================
@@ -1246,8 +1205,8 @@ export class SyncService extends EventEmitter {
   /**
    * Reachability probe behind the OFFLINE warning. Its own method so the
    * periodic re-check has one thing to stub in tests (matching how
-   * autoDetectBackend is stubbed) — an inline `await import('dns')` is
-   * awkward to control from a suite.
+   * autoDetectBackend is stubbed) — the real check makes HTTPS requests
+   * (network-check.ts), which a suite must never make.
    */
   private async probeInternet(): Promise<boolean> {
     // WHY delegated (card #236): the check now lives in network-check.ts so the sign-in
@@ -1276,7 +1235,7 @@ export class SyncService extends EventEmitter {
 
     // 0. Internet connectivity.
     //
-    // Two strikes before we say "No internet". One DNS lookup is a noisy
+    // Two strikes before we say "No internet". One probe is a noisy
     // oracle — it fails during the few seconds between Electron starting and
     // the WiFi associating, and on any resolver hiccup — and that single
     // sample is what put a red "No internet" card under an "All synced · 1m

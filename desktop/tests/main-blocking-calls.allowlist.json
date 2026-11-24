@@ -7,6 +7,8 @@
     "unreviewed-hot-path-candidate = seeded 2026-09-23 from the code as it stood, not yet judged; converting these to async is welcome — then delete the entry."
   ],
   "startup-or-shutdown-only": [
+    {"file": "owned-lock.ts", "fn": "acquireOwnedLock.releaseSync", "call": "fs.readFileSync", "count": 1, "reason": "shutdown only: the app is exiting and cannot await the async release; reads one tiny owner file to confirm the lock is still ours"},
+    {"file": "owned-lock.ts", "fn": "acquireOwnedLock.releaseSync", "call": "fs.rmSync", "count": 1, "reason": "shutdown only: removes the lock folder at exit"},
     {"file": "headless/headless-main.ts", "fn": "readSecrets", "call": "fs.readSync", "count": 1, "reason": "Android backend only: reads the owner token and secrets key from stdin once, before anything is loaded or listening (no event loop to block yet)."},
     {"file": "crash-diagnostics.ts", "fn": "reportPreviousCrashes", "call": "fs.readdirSync", "count": 1, "reason": "startup only: main.ts reports the previous run's crash dumps once during launch"},
     {"file": "crash-diagnostics.ts", "fn": "reportPreviousCrashes", "call": "fs.statSync", "count": 1, "reason": "startup only: main.ts reports the previous run's crash dumps once during launch"},
@@ -439,7 +441,6 @@
     {"file": "prerequisite-installer.ts", "fn": "persistPathToShellProfiles", "call": "fs.readFileSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "refreshPath", "call": "execSync", "count": 2},
     {"file": "prerequisite-installer.ts", "fn": "resolveClaudeCommand", "call": "fs.existsSync", "count": 1},
-    {"file": "prerequisite-installer.ts", "fn": "startOAuthLogin", "call": "fs.existsSync", "count": 1},
     {"file": "project-context.ts", "fn": "discoverContextGroups", "call": "fs.realpathSync.native", "count": 1},
     {"file": "project-conversations.ts", "fn": "listProjectConversations", "call": "fs.realpathSync.native", "count": 1},
     {"file": "providers/chatgpt-auth.ts", "fn": "ChatGptAuth.readAccountSync", "call": "fs.readFileSync", "count": 1},

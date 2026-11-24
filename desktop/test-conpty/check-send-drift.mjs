@@ -22,7 +22,7 @@
 //   node test-conpty/check-send-drift.mjs --latest        # npm's latest @anthropic-ai/claude-code (the daily CI run)
 //   node test-conpty/check-send-drift.mjs --claude <bin>  # a specific binary (e.g. an older version, to bisect)
 //   --only <substring>   run matching cases only        --jobs <n>   cases at once (default 3)
-// Exit 0 = every case sent; 1 = at least one did not (each failure prints the screen Claude Code was showing).
+// Exit 0 = every case sent; 2 = the check crashed; 1 = at least one did not (each failure prints the screen Claude Code was showing).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fork } from 'node:child_process';
@@ -241,4 +241,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-await main();
+// WHY exit 2 on a crash (2026-11-19, Destin: alerts must tell a broken CHECK apart from a broken Claude Code): an
+// uncaught error would exit 1, the code for "users are affected", and send the wrong phone alert.
+const crashed = (e) => { console.error(e); process.exit(2); };
+await main().catch(crashed);

@@ -1,0 +1,107 @@
+name: Claude Code drift alert
+description: >
+  Pings Destin's phone (ntfy) for one daily Claude Code drift check: when users are affected (new, or still going,
+  with how long), when that clears, and when the check itself broke. Harmless changes send nothing.
+
+# WHY (Destin, 2026-11-19): "we should prob figure out a better way to make these notifications more
+# accurate/useful/functional/consistent". For four days every alert was a harmless change (a moved highlight, a new
+# sentence) sent with the same words as a real break, and nothing said whether it was new. His rules:
+#   1. alert only when users are affected;
+#   2. harmless changes don't ping (the run page keeps them, as a yellow warning);
+#   3. keep the daily repeats, but say it is a repeat and how long the problem has lasted ("i like the continued
+#      alerts so i know an issue hasn't been resolved yet");
+#   4. a check that broke says so, instead of claiming Claude Code changed.
+# One shared action so the three checks (startup, pop-ups, sending) word and count alerts the same way.
+#
+# Runs in its own job: the check job runs an untrusted package (npm's latest Claude Code) and is given no secrets.
+# This job runs only this file from the repository, with read access to the workflow's run history. The message
+# carries no details (anyone who knows the channel's name can read it); the run's summary page has them.
+
+inputs:
+  verdict:
+    description: "ok | changed | broken | check-failed (empty = the check job died before deciding = check-failed)"
+    required: false
+    default: ''
+  check-name:
+    description: Plain name of the check, e.g. "startup screens"
+    required: true
+  broken-title:
+    description: ntfy title when users are affected
+    required: true
+  broken-body:
+    description: ntfy message when users are affected
+    required: true
+  workflow-file:
+    description: This workflow's file name, e.g. cc-startup-drift.yml (its run history decides "new" vs "still")
+    required: true
+  ntfy-topic:
+    required: true
+  github-token:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERDICT: ${{ inputs.verdict }}
+        CHECK: ${{ inputs.check-name }}
+        BROKEN_TITLE: ${{ inputs.broken-title }}
+        BROKEN_BODY: ${{ inputs.broken-body }}
+        WORKFLOW_FILE: ${{ inputs.workflow-file }}
+        NTFY_TOPIC: ${{ inputs.ntfy-topic }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        EVENT: ${{ github.event_name }}
+        BRANCH: ${{ github.event.repository.default_branch }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        case "$VERDICT" in ok|changed|broken|check-failed) ;; *) VERDICT=check-failed ;; esac
+        echo "verdict: $VERDICT"
+
+        # Earlier DAILY runs of this check on the default branch, newest first, this run excluded. Only scheduled runs
+        # count, so a manual re-run or a pull request's run never shortens or stretches the streak.
+        # WHY tolerate a failed lookup: the history only words the alert; it must never swallow one.
+        history=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs?branch=$BRANCH&event=schedule&status=completed&per_page=60" \
+          --jq "[.workflow_runs[] | select(.id != $RUN_ID) | {c: .conclusion, at: .created_at}]" 2>/dev/null || echo '[]')
+        # How many daily runs in a row before this one were red (a real break or a broken check; harmless runs are green).
+        streak=$(jq '[.[] | .c] | until(length == 0 or (.[0] | IN("failure","cancelled","timed_out") | not); .[1:]) as $rest
+          | (length - ($rest | length))' <<<"$history" 2>/dev/null || echo 0)
+        since=''
+        if [ "${streak:-0}" -gt 0 ]; then
+          since=$(jq -r ".[$((streak - 1))].at" <<<"$history" | xargs -I{} date -u -d {} '+%b %-d')
+        fi
+        echo "earlier red daily runs in a row: $streak${since:+ (since $since)}"
+
+        send() {  # title, priority, tags, message
+          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC not set; nothing sent. Would send: $1 — $4"; return 0; fi
+          curl -fsS -H "Title: $1" -H "Priority: $2" -H "Tags: $3" -H "Click: $RUN_URL" -d "$4" "https://ntfy.sh/$NTFY_TOPIC" > /dev/null
+          echo "sent: $1"
+        }
+
+        case "$VERDICT" in
+          ok|changed)
+            # Back to normal after a red streak: one "fixed" message, on the daily run only.
+            if [ "$EVENT" = schedule ] && [ "${streak:-0}" -gt 0 ]; then
+              send "YouCoded: fixed — Claude Code $CHECK" default white_check_mark \
+                "The daily $CHECK check passes again, after $streak day(s) (since $since)."
+            else
+              echo "Nothing to send: users are not affected."
+            fi
+            ;;
+          broken|check-failed)
+            if [ "$VERDICT" = broken ]; then title="$BROKEN_TITLE"; body="$BROKEN_BODY"
+            else title="YouCoded: the $CHECK check itself failed"
+                 body="Not a Claude Code change: the daily $CHECK check broke before it could decide (a crash, a time limit or a GitHub problem)."
+            fi
+            if [ "$EVENT" = schedule ] && [ "${streak:-0}" -gt 0 ]; then
+              day=$((streak + 1))
+              send "Still: ${title#YouCoded: } (day $day)" default warning \
+                "Repeat — still not fixed, day $day (since $since). $body Tap to open today's run."
+            else
+              send "$title" high warning "New today. $body Tap to open the run."
+            fi
+            ;;
+        esac

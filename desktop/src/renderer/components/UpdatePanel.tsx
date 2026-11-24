@@ -109,6 +109,14 @@ interface Props {
   updateStatus: UpdateStatus;
 }
 
+// WHY (Destin, 2026-11-23): each release's notes open with a "**Claude Code CLI baseline:** …"
+// line for the release team. It means nothing to users, so the popup leaves it out; the file on
+// GitHub keeps it.
+const BASELINE_LINE = /^\s*\*\*Claude Code CLI baseline:\*\*.*(?:\r?\n)?/gm;
+function withoutBaseline(body: string): string {
+  return body.replace(BASELINE_LINE, '').trim();
+}
+
 export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   const [data, setData] = useState<ChangelogData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -432,7 +440,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     );
   } else if (loading || !data) {
     body = <LoadingState what="changelog" />;
-  } else if (updateStatus.update_available) {
+  } else if (updateStatus.update_available || data.entries.length > 0) {
+    // WHY entries even with no update waiting (Destin, 2026-11-22): the no-update view used to
+    // draw the raw file, so its "# Changelog" title, intro line and the empty "[Unreleased]"
+    // placeholder showed at the top of the official notes. The parsed entries drop all three,
+    // and both views now look the same. The raw-markdown branch below is only a fallback for a
+    // file with no version headings at all.
     // Filter by CHRONOLOGICAL position, not semver. CHANGELOG.md is authored
     // top-newest-bottom-oldest, so source order is release order. Semver math breaks
     // when a project resets its version numbers (e.g. YouCoded went 2.4.0 → 1.0.0);
@@ -440,7 +453,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // resets correctly.
     const currentIdx = data.entries.findIndex(e => e.version === updateStatus.current);
     let shown: ChangelogEntry[];
-    if (currentIdx === -1) {
+    if (!updateStatus.update_available) {
+      // No update waiting: every version, newest first.
+      shown = data.entries;
+    } else if (currentIdx === -1) {
       // User's current version isn't in the changelog (never-released local build,
       // stale file, etc.) — fall back to newest entry only.
       shown = data.entries.length > 0 ? [data.entries[0]] : [];
@@ -450,6 +466,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       // CHANGELOG lags a fresh release).
       shown = [data.entries[0]];
     } else {
+      // Only the versions newer than the user's, never the ones they already have.
       shown = data.entries.slice(0, currentIdx);
     }
     // WHY a labelled card per version (Destin, close-session-4#CS4-1; guide: nothing bare on
@@ -464,7 +481,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             {/* text-fg text-sm: the notes set no colour of their own (in chat they inherit
                 the bubble's); here they inherited the page default, near-invisible on dark
                 themes like Halftone Dimension (seen on close-session-5's preview). */}
-            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={e.body} /></div>
+            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={withoutBaseline(e.body)} /></div>
           </section>
         ))}
       </>

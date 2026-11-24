@@ -440,18 +440,50 @@ describe('what the computer reads a session\'s screen for', () => {
   it('working, a tool running, an ask waiting, started and cards open, as plain facts', () => {
     const r = new SessionRecords();
     r.begin(S);
-    expect(r.screenNeed(S)).toEqual({ working: false, toolRunning: false, asking: false, started: false, cards: 0, permissionCard: false });
+    expect(r.screenNeed(S)).toEqual({ working: false, toolRunning: false, asking: false, started: false, cards: 0, permissionCard: false, holdsMessageBox: false });
     r.note(S, 'transcript:event', user);
     r.note(S, 'transcript:event', toolUse('t1'));
     r.note(S, 'hook:event', ask('a1'));
-    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: true, asking: true, started: true, cards: 0, permissionCard: true });
+    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: true, asking: true, started: true, cards: 0, permissionCard: true, holdsMessageBox: true });
     r.note(S, 'hook:event', hook('PermissionResolved', 'a1'));
     r.note(S, 'transcript:event', toolResult('t1'));
     r.note(S, 'session:live', { sessionId: S, kind: 'prompt-show', promptId: 'p1', title: 'Usage Limit Reached', buttons: [] });
-    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: false, asking: false, started: true, cards: 1, permissionCard: false });
+    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: false, asking: false, started: true, cards: 1, permissionCard: false, holdsMessageBox: false });
     r.note(S, 'transcript:event', turnDone);
     expect(r.screenNeed(S)!.working).toBe(false);
     expect(r.screenNeed('nope')).toBeNull();
+  });
+
+  it('a helper agent\'s question is counted as asking but does not hold the message box; the conversation\'s own question and a kept one do', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    // Claude Code stamps agent_id only on a hook fired inside a helper agent.
+    r.note(S, 'hook:event', hook('PermissionRequest', 'agent-ask', { tool_name: 'Bash', agent_id: 'a7b62d22a882e3052', agent_type: 'general-purpose' }));
+    expect(r.screenNeed(S)).toMatchObject({ asking: true, permissionCard: true, holdsMessageBox: false });
+    r.note(S, 'hook:event', hook('PermissionRequest', 'agent-empty-id', { tool_name: 'Bash', agent_id: '' }));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(true); // an empty agent_id is not proof the ask came from a helper
+    r.note(S, 'hook:event', hook('PermissionResolved', 'agent-empty-id'));
+    r.note(S, 'hook:event', ask('own'));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(true);
+    r.note(S, 'hook:event', hook('PermissionExpired', 'own', { _reason: 'hook-closed' }));
+    expect(r.screenNeed(S)).toMatchObject({ asking: true, holdsMessageBox: true }); // kept: its menu may still wait
+    r.note(S, 'hook:event', hook('PermissionResolved', 'own'));
+    expect(r.screenNeed(S)).toMatchObject({ asking: true, holdsMessageBox: false });
+    r.note(S, 'hook:event', hook('PasswordRequest', 'pw'));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(true);
+  });
+
+  it('a helper agent\'s question holds the message box once its hook closes, and whenever a turn is running', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'hook:event', hook('PermissionRequest', 'agent-ask', { tool_name: 'Bash', agent_id: 'a1' }));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(false); // idle, the app's hook still holds it: Claude Code draws no menu
+    r.note(S, 'hook:event', hook('PermissionExpired', 'agent-ask', { _reason: 'hook-closed' }));
+    expect(r.screenNeed(S)!.holdsMessageBox).toBe(true);  // kept: Claude Code now draws its menu over the box
+    r.note(S, 'hook:event', hook('PermissionResolved', 'agent-ask'));
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'um-h', timestamp: 3, data: { text: 'go' } });
+    r.note(S, 'hook:event', hook('PermissionRequest', 'agent-ask-2', { tool_name: 'Bash', agent_id: 'a2' }));
+    expect(r.screenNeed(S)).toMatchObject({ working: true, holdsMessageBox: true }); // mid-turn the helper may be a foreground one
   });
 
   it('a tool running is a started tool-use without its result, never a helper\'s inner tool, and the turn ending clears them all', () => {
@@ -494,6 +526,21 @@ describe('what the computer reads a session\'s screen for', () => {
     r.drop(S);
     expect(heard).toHaveLength(4);
     expect(r.screenNeed(S)).toBeNull();
+  });
+});
+
+describe('a message that starts a turn', () => {
+  it('a picture sent with no words counts, so the conversation reads as working while Claude replies', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'p', timestamp: 1, data: { text: '', attachedFiles: ['/tmp/paste-1.png'] } });
+    expect(r.screenNeed(S)!.working).toBe(true);
+  });
+  it('a user line with neither words nor files does not', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'p', timestamp: 1, data: { text: '' } });
+    expect(r.screenNeed(S)!.working).toBe(false);
   });
 });
 

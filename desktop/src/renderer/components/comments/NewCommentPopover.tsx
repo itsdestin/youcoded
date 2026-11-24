@@ -14,17 +14,23 @@
 //
 // Coordinator review, round 3: the popup could still land ON TOP of the
 // floating Edit FAB (SessionDrawer.tsx, `bottom-9 right-4`) — a different
-// branch of the tree, sitting above it in z-order. Rather than plumb a
-// "something is open" signal all the way up to SessionDrawer to hide the
-// FAB, this shrinks the bounds it places INTO: `boundsHost` below reports a
-// rect whose bottom is pulled up by the FAB's reserved footprint, so
-// placeBubble's own clamp/flip treats that band as already outside the
-// panel — the popup either sits higher or flips above, but never over it.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+// branch of the tree, sitting above it in z-order. `reserveBottom` keeps that
+// band at the bottom of the visible panel out of bounds, so the popup either
+// sits higher or flips above, never over it.
+//
+// Comment-box fix (2026-11-22, Destin: "comment boxes sometimes show up in
+// weird places, like the bottom left"): the anchor is no longer a rect frozen
+// at the moment the comment was made. The caller passes `getAnchor`, read
+// LIVE — at open, whenever the caller's anchor changes, and on every scroll or
+// resize — so the box follows its words. Before, it was captured from the text
+// selection, which adding the comment often destroys (drawing the highlight
+// splits the selected text; a Word file redraws its text), and the fallback
+// was the whole document's rect: the bottom-left corner.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ErrorState } from '../ui/states';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
-import { placeBubble } from '../ui/anchor-position';
+import { placeBubble, visibleRectOf } from '../ui/anchor-position';
 import type { DocComment } from '../../state/doc-comments-store';
 import { CommentComposer } from './CommentComposer';
 
@@ -36,10 +42,11 @@ const FAB_RESERVED_BOTTOM = 90;
 
 interface Props {
   comment: DocComment;
-  /** Viewport rect of the selection that started this draft — the anchor. */
-  anchorRect: DOMRect;
-  /** The viewer's own content area — clamped inside it, never the header
-   *  row above or the window. */
+  /** Where the words this comment is about are right now (viewport rect), or
+   *  null while they are not drawn — read live, see the file's WHY. */
+  getAnchor: () => DOMRect | null;
+  /** The viewer's own content area — the box stays inside the VISIBLE part
+   *  of it, never the header row above or the window. */
   boundsEl: HTMLElement | null;
   onTextChange: (text: string) => void;
   /** Non-empty text: keep the comment. Empty: delete the never-really-made draft. */
@@ -47,44 +54,54 @@ interface Props {
   onCancel: () => void;
 }
 
-export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange, onDone, onCancel }: Props) {
+export function NewCommentPopover({ comment, getAnchor, boundsEl, onTextChange, onDone, onCancel }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: anchorRect.left, top: anchorRect.bottom + GAP });
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  // The last real anchor: while the words are briefly not drawn (a Word file
+  // redrawing its text), the box stays where it was instead of jumping.
+  const lastAnchorRef = useRef<DOMRect | null>(null);
 
-  // A duck-typed "host" (placeBubble/boundsFor only ever call
-  // getBoundingClientRect on it — see anchor-position.ts) reporting the
-  // viewer's content rect with FAB_RESERVED_BOTTOM already carved off the
-  // bottom, so the FAB's corner is never inside the box the popup is
-  // allowed to occupy.
-  const boundsHost = useMemo(() => {
-    if (!boundsEl) return null;
-    return {
-      getBoundingClientRect: () => {
-        // DOMRect's left/top/right/bottom/width/height are PROTOTYPE
-        // getters, not own properties — `{...r}` silently drops every one
-        // of them. Read each explicitly instead.
-        const r = boundsEl.getBoundingClientRect();
-        const height = Math.max(0, r.height - FAB_RESERVED_BOTTOM);
-        return {
-          x: r.x, y: r.y, width: r.width, height,
-          top: r.top, left: r.left, right: r.right, bottom: r.top + height,
-          toJSON: () => ({}),
-        } as DOMRect;
-      },
-    } as unknown as HTMLElement;
-  }, [boundsEl]);
-
-  useLayoutEffect(() => {
-    const trigger = { getBoundingClientRect: () => anchorRect } as unknown as HTMLElement;
-    const { left, top } = placeBubble(
+  const place = useCallback(() => {
+    const live = getAnchor();
+    if (live) lastAnchorRef.current = live;
+    // Nothing to point at yet: the top-left of the visible panel — never the
+    // whole document's rect (that was the bottom-left-corner bug).
+    const rect = live ?? lastAnchorRef.current
+      ?? (boundsEl ? (() => { const v = visibleRectOf(boundsEl); return new DOMRect(v.left, v.top, 0, 0); })() : new DOMRect());
+    const trigger = { getBoundingClientRect: () => rect } as unknown as HTMLElement;
+    const next = placeBubble(
       trigger,
       panelRef.current,
-      { placement: 'bottom', align: 'start', gapBelow: GAP, gapAbove: GAP },
-      boundsHost,
+      { placement: 'bottom', align: 'start', gapBelow: GAP, gapAbove: GAP, reserveBottom: FAB_RESERVED_BOTTOM },
+      boundsEl,
     );
-    setPos({ left, top });
-  }, [comment.id, anchorRect, boundsHost]);
+    setPos((p) => (p.left === next.left && p.top === next.top ? p : next));
+  }, [getAnchor, boundsEl]);
+
+  useLayoutEffect(() => { place(); }, [place, comment.id]);
+
+  // Follow the words while the page scrolls or the window resizes — one
+  // placement per frame at most (performance.md rule 6). Capture phase: the
+  // viewer's own scroller does not bubble its scroll events to window.
+  useEffect(() => {
+    let frame = 0;
+    const onMove = (e: Event) => {
+      // Only scrolls that can move the words (the viewer's own scroller or
+      // one around it) — never the chat, a terminal or this box's own text.
+      const t = e.target;
+      if (e.type === 'scroll' && boundsEl && t instanceof Node && t !== document && !t.contains(boundsEl)) return;
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; place(); });
+    };
+    window.addEventListener('scroll', onMove, { capture: true, passive: true });
+    window.addEventListener('resize', onMove);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', onMove, { capture: true });
+      window.removeEventListener('resize', onMove);
+    };
+  }, [place, boundsEl]);
 
   useEffect(() => { textRef.current?.focus(); }, []);
 

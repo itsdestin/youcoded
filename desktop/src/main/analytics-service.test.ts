@@ -17,6 +17,8 @@ vi.mock("node-machine-id", () => ({
 
 // Release builds are stamped official; the checked-in default is false.
 let official = true;
+// WHY mocked: the real logger appends to ~/.claude/desktop.log, which a test must never touch.
+vi.mock("./logger", () => ({ log: vi.fn() }));
 vi.mock("./official-build", () => ({ get OFFICIAL_BUILD() { return official; } }));
 
 const STATE_FILE = path.join(os.homedir(), ".claude", "youcoded-analytics.json");
@@ -257,13 +259,23 @@ describe("analytics-service setup milestones and the opt-out notice", () => {
     expect(JSON.parse(fs.readFileSync(STATE_FILE, "utf8")).optIn).toBe(false);
   });
 
-  it("a damaged analytics file is treated as an existing install, never a new one", async () => {
+  it("a damaged analytics file means analytics OFF: nothing is sent, and it is never mistaken for a new install", async () => {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
     fs.writeFileSync(STATE_FILE, "{not json");
     const svc = await importFresh();
     await svc.runAnalyticsOnLaunch();
-    expect(to("/app/heartbeat")).toHaveLength(1);
+    expect(to("/app/heartbeat")).toHaveLength(0);
     expect(to("/app/milestone")).toHaveLength(0);
+    expect(svc.getOptIn()).toBe(false);
+  });
+
+  it("a file that parses but has no on/off answer also means OFF", async () => {
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.writeFileSync(STATE_FILE, "{}");
+    const svc = await importFresh();
+    await svc.runAnalyticsOnLaunch();
+    expect(to("/app/heartbeat")).toHaveLength(0);
+    expect(svc.getOptIn()).toBe(false);
   });
 
   it("turning analytics off sends one notice without the device hash, once", async () => {

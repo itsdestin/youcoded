@@ -180,3 +180,35 @@ describe('third-party marketplace-repo plugins pin to the scanned commit', () =>
     expect(r).toMatchObject({ status: 'installed', commit: SCANNED });
   });
 });
+
+// B-7: a failed registry write must not leave files that make every retry say
+// "already installed" — and must never delete a pre-existing working install.
+describe('installPlugin cleanup after a failed registry write', () => {
+  const entry = { id: 'cleanup-plug', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceCommit: 'e91a6c0', version: '1.0.0', description: '', author: '' } as any;
+  const mockRegistry = (fail: boolean) => vi.doMock('../src/main/claude-code-registry', async (orig) => {
+    const real: any = await orig();
+    return { ...real, registerPluginInstall: async () => { if (fail) throw new Error('disk full'); } };
+  });
+
+  it('removes what it copied, so a retry installs instead of saying already installed', async () => {
+    mockRegistry(true);
+    const { installPlugin } = await import('../src/main/plugin-installer');
+    const first = await installPlugin(entry);
+    expect(first.status).toBe('failed');
+    const dir = path.join(home, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins', 'cleanup-plug');
+    expect(fs.existsSync(dir)).toBe(false);
+    vi.resetModules(); vi.doUnmock('../src/main/claude-code-registry'); mockRegistry(false);
+    const { installPlugin: again } = await import('../src/main/plugin-installer');
+    expect((await again(entry)).status).toBe('installed');
+  });
+
+  it('never deletes a pre-existing working install', async () => {
+    mockRegistry(true);
+    const { installPlugin } = await import('../src/main/plugin-installer');
+    const dir = path.join(home, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins', 'cleanup-plug');
+    fs.mkdirSync(path.join(dir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '{"name":"x","version":"1.0.0"}');
+    expect((await installPlugin(entry)).status).toBe('already_installed');
+    expect(fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json'))).toBe(true);
+  });
+});
