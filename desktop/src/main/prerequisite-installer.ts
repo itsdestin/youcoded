@@ -1327,10 +1327,11 @@ export function startOAuthLogin(): OAuthLogin {
   const exitListeners: Array<(code: number | null) => void> = [];
   // WHY (sign-in fix): callers used to sleep a fixed 1.5 s and then read `url`; a slow CLI start
   // (cold boot, just updated) printed the link later and the sign-in failed although it was fine.
-  // Waiters are told the moment the link appears or the CLI exits.
-  const urlWaiters: Array<() => void> = [];
-  let exited = false;
-  const wakeUrlWaiters = () => { for (const w of urlWaiters.splice(0)) w(); };
+  // `link` settles ONCE: with the link the moment it is printed, or null as soon as the process is
+  // gone (it can never print one after that). Later settles are no-ops.
+  let settleLink: (url: string | null) => void = () => {};
+  const link = new Promise<string | null>((r) => { settleLink = r; });
+  const gone = () => settleLink(null);
   let buffer = '';                 // accumulated stdout (ANSI-stripped) for regex matches across chunks
   const DIAG_MAX = 2000;           // cap diagnostic log volume
   let diagBuf = '';
@@ -1345,13 +1346,11 @@ export function startOAuthLogin(): OAuthLogin {
 
   worker.on('error', (err) => {
     log('ERROR', 'prereq', 'OAuth worker spawn failed', { error: String(err) });
-    // WHY: a worker that could not start will never print a link — end the link wait now rather
-    // than leaving the person on "waiting" for the full 15 s cap.
-    exited = true;
-    wakeUrlWaiters();
+    gone(); // a worker that could not start will never print a link — don't wait out the cap
   });
-  // The worker itself died (e.g. it could not be loaded): no link will ever come, stop waiting.
-  worker.on('exit', () => { exited = true; wakeUrlWaiters(); });
+  // WHY 'close', not 'exit': 'close' fires after the worker's output is fully delivered, so a link
+  // printed just before it quit has already settled `link` and is not lost.
+  worker.on('close', gone);
 
   worker.on('message', (msg: any) => {
     if (msg.type === 'data') {
@@ -1363,12 +1362,11 @@ export function startOAuthLogin(): OAuthLogin {
         if (m) {
           authUrl = m[0];
           log('INFO', 'prereq', 'OAuth URL captured', { url: authUrl });
-          wakeUrlWaiters();
+          settleLink(authUrl);
         }
       }
     } else if (msg.type === 'exit') {
-      exited = true;
-      wakeUrlWaiters();
+      gone(); // the CLI quit (its earlier output arrived first, so a printed link already counted)
       for (const cb of exitListeners) { try { cb(typeof msg.exitCode === 'number' ? msg.exitCode : null); } catch { /* a listener must not break the worker */ } }
       log('WARN', 'prereq', 'OAuth CLI exited', {
         exitCode: msg.exitCode,
@@ -1398,12 +1396,11 @@ export function startOAuthLogin(): OAuthLogin {
   return {
     get url() { return authUrl; },
     onExit: (cb: (code: number | null) => void) => { exitListeners.push(cb); },
-    waitForUrl: (timeoutMs: number) => new Promise<string | null>((resolve) => {
-      if (authUrl || exited) { resolve(authUrl); return; }
-      const timer = setTimeout(() => { const i = urlWaiters.indexOf(done); if (i >= 0) urlWaiters.splice(i, 1); resolve(authUrl); }, timeoutMs);
-      function done() { clearTimeout(timer); resolve(authUrl); }
-      urlWaiters.push(done);
-    }),
+    waitForUrl: (timeoutMs: number) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cap = new Promise<null>((r) => { timer = setTimeout(() => r(null), timeoutMs); });
+      return Promise.race([link, cap]).finally(() => clearTimeout(timer));
+    },
     kill: () => {
       try { worker.send({ type: 'kill' }); } catch {}
       try { worker.kill(); } catch {}

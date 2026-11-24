@@ -21,29 +21,23 @@ const POLL_MS = 2000;
  *  — a cold boot or a just-updated CLI — where 1.5 s failed a login that would have worked. */
 export const LOGIN_LINK_WAIT_MS = 15_000;
 
-type Login = Pick<OAuthLogin, 'url' | 'kill' | 'waitForUrl'> & Partial<Pick<OAuthLogin, 'onExit'>>;
-
 /** The ONE way the app opens Claude Code's login: start `claude auth login`, wait for its link,
  *  and end the process when no link came. WHY shared (1.3.4 bug): first launch (first-run.ts) and
  *  "Sign in again" (below) each had their own copy of these steps; the copies drifted and only the
  *  newer one broke in the installed app. Both screens now go through here. Resolves the running
- *  login (its `url` is set) or null when no link appeared. */
-export async function openClaudeLogin(
-  start: () => Login = realStart,
-  // WHY onStart: the caller needs the running process BEFORE the link wait ends, so a Cancel during
-  // that wait (up to 15 s) can end it at once. Otherwise the cancelled login lingers holding Claude's
-  // browser-callback port, and an immediate retry collides with it.
-  onStart?: (login: Login) => void,
-): Promise<Login | null> {
+ *  login (its `url` is set) or null when no link appeared.
+ *  `start` runs synchronously before the wait, so a caller that must Cancel DURING the wait (up to
+ *  15 s) keeps the process's kill from inside its own `start` — a cancelled login left running holds
+ *  Claude's browser-callback port and an immediate retry collides with it. */
+export async function openClaudeLogin(start: () => OAuthLogin = realStart): Promise<OAuthLogin | null> {
   const login = start();
-  onStart?.(login);
   const url = await login.waitForUrl(LOGIN_LINK_WAIT_MS);
   if (!url) { login.kill(); return null; }
   return login;
 }
 
 export interface ClaudeSignInDeps {
-  start?: () => Login;
+  start?: () => OAuthLogin;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   /** WHY injectable: Android brings YouCoded back from the browser (a no-op on desktop). */
@@ -54,9 +48,15 @@ export interface ClaudeSignInDeps {
 export const NO_LOGIN_LINK_MESSAGE = 'Could not get login URL from Claude Code.';
 
 export class ClaudeSignIn {
-  private login: Login | null = null;
+  /** The running `claude auth login`, from the moment it starts (so Cancel can end it during the
+   *  link wait) until it finishes or is cancelled. */
+  private login: OAuthLogin | null = null;
+  /** The press-to-link attempt now under way. WHY one shared promise: a second press — even before
+   *  the account was read — joins it and gets the SAME outcome (true, or the "no link" error),
+   *  instead of starting a second login or being told "true" while the first one fails. */
+  private inflight: Promise<boolean> | null = null;
   private round = 0;
-  private readonly d: Required<Omit<ClaudeSignInDeps, 'start'>> & { start: () => Login };
+  private readonly d: Required<Omit<ClaudeSignInDeps, 'start'>> & { start: () => OAuthLogin };
 
   constructor(deps: ClaudeSignInDeps = {}) {
     this.d = {
@@ -68,16 +68,20 @@ export class ClaudeSignIn {
   }
 
   /** Starts the login. Resolves true once the link exists (the browser is open); throws a screen
-   *  sentence when none appeared. A second call while one is open joins it. */
-  async signIn(account: Pick<ClaudeAccount, 'status' | 'invalidate' | 'clearAuthFailure'>): Promise<boolean> {
-    if (this.login) return true;
+   *  sentence when none appeared. A call during an attempt joins it; a call while an opened login
+   *  is finishing in the background answers true. */
+  signIn(account: Pick<ClaudeAccount, 'status' | 'invalidate' | 'clearAuthFailure'>): Promise<boolean> {
+    if (this.inflight) return this.inflight;
+    if (this.login) return Promise.resolve(true);
+    const attempt: Promise<boolean> = this.attempt(account).finally(() => {
+      if (this.inflight === attempt) this.inflight = null; // a newer attempt (after Cancel) keeps its own
+    });
+    this.inflight = attempt;
+    return attempt;
+  }
+
+  private async attempt(account: Pick<ClaudeAccount, 'status' | 'invalidate' | 'clearAuthFailure'>): Promise<boolean> {
     const round = ++this.round;
-    // WHY a placeholder taken BEFORE any await: a second click while this one is still reading the
-    // account or waiting for the link joins it (the `if (this.login)` above) instead of starting a
-    // second `claude auth login`. Its kill reaches the real process as soon as one exists, so Cancel
-    // during the wait ends it immediately.
-    let started = null as Login | null; // `as`: set inside the onStart callback, which TS cannot see
-    this.login = { url: null, kill: () => started?.kill(), waitForUrl: async () => null };
     try {
       // What the login looked like BEFORE: an EXPIRED login still reads "signed in", so "signed in"
       // alone cannot say the person finished. A different end time can.
@@ -87,18 +91,21 @@ export class ClaudeSignIn {
       let exitedOk = false;
       const login = await openClaudeLogin(() => {
         const l = this.d.start();
-        l.onExit?.((code) => { if (code === 0) exitedOk = true; });
+        this.login = l; // WHY here, before the wait: Cancel during the link wait ends this process
+        l.onExit((code) => { if (code === 0) exitedOk = true; });
         return l;
-      }, (l) => { started = l; });
+      });
       if (round !== this.round) { login?.kill(); return true; } // cancelled while the link was coming
       if (!login) throw new Error(NO_LOGIN_LINK_MESSAGE);
-      this.login = login;
       void this.finish(account, before, login, round, () => exitedOk);
       return true;
     } catch (err) {
-      // WHY: whatever failed (no link, or start() itself threw), never leave the placeholder behind —
-      // it would make every later signIn() a silent no-op until the app restarts.
-      if (round === this.round) { started?.kill(); this.login = null; }
+      // Cancelled meanwhile: the person already left this attempt; nothing to report.
+      if (round !== this.round) return true;
+      // WHY: whatever failed (no link, or start() itself threw), never leave a login behind — a stale
+      // one would make every later signIn() answer "true" without doing anything.
+      this.login?.kill();
+      this.login = null;
       if (err instanceof Error && err.message === NO_LOGIN_LINK_MESSAGE) throw err;
       // A crash while starting is not something the person can act on in detail; the card shows the
       // same accurate sentence (no login link came) and the log keeps the real cause.
@@ -110,6 +117,7 @@ export class ClaudeSignIn {
   /** Stops an open login. Always true (nothing open is fine). */
   cancel(): boolean {
     this.round++; // an open wait notices and quietly stops
+    this.inflight = null; // so an immediate retry starts afresh instead of joining the cancelled one
     this.login?.kill();
     this.login = null;
     return true;
@@ -118,7 +126,7 @@ export class ClaudeSignIn {
   private async finish(
     account: Pick<ClaudeAccount, 'status' | 'invalidate' | 'clearAuthFailure'>,
     before: Awaited<ReturnType<ClaudeAccount['status']>>,
-    login: Login, round: number, exitedOk: () => boolean,
+    login: OAuthLogin, round: number, exitedOk: () => boolean,
   ): Promise<void> {
     const started = this.d.now();
     const beforeEnd = before.state === 'signed-in' ? before.expiresAt : undefined;

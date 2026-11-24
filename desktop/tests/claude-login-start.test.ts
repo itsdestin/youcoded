@@ -54,10 +54,19 @@ describe('waiting for the login link', () => {
     await expect(wait).resolves.toBe('https://claude.com/cai/oauth/authorize?code=1');
   });
 
+  it('a link printed just before the CLI quits still counts', async () => {
+    const login = startOAuthLogin();
+    const wait = login.waitForUrl(LOGIN_LINK_WAIT_MS);
+    spawned[0].emit('message', { type: 'data', data: 'https://claude.ai/oauth/authorize?last=1\r\n' });
+    spawned[0].emit('message', { type: 'exit', exitCode: 0 });
+    spawned[0].emit('close', 0);
+    await expect(wait).resolves.toBe('https://claude.ai/oauth/authorize?last=1');
+  });
+
   it('ends at once with no link when the helper process dies', async () => {
     const login = startOAuthLogin();
     const wait = login.waitForUrl(LOGIN_LINK_WAIT_MS);
-    spawned[0].emit('exit', 1);
+    spawned[0].emit('close', 1); // the process is gone (all output already delivered)
     await expect(wait).resolves.toBeNull();
   });
 
@@ -71,14 +80,14 @@ describe('waiting for the login link', () => {
 
 describe('openClaudeLogin (shared by first launch and Sign in again)', () => {
   it('returns the running login once its link exists', async () => {
-    const login = { url: 'https://claude.ai/x', kill: vi.fn(), waitForUrl: vi.fn(async () => 'https://claude.ai/x') };
+    const login = { url: 'https://claude.ai/x', kill: vi.fn(), onExit: vi.fn(), waitForUrl: vi.fn(async () => 'https://claude.ai/x') };
     expect(await openClaudeLogin(() => login)).toBe(login);
     expect(login.waitForUrl).toHaveBeenCalledWith(LOGIN_LINK_WAIT_MS);
     expect(login.kill).not.toHaveBeenCalled();
   });
 
   it('ends the process and returns null when no link came', async () => {
-    const login = { url: null, kill: vi.fn(), waitForUrl: vi.fn(async () => null) };
+    const login = { url: null, kill: vi.fn(), onExit: vi.fn(), waitForUrl: vi.fn(async () => null) };
     expect(await openClaudeLogin(() => login)).toBeNull();
     expect(login.kill).toHaveBeenCalled();
   });
