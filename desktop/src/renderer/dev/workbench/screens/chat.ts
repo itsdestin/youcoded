@@ -242,6 +242,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games#signed-in', 'pane', 'games'), params: { signedIn: '1' } },
   ...['degraded', 'empty'].map((a) => ({ ...chat(`chat/games#${a}`, 'pane', 'games'), params: { signedIn: '1', arcade: a } })),
   // The status bar per kind of session (scenarios built for it).
+  // Backup fixes 2026-11-18: the optional "Backing up…" chip, drawn while a backup copy runs (shipping switch is off).
+  { ...chat('chat#backup-chip', 'view', 'status-bar'), scenario: 'statusbar-cc', params: { backupChip: '1', backupCopy: '1' } },
   ...(['statusbar-cc', 'statusbar-local', 'statusbar-metered', 'statusbar-unpriced', 'statusbar-delegated'] as const).map((sc) => ({ ...chat(`chat#${sc}`, 'view', 'status-bar'), scenario: sc })),
   // A read that fails when the screen opens (?fail=<channel>).
   { ...chat('chat/skills#load-failed', 'drawer', 'error-state'), params: { fail: 'skills.list' } },

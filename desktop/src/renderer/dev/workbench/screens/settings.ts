@@ -146,6 +146,12 @@ export const SETTINGS: readonly ScreenEntry[] = [
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google'] },
   // A Google Drive backup that timed out: the classifier's warning with its fix button (small-fixes-2).
   { ...settings('settings/sync#backup-timeout', 'dialog', 'error-state'), params: { syncWarn: 'timeout' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // Backup fixes 2026-11-18: a backup's first upload running (the row says Uploading… from the backend's own state), and
+  // the three notices about the saved settings file (restored from the last saved copy / salvaged, please check / last resort).
+  { ...settings('settings/sync#uploading', 'dialog'), params: { syncWarn: 'uploading' } },
+  { ...settings('settings/sync#config-restored', 'dialog'), params: { syncWarn: 'restored' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  { ...settings('settings/sync#config-salvaged', 'dialog'), params: { syncWarn: 'salvaged' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  { ...settings('settings/sync#config-damaged', 'dialog', 'error-state'), params: { syncWarn: 'damaged' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
   { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // The same, folded open (Removed projects became a closed fold-out row, card #213).

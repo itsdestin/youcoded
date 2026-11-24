@@ -9,6 +9,7 @@ import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
 // A pure string classifier (no imports but types): the practice Backup & sync shows its real words.
 import { classifyPushError, TIMEOUT_SENTINEL } from '../../../main/sync-error-classifier';
+import { configNotice } from '../../../shared/backup-config-notices';
 import type {
   InstalledLocalModel, DownloadProgress, ModelSettingsWrite, StoredModelSettings,
 } from '../../../shared/model-manager-types';
@@ -2481,7 +2482,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           id: 'drive-1', type: 'drive' as const, label: 'Google Drive',
           syncEnabled: true, connected: true,
           config: { DRIVE_ROOT: 'YouCoded/Backup', rcloneRemote: 'gdrive' },
-          lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 300, lastError: null,
+          // `?syncWarn=uploading` (backup fixes 2026-11-18, B-1): the row of a backup whose first upload is running right now
+          // — the backend's own `syncing` flag, never backed up yet.
+          lastPushEpoch: syncWarnMode === 'uploading' ? null : Math.floor(SYNC_NOW / 1000) - 300, lastError: null,
+          syncing: syncWarnMode === 'uploading',
         },
         // `?syncWarn=github` (small-fixes-2): a GitHub backup set up before computers stopped
         // supporting it — its settings still saved, nothing copied since.
@@ -2490,7 +2494,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           config: { PERSONAL_SYNC_REPO: 'https://github.com/you/claude-sync' },
           lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 600, lastError: null,
         }] : []),
-      ],
+      ].filter(() => syncWarnMode !== 'damaged'), // an unreadable settings file reads as no backups
       lastSyncEpoch: Math.floor(SYNC_NOW / 1000) - 120,
       backupMeta: {
         last_backup: new Date(SYNC_NOW - 300_000).toISOString(),
@@ -2499,11 +2503,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       },
       // `?syncWarn=timeout` (small-fixes-2): the Google Drive backup's "timed out" warning,
       // made by the REAL classifier so its fix button reads whatever main writes ("Try again").
-      warnings: syncWarnMode === 'timeout'
+      warnings: syncWarnMode === 'restored' || syncWarnMode === 'salvaged' || syncWarnMode === 'damaged'
+        // The real wording (shared with main), as the backend would put it in the list (backup fixes 2026-11-18, B-2).
+        ? [{ ...configNotice(syncWarnMode, 2), createdEpoch: 0 }]
+        : syncWarnMode === 'timeout'
         ? [classifyPushError(TIMEOUT_SENTINEL, 'drive', { id: 'drive-1', type: 'drive', label: 'Google Drive', syncEnabled: true, config: {} } as never)]
         : [],
-      syncInProgress: false,
-      syncingBackendId: null,
+      syncInProgress: syncWarnMode === 'uploading',
+      syncingBackendId: syncWarnMode === 'uploading' ? 'drive-1' : null,
+      copyingBackendIds: syncWarnMode === 'uploading' ? ['drive-1'] : [],
       syncedCategories: ['memory', 'conversations', 'encyclopedia', 'skills', 'system-config'],
       // Keyed by the machineId of each syncSpaces.listDevices row, so the Devices
       // tab prints a real "synced Xm ago" per device instead of falling back.
@@ -3643,6 +3651,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           announcement: announcementSwitch(),
           updateStatus: updateStatusSwitch(),
           syncWarnings: [],
+          // `?backupCopy=1`: a backup copy is running (the optional status-bar chip's picture).
+          copyingBackendIds: new URLSearchParams(location.search).get('backupCopy') === '1' ? ['drive-1'] : [],
+          syncInProgress: new URLSearchParams(location.search).get('backupCopy') === '1',
           contextMap: {},
           gitBranchMap: {},
           sessionStatsMap: fixture.sessionStatsMap,
