@@ -102,6 +102,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
   };
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
   let sameRewriteTakeover = false;                                         // round 7: a takeover with lines to cut finished and the new host continues with byte-identical lines (see the excuse in check())
+  let emptiedEver = false;                                                 // round 7: setAsideDamaged (a quarantine) has run in this sequence: older files from BEFORE it are the documented limit of inventory.ts (the quarantine resets the high-water head on purpose), so pairs of index or body files are not dealt after it
   let staleIndexInjected = false;                                          // round 7: an OLDER index.bin (single fault, or in a pair) was put back AFTER a divergent takeover, so it may describe the replaced history; cleared when the version is emptied (setAsideDamaged) or the head is canonical again. The excuse below names this cause and is checked against it
   let pairInjected = false;                                                // round 7: a PAIR of older files (index/checkpoint/bodies) was put back after a divergent takeover or a quarantine; cleared like staleIndexInjected
   let lostReported = false;                                                // round 7: head().lostTakeovers was above 0 at some check: the loss of takeover evidence HAS been reported (a later check on a version that is `damaged` cannot read it again)
@@ -224,7 +225,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       const olderCkptAfterEvictAndTakeover = state === 'damaged' && /^older versions\/[0-9a-f]+\/checkpoint\.bin$/.test(faultNote) && evictedMax > 0 && tailsAcked.length > 0;
       if (olderCkptAfterEvictAndTakeover) ev('older-checkpoint-after-evict-and-takeover-quarantined');
       if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok' && !undecidableIdentical && !olderCkptAfterEvictAndTakeover) bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
-      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; pairInjected = false; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
+      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; pairInjected = false; emptiedEver = true; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
@@ -366,7 +367,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} extra`);
             await s.putExtra(sha(b), b); extraAcked.push(b);
           } else if (op < 0.985 || legacy) { log.push(`ep${n} scrub`); await s.scrubStep(V(1), { maxBytes: 1 << 20 }); }
-          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; }
+          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; emptiedEver = true; }
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
           if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
@@ -418,8 +419,9 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // Promise: nothing is served from the wrong history without a typed error or a flag (`damaged`, damagedFromLine, rolledBack, lostTakeovers); the ordinary oracle above checks exactly that.
     // (not in an episode that already dealt a whole-folder rollback: a rollback plus a pair plus the single fault is three faults on one folder, beyond what any promise here covers)
     let pairDone = false;
+    // (nor on top of an earlier pair whose effect is still showing, nor once takeover evidence has been lost or rolled back: each of those leaves the folder in a state the next pair would make a third and fourth fault)
     // (and not once a tail has already been damaged by a fault: the takeover evidence the store uses to tell old files from new is then itself gone, which makes a pair three faults)
-    if (!legacy && !big && snaps.length && !rolledThisEpisode && tailFaults.size === 0 && r() < 0.15) {
+    if (!legacy && !big && snaps.length && !rolledThisEpisode && tailFaults.size === 0 && !pairInjected && !lostTakeoverFault && r() < 0.15) {
       const sn = snaps[Math.floor(r() * snaps.length)];
       const FAMS: Record<string, (n: string) => boolean> = {
         'index+body': (n) => /^(index\.bin|body-[0-9a-f]{16}\.bin)$/.test(n),
@@ -428,7 +430,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         'tail+begun': (n) => /^tails\/[0-9a-f]+\.(tail|begun)$/.test(n),
         'tails-dir': (n) => n.startsWith('tails/'),
       };
-      const famNames = Object.keys(FAMS); const fam = famNames[Math.floor(r() * famNames.length)];
+      const famNames = Object.keys(FAMS).filter((f) => !(emptiedEver && /index|body/.test(f))); const fam = famNames[Math.floor(r() * famNames.length)];
       const pre = `versions/${key}/`; const pred = FAMS[fam];
       const here = walk(root).map((p) => path.relative(root, p)).filter((p) => p.startsWith(pre) && pred(p.slice(pre.length)));
       const then = [...sn.keys()].filter((p) => p.startsWith(pre) && pred(p.slice(pre.length)));
