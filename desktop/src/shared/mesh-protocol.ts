@@ -37,7 +37,7 @@ export const FETCH_PAGE_BYTES = 4 * 1024 * 1024;
 export const REGISTER_MAX_BYTES = 16 * 1024;
 export const MAX_REGISTERS = 4096;
 export const MAX_GROUPS = 5000;
-export const MAX_DEVICES = 16; // THE set-size number (MAX_SET_DEVICES below is the same value under its roster name): change it here only
+export const MAX_DEVICES = 16; // THE set-size number (the app's roster calls it MAX_SET_DEVICES in crypto/limits.ts; a drift test holds them equal): change it here only
 
 // ---- Retention classes and per-writer quotas (review 2, N5/N6) ----
 /** Group names whose retention class the relay knows by name: always CONTROL (never released under pressure, never expired by the 30-day line rule,
@@ -143,10 +143,8 @@ export const MEET_OPENS_PER_ROOM_HOUR = 48;
  *  WHY 256 (third review, finding 6): with at most MAX_KNOWN_KEYS signing keys the whole log can never exceed 24 x 256 = 6,144 entries, below
  *  the 8,128 line where adds and renames stop, so no set of hostile signers can fill the log. */
 export const ROSTER_MAX_PER_SIGNER = 256;
-/** THE set-size limit, one constant for the app's roster and the relay (third review, finding 2). Product decision: the owner may change it.
- *  The app voids an `add` that would make more active devices than this; the relay refuses it ("too-many-devices"). Key rotation must succeed at
- *  exactly this many devices, so it must stay well under the 64-device cap of a generation statement. */
-export const MAX_SET_DEVICES = MAX_DEVICES;
+// The set-size limit is MAX_DEVICES above (one exported name; a second alias here failed the duplicate-export check). The app voids an `add`
+// beyond it and the relay refuses it ("too-many-devices"). It must stay well under the 64-device cap of a generation statement.
 /** Distinct device keys a set may ever name (members, removed devices and ghosts together). Caps how many signers can exist at all. */
 export const MAX_KNOWN_KEYS = 24;
 /** `add` entries one device may sign (held at the app on arrival, effective in the roster; counted by the relay). Charged to the verified signer. */

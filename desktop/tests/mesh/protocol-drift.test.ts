@@ -24,7 +24,6 @@ describe('mesh wire protocol: app copy vs Worker file', () => {
     expect(fs.readFileSync(appCopy, 'utf8')).toMatch(/export const MESH_PROTOCOL_VERSION = \d+/);
   });
   it('the roster limits (crypto/limits.ts, which is compiled on its own) equal the shared protocol numbers, and the app roster uses them', () => {
-    expect(limits.MAX_SET_DEVICES).toBe(shared.MAX_SET_DEVICES);
     expect(limits.MAX_SET_DEVICES).toBe(shared.MAX_DEVICES); // the relay's device cap and the roster's set size are ONE number
     expect(limits.MAX_KNOWN_KEYS).toBe(shared.MAX_KNOWN_KEYS);
     expect(limits.MAX_ADMISSIONS_PER_SIGNER).toBe(shared.MAX_ADMISSIONS_PER_SIGNER);
