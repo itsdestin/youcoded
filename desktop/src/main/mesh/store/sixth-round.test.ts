@@ -230,3 +230,21 @@ describe('M7 a rolled-back head must not overwrite the high-water record it was 
     await s.close(); fs.rmSync(snap, { recursive: true }); await t.cleanup();
   });
 });
+
+describe('an older index.bin from BEFORE a takeover (found by the fuzz when it started writing divergent histories)', () => {
+  it('its valid records beyond the checkpoint describe the old host\'s history: the version loads from its own bodies, nothing is quarantined, every line is served', async () => {
+    const t = await tmpRoot('r6-ix-');
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 40)); await s.close();
+    const old = fs.readFileSync(path.join(vdir(t.dir), 'index.bin'));         // the backup: 40 records of the old history
+    s = await open(t.dir);
+    await s.setAsideTail(TID, V(1), 20); await s.append(V(1), 0, 20, B.slice(20, 30)); await s.close();
+    fs.writeFileSync(path.join(vdir(t.dir), 'index.bin'), old);               // ONE fault: the older index put back
+    s = await open(t.dir);
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(30); expect(h.damagedFromLine).toBeNull();
+    expect(await view(s, truth(20, 30))).toBe('.'.repeat(30));
+    expect(await s.append(V(1), 0, 30, B.slice(30, 40))).toBe('ok');
+    await s.close(); await t.cleanup();
+  });
+});

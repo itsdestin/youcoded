@@ -331,12 +331,19 @@ export class BodyTools {
       // EXACTLY the checkpoint's chain value at its count, nothing is rotted and the checkpoint (a separate, current file) says the bodies are right: the old records are not used at all and
       // every line is derived from its body, confirmed by that same value. (Only when no valid record lies beyond the checkpoint: those would be a crash between index and checkpoint.)
       let pure = false;
-      if (ckpt && ckpt.count > evLines && lastValid + 1 <= ckpt.count) {
+      // WHY the second way in (review 6, found by the fuzz once it wrote DIVERGENT histories): an older index.bin from BEFORE a takeover can hold valid records BEYOND the checkpoint that describe the
+      // old host's line of history. A crash between index and checkpoint also leaves records beyond the checkpoint, but then the record AT the checkpoint's count agrees with the checkpoint (the
+      // checkpoint is written after the index). So records beyond the checkpoint whose own record at the checkpoint's count DISAGREES with it are not "a crash that was ahead": they are another
+      // history, and when the bodies reach the checkpoint's chain value exactly, the bodies are right and none of those records is used.
+      if (ckpt && ckpt.count > evLines) {
         const pc = new BodyCursor(this.fs, dir, layout, handles);
         let hh: Buffer = Buffer.from(start.h); let at = start.off; let ok = true;
-        for (let i = evLines; i < ckpt.count; i++) { const ln = await pc.takeLine(at); if (!ln) { ok = false; break; } hh = chainStep(hh, ln); at += ln.length; }
-        pure = ok && hh.equals(ckpt.h);
-        if (pure) include = ckpt.count;
+        const atCk = lastValid + 1 > ckpt.count ? await refRec(ckpt.count - 1) : null;
+        if (lastValid + 1 <= ckpt.count || (atCk !== null && !atCk.rec.h.equals(ckpt.h))) {
+          for (let i = evLines; i < ckpt.count; i++) { const ln = await pc.takeLine(at); if (!ln) { ok = false; break; } hh = chainStep(hh, ln); at += ln.length; }
+          pure = ok && hh.equals(ckpt.h);
+          if (pure) include = ckpt.count;
+        }
       }
       const s: BatchState = { ...start };
       const sum: SumFacts = { title: null, model: null, cwd: null };

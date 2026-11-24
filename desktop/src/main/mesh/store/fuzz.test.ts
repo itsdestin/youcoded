@@ -33,6 +33,8 @@ import { FaultFs, InjectedCrash } from './fault-fs';
 import { V, CHAT, refChains, rng, tmpRoot } from './testkit';
 import { nl } from './fixtures';
 import { inventoryRow, inventoryKind } from './inventory';
+import { readHw } from './highwater';
+import { realFs } from './fsio';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const key = V(1).toString('hex');
@@ -74,8 +76,14 @@ interface FuzzResult { seed: number; violations: { kind: string; detail: unknown
 async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } = {}): Promise<FuzzResult> {
   const legacy = !!o.legacy; const big = !!o.big;
   const r = rng(seed * 7919 + 13);
-  const canon = makeCanon(r, seed, big);
-  const ref = refChains(canon);
+  // WHY `let` (review 6): the history can now DIVERGE. A takeover (setAsideTail) may be followed by a different continuation (`alt`, same shape, other bytes) from the cut on, so `canon` is the history
+  // the CURRENT host writes and `ref` its chain values; both are replaced when a takeover is known to have finished. Lines before the cut are common to both histories.
+  let canon = makeCanon(r, seed, big);
+  let ref = refChains(canon);
+  const alt = !legacy && !big ? makeCanon(rng(seed * 17 + 3), seed + 99999, false) : [];
+  let firstDiverge = Infinity;                                            // the first line at which any divergent takeover started its new history
+  let diverged = false;                                                    // a divergent takeover finished: whole-folder rollbacks of an older state are no longer a clean test (their lines are another history)
+  let pending: { id: string; from: number; lines: Buffer[]; diverge: boolean } | null = null;   // a takeover whose answer the caller never got (a crash): it is retried first, like the real caller must
   const canon2 = legacy ? [] : makeCanon(rng(seed * 31 + 5), seed + 7777, false).slice(0, 80);   // the OTHER chat (review 4): the donor of every foreign file
   const t = await tmpRoot(`fz${seed}-`);
   const root = t.dir;
@@ -93,10 +101,10 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
   let ack2Max = 0; let faultsSinceClean = 0; let faultNote = ''; let faultOnIndexAfterEviction = false;
   const snaps: Map<string, Buffer>[] = [];
   const snapClosed = new Map<Map<string, Buffer>, number>();   // per snapshot: the acknowledged count if the episode ended in a clean close, else -1
-  const tailsAcked: { id: string; from: number }[] = [];
+  const tailsAcked: { id: string; from: number; lines: Buffer[] }[] = [];
   const tailFaults = new Map<string, number>();   // faults per set-aside id: a tail and its `.done` mark are one pair, and two faults on one pair are not promised
   const extraReportedBad = new Set<string>();   // a rotted extra is reported (`corrupt`) ONCE and then reads as absent until a peer's copy is put: that is a report, not a silent loss
-  const parkedAcked: { from: number; n: number }[] = [];
+  const parkedAcked: { from: number; n: number; lines: Buffer[] }[] = [];
   const ctlAcked: { chat: string; body: Buffer }[] = []; const extraAcked: Buffer[] = [];
   let evictedAny = false; let evictedMax = 0;
   const verifier = () => true;
@@ -148,7 +156,10 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     let head: any = null; let state = 'ok'; let verifyOk = true; const nBad0 = viol.length;
     try { head = await s.head(V(1)); } catch (e: any) { state = e?.code ?? 'error'; ev('head-' + state); log.push(`head threw ${state}`); }
     if (head) {
-      if (head.hash !== ref.raw[head.lines]) bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine });
+      // WHY the one narrow excuse (review 6): an OLDER index.bin from before a takeover, put into a version that was emptied since (setAsideDamaged), still states the OLD history's head. The store
+      // reports every line as damaged from 0 (its bodies are not there), which is at or before the first line where the two histories differ, so a caller refetches from there; and no line is
+      // served from it (the read oracle below stays strict). Any head that differs WITHOUT such a report is still a violation.
+      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= firstDiverge) ev('stale-history-head-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine }); }
       const flagged: number | null = head.damagedFromLine;
       // review 4 (F1, F4, F5): a line may only read as evicted when an evictBody call covered it. A deleted chunk, an older marker, a foreign file must never do it.
       if (head.evictedLines > evictedMax) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, evictedMax, fault: faultNote });
@@ -173,7 +184,8 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           ev('absent-but-kept');
         }
       }
-      if (head.lines >= ackedMax) { exemptFrom = Infinity; rollbackActive = false; }
+      // WHY `!pending`: a takeover that crashed may still cut at its retry, so its excuse (lines may shrink, they are in the tail) must outlive a check that happened before the retry
+      if (head.lines >= ackedMax && !pending) { exemptFrom = Infinity; rollbackActive = false; }
       try { const v = await s.verify(V(1)); if (!v.ok) { ev('verify-notok'); verifyOk = false; } } catch { ev('verify-threw'); verifyOk = false; }
     } else {
       for (let i = evictedMax; i < ackedMax; i++) if (!present(canon[i], files)) { if (lossy) { ev('destroyed-version-unreadable'); break; } bad('line-absent-everywhere(version-unreadable)', { tag, line: i, state, rotted }); break; }
@@ -183,7 +195,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
-    for (const p of parkedAcked) for (let k = 0; k < p.n; k++) if (p.from + k >= evictedMax && p.from + k >= (head?.lines ?? 0) && !present(canon[p.from + k], files)) { if (!lossy) bad('parked-line-absent', { tag, line: p.from + k }); break; }
+    for (const p of parkedAcked) for (let k = 0; k < p.n; k++) if (p.from + k >= evictedMax && p.from + k >= (head?.lines ?? 0) && !present(p.lines[k], files)) { if (!lossy) bad('parked-line-absent', { tag, line: p.from + k }); break; }
     // control log and extras: NO excused losses (review 4, F2): a lost acknowledged entry must be REPORTED, a lost extra must throw
     for (const chat of new Set(ctlAcked.map((c) => c.chat))) {
       try {
@@ -202,7 +214,12 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       try {
         const t = await s.tail(ta.id);
         if (t === null) { if ((tailFaults.get(ta.id) ?? 0) <= 1 && !rollbackDone) bad('tail-vanished-without-report', { tag, id: ta.id, fault: faultNote }); }
-        else { for (let i = 0; i < t.lines.length; i++) if (!t.lines[i].equals(canon[t.fromLine + i])) bad('tail-WRONG-BYTES', { tag, i }); ev('tail-served'); }
+        else {
+          for (let i = 0; i < t.lines.length; i++) if (!t.lines[i].equals(ta.lines[i] ?? Buffer.alloc(0))) bad('tail-WRONG-BYTES', { tag, i });
+          // review 6 (B2): a tail that is served must be COMPLETE; a shorter one means a retry wrote an empty tail over a lost one
+          if (t.lines.length !== ta.lines.length && (tailFaults.get(ta.id) ?? 0) <= 1) bad('tail-SHORT-served-without-report', { tag, id: ta.id, got: t.lines.length, want: ta.lines.length, fault: faultNote });
+          ev('tail-served');
+        }
       } catch (e: any) { ev('tail-throw-' + e?.code); if (e?.code !== 'corrupt') bad('tail-threw-other', { tag, code: e?.code }); }
     }
     // the OTHER chat: never wrong bytes, only typed errors, whatever was done to the files
@@ -217,6 +234,27 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     }
     if (head && head.damagedFromLine === null && verifyOk && viol.length === nBad0) faultsSinceClean = 0;   // a clean check: the next fault is a first fault again
     await s.close().catch((e) => { bad('close-failed', { tag, msg: String(e?.message).slice(0, 150) }); });
+    // WHY these two excuses now EXPIRE (review 6, oracle-excuse judgement): `rollbackActive` only covers a second fault dealt in the SAME episode as the rollback (the first check after it has run: the
+    // first report was promised there, and nothing later is excused by it). `hwFaulted` lasts only until the high-water record is intact again and states at least the head the store just showed, i.e.
+    // until the store has repaired or re-noted it; after that a rollback is a plain first fault again.
+    rollbackActive = false;
+    if (hwFaulted && head) { try { const v = (await readHw(realFs, root, key)).st.value; if (v && v.count >= head.lines) { hwFaulted = false; ev('hw-excuse-expired'); } } catch { /* unreadable: stays excused */ } }
+  }
+
+  /** Run (or retry) the takeover in `pending` until it is answered; a crash leaves it pending for the next episode. A typed refusal (`corrupt`: a lost tail was REPORTED) ends it unanswered. */
+  async function settleTakeover(s: ChatStore): Promise<void> {
+    const p = pending; if (!p) return;
+    try { await s.setAsideTail(p.id, V(1), p.from); }
+    catch (e: any) {
+      if (e instanceof InjectedCrash) throw e;
+      ev('takeover-refused-' + e?.code); log.push(`takeover refused ${e?.code}`); pending = null;   // reported, not silent: the old history stays the model (a cut that did happen is consistent with it)
+      if (!['corrupt', 'damaged', 'evicted', 'limit', 'disk-full', 'bad-argument'].includes(e?.code)) bad('takeover-threw-other', { code: e?.code, msg: String(e?.message).slice(0, 150) });
+      return;
+    }
+    pending = null; tailsAcked.push({ id: p.id, from: p.from, lines: p.lines });
+    if (p.diverge) {
+      canon = [...canon.slice(0, p.from), ...alt.slice(p.from)]; ref = refChains(canon); diverged = true; firstDiverge = Math.min(firstDiverge, p.from); ackedMax = Math.min(ackedMax, p.from); ev('takeover-diverged');
+    } else ev('takeover-same-history');
   }
 
   async function episode(n: number): Promise<void> {
@@ -229,6 +267,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     let s: ChatStore | null = null; let crashed = false;
     try {
       s = await open(ffs);
+      if (pending) { ev('takeover-retried'); await settleTakeover(s); }
       const nops = 2 + Math.floor(r() * 6);
       for (let k = 0; k < nops; k++) {
         const op = r();
@@ -250,15 +289,18 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} park ${from}+${cnt}`);
             const res = await s.append(V(1), 0, from, canon.slice(from, from + cnt));
-            if (res === 'parked') parkedAcked.push({ from, n: cnt });
+            if (res === 'parked') parkedAcked.push({ from, n: cnt, lines: canon.slice(from, from + cnt) });
           } else if (op < 0.70) {
             if (head < 3) continue;
             const from = Math.floor(r() * head);
-            log.push(`ep${n} setAsideTail ${from}`);
-            exemptFrom = Math.min(exemptFrom, from);
             const tid = r().toString(16).slice(2, 14).padEnd(12, 'a');
-            await s.setAsideTail(tid, V(1), from); tailsAcked.push({ id: tid, from });
-          } else if (op < 0.78) {
+            // review 6: most takeovers now continue with ANOTHER history (alt) from the cut on, so a park or tail of the old history that leaks into the new one is visible to the oracle
+            const diverge = !legacy && !big && head < alt.length && r() < 0.6;
+            log.push(`ep${n} setAsideTail ${from} ${diverge ? 'diverge' : 'same'}`);
+            exemptFrom = Math.min(exemptFrom, from);
+            pending = { id: tid, from, lines: canon.slice(from, head), diverge };
+            await settleTakeover(s);
+          } else if (op < 0.78) {          } else if (op < 0.78) {
             if (head < 3 || !hd) continue;
             const through = 1 + Math.floor(r() * head);
             log.push(`ep${n} evict ${through}`);
@@ -312,7 +354,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // (taken BEFORE this episode's fault, so an "older copy" is a true earlier state; the newest one equals the present and is skipped)
     if (!legacy && r() < 0.6) { const sn = snapshotRoot(); snaps.push(sn); snapClosed.set(sn, closedOk && !full ? ackedMax : -1); if (snaps.length > 3) snaps.shift(); }
     // WHOLE-FOLDER ROLLBACK (review 5, F3): chat 1's folder is replaced by its state at an earlier clean close. Only snapshots taken after a clean close count (the high-water record is raised there).
-    if (!legacy && !big && snaps.length && r() < 0.05) {
+    if (!legacy && !big && !diverged && snaps.length && r() < 0.05) {
       const sn = snaps[Math.floor(r() * snaps.length)];
       const pre = `versions/${key}/`; const here = walk(root).map((p) => path.relative(root, p)).filter((p) => p.startsWith(pre));
       const then = [...sn.keys()].filter((p) => p.startsWith(pre));
@@ -320,6 +362,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         for (const p of here) fs.unlinkSync(path.join(root, p));
         for (const p of then) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), sn.get(p)!); }
         rotted = true; lossy = true; rollbackDone = true; rollbackActive = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax);
+        pending = null;   // WHY: a takeover that was still waiting for its retry is moot on a folder put back to before it (its `from` would be clamped to the shorter head and write a legitimately empty tail)
         log.push(`ROLLBACK to a snapshot with ${then.length} files; closedAckedMax=${closedAckedMax}`); ev('rot'); ev('rollback');
       }
     }
@@ -329,7 +372,9 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       const pool = legacy ? all.filter((p) => !p.endsWith('LOCK') && !/(^|\/)(FORMAT|meta\.json|evicted\.json)$/.test(p) && fs.statSync(p).size > 0) : all;
       if (pool.length) {
         const crit = pool.filter((p) => /index\.bin$|body-|checkpoint\.bin|log\.bin|anchor\.json|manifest\.bin|extras\/|tails\/|evicted\.json|damaged\.json|aside\.intent/.test(p));
-        const from = r() < 0.7 && crit.length ? crit : pool;
+        // review 6 (B2): right after a crash inside a takeover, aim most faults at the takeover's own files (tail, markers), so "a lost tail meets a missing marker" really happens
+        const tailPool = pending ? pool.filter((p) => /\/tails\//.test(p)) : [];
+        const from = tailPool.length && r() < 0.7 ? tailPool : r() < 0.7 && crit.length ? crit : pool;
         const f = from[Math.floor(r() * from.length)];
         const rel = path.relative(root, f);
         const b = fs.readFileSync(f); const pos = Math.floor(r() * Math.max(1, b.length));
@@ -386,7 +431,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           if (rollbackActive && !otherChat) exemptFrom = 0;   // a second fault in the folder that was just rolled back is two faults on top of a lost state: only the first report is promised
           if (!otherChat) { rotted = true; if (destroys && SINGLE_COPY.test(rel)) lossy = true; faultsSinceClean++; faultNote = `${kind} ${rel}`; }
           else ev('fault-in-other-chat');
-          const tm = /tails\/([0-9a-f]+)\.(tail|done)$/.exec(rel); if (tm) tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1);
+          const tm = /tails\/([0-9a-f]+)\.(tail|done|begun)$/.exec(rel); if (tm) tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1);
           if (/versions\/[0-9a-f]+\/(index\.bin|replaced-index\/)/.test(rel) && evictedMax > 0) faultOnIndexAfterEviction = true;   // (an evict that crashed may still have recorded itself)
           if (/aside\/|torn\/|healed\/|replaced-index\//.test(rel)) ev('rot-in-kept-copy');
           log.push(`FAULT ${kind} ${rel}@${pos}`); ev('rot'); ev('rot-' + kind);
