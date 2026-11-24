@@ -64,7 +64,7 @@ import { gatedQuit, onWillQuit, quitAfterTeardown, shutdownStep, requestInstallR
 import { createRestartToUpdate } from './update-restart';
 import { bindUpdateRestart } from './ipc/update';
 import { isAppPageUrl } from './app-navigation';
-import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps } from './first-run';
+import { FirstRunManager, healBackupConfig, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps } from './first-run';
 import { bindFirstRunManager } from './ipc/first-run';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): the account object is
 // built HERE, inside createWindow, and handed to the IPC layer and both
@@ -1403,6 +1403,7 @@ void app.whenReady().then(async () => {
   let firstRunManager: FirstRunManager | undefined;
   let isFirstRun = false;
   try {
+    await healBackupConfig(); // a damaged settings file with a saved copy must not read as a fresh install
     isFirstRun = FirstRunManager.isFirstRun();
     if (isFirstRun) firstRunManager = new FirstRunManager();
   } catch (e) {

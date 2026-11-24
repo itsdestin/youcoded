@@ -23,6 +23,8 @@ describe('SyncService periodic health check', () => {
     vi.spyOn(svc as any, 'autoDetectBackend').mockResolvedValue(null);
     vi.spyOn(svc as any, 'probeInternet').mockResolvedValue(true);
     vi.spyOn(svc as any, 'isPrimarySyncEnabled').mockReturnValue(opts.configured);
+    // The saved-backups read is real async file I/O, which fake timers cannot advance; this suite is about the timer.
+    vi.spyOn(svc as any, 'getSyncEnabledBackends').mockResolvedValue([]);
     vi.spyOn(svc, 'push').mockResolvedValue({ success: true, errors: 0, backends: [] });
     const check = vi.spyOn(svc, 'runHealthCheck').mockResolvedValue([]);
     return { svc, check };
@@ -255,7 +257,9 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
     const twoDaysAgo = Math.floor(Date.now() / 1000) - 2 * 86400;
     fs.writeFileSync(path.join(toolkitState, '.sync-marker'), String(twoDaysAgo));
 
-    await makeService().runHealthCheck();
+    const svc = makeService() as any;
+    svc.lastFailedCycleAt = Date.now() - 10 * 60_000; // the last backup cycle failed ten minutes ago
+    await svc.runHealthCheck();
 
     const stale = (await readWarnings()).find((w) => w.code === 'PERSONAL_STALE');
     expect(stale).toBeDefined();
@@ -594,11 +598,11 @@ describe('SyncService never wipes the saved backups after a failed read', () => 
   });
   afterEach(() => { vi.restoreAllMocks(); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
 
-  it('a damaged settings file is left exactly as it is by the backup-list read', () => {
+  it('a damaged settings file is left exactly as it is by the backup-list read', async () => {
     const damaged = '{"storage_backends":[{"id":"drive-1","ty';
     fs.writeFileSync(cfg(), damaged);
     const svc = new SyncService(tmpHome) as any;
-    expect(svc.getBackendInstances()).toEqual([]);
+    expect(await svc.getBackendInstances()).toEqual([]);
     expect(fs.readFileSync(cfg(), 'utf8')).toBe(damaged);
   });
 
@@ -612,23 +616,178 @@ describe('SyncService never wipes the saved backups after a failed read', () => 
     expect(fs.readFileSync(cfg(), 'utf8')).toBe(damaged);
   });
 
-  it.each([['zero-byte', ''], ['whitespace-only', ' \n']])('a %s settings file is "empty, first run": no backups, no complaint, and the file may be written', (_n, content) => {
+  it.each([['zero-byte', ''], ['whitespace-only', ' \n']])('a %s settings file is "empty, first run": no backups, no complaint, and the file may be written', async (_n, content) => {
     fs.writeFileSync(cfg(), content);
     const svc = new SyncService(tmpHome) as any;
-    expect(svc.getBackendInstances()).toEqual([]);
+    expect(await svc.getBackendInstances()).toEqual([]);
     expect(JSON.parse(fs.readFileSync(cfg(), 'utf8')).storage_backends).toEqual([]); // the first-run migration wrote it
   });
 
   // Review M11: a file that cannot be READ is damaged, never empty.
-  it('a settings file that cannot be read at all (a folder in its place) reads as no backups and is never written over', () => {
+  it('a settings file that cannot be read at all (a folder in its place) reads as no backups and is never written over', async () => {
     fs.mkdirSync(cfg());
     const svc = new SyncService(tmpHome) as any;
-    expect(svc.getBackendInstances()).toEqual([]); // no exception: nothing tried to write
+    expect(await svc.getBackendInstances()).toEqual([]); // no exception: nothing tried to write
     expect(fs.statSync(cfg()).isDirectory()).toBe(true);
   });
 
-  it('a missing settings file is still the normal "no backups yet" and is created', () => {
+  it('a missing settings file is still the normal "no backups yet" and is created', async () => {
     const svc = new SyncService(tmpHome) as any;
-    expect(svc.getBackendInstances()).toEqual([]);
+    expect(await svc.getBackendInstances()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backup fixes 2026-11-18, B-3 (every Drive copy counts), B-4 (success stamp only on real success),
+// B-2 (the health check repairs / reports the saved-settings file).
+// ---------------------------------------------------------------------------
+describe('SyncService Drive snapshot counts every copy (B-3)', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-drive-${process.pid}-${Date.now()}`);
+  const claude = () => path.join(tmpHome, '.claude');
+  const drive = { id: 'drive-1', type: 'drive', syncEnabled: true, label: 'My Drive', config: { rcloneRemote: 'gdrive' } };
+  beforeEach(() => {
+    fs.mkdirSync(path.join(claude(), 'toolkit-state'), { recursive: true });
+    fs.mkdirSync(path.join(claude(), 'encyclopedia'), { recursive: true });
+    fs.mkdirSync(path.join(claude(), 'skills', 'mine'), { recursive: true });
+    fs.mkdirSync(path.join(claude(), 'plans'), { recursive: true });
+    fs.writeFileSync(path.join(claude(), 'conversation-index.json'), '{}');
+    setClaudeDirForTests(tmpHome);
+  });
+  afterEach(async () => { vi.restoreAllMocks(); await writeWarnings([]); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+
+  /** A Drive where only copies whose destination contains `failOn` are refused; records every call. */
+  function service(failOn: string | null) {
+    const svc = new SyncService(tmpHome) as any;
+    vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
+    const calls: string[][] = [];
+    vi.spyOn(svc, 'rclone').mockImplementation(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'lsf') return { code: 0, stdout: '2000-01-01/\n', stderr: '' };
+      const failing = failOn !== null && args.some((a) => a.includes(failOn));
+      return { code: failing ? 1 : 0, stdout: '', stderr: failing ? 'quota exceeded' : '' };
+    });
+    return { svc, calls };
+  }
+
+  it.each([['encyclopedia', '/encyclopedia/'], ['skills', '/skills/mine/'], ['plans', '/plans/'], ['conversation index', 'conversation-index.json']])(
+    'a Drive that refuses only the %s copy is not "0 errors": no day stamp, no pruning, a red warning, no fresh success time',
+    async (_n, failOn) => {
+      const { svc, calls } = service(failOn);
+      const res = await svc.push({ force: true });
+      expect(res.errors).toBeGreaterThan(0);
+      expect(res.success).toBe(false);
+      expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.snapshot-marker'))).toBe(false);
+      expect(calls.some((c) => c[0] === 'lsf' || c[0] === 'purge')).toBe(false);
+      expect((await readWarnings()).some((w) => w.backendId === 'drive-1' && w.level === 'danger')).toBe(true);
+      expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.sync-marker'))).toBe(false);
+      expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.sync-marker-drive-1'))).toBe(false);
+    });
+
+  it('when every copy lands: the day is stamped, old snapshots are pruned, and the success time is written', async () => {
+    const { svc, calls } = service(null);
+    const res = await svc.push({ force: true });
+    expect(res).toMatchObject({ success: true, errors: 0 });
+    expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.snapshot-marker'))).toBe(true);
+    expect(calls.some((c) => c[0] === 'lsf')).toBe(true);
+    expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.sync-marker'))).toBe(true);
+    expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.sync-marker-drive-1'))).toBe(true);
+  });
+
+  it('a failed cycle still holds off the next automatic push for 15 minutes (the attempt marker), without a success time', async () => {
+    const { svc, calls } = service('/encyclopedia/');
+    await svc.push({ force: true });
+    const before = calls.length;
+    await svc.push(); // automatic, not forced
+    expect(calls.length).toBe(before);
+    expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.sync-marker'))).toBe(false);
+  });
+});
+
+describe('"Extra backups are stale" (B-4)', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-stale-${process.pid}-${Date.now()}`);
+  const ts = () => path.join(tmpHome, '.claude', 'toolkit-state');
+  const drive = { id: 'drive-1', type: 'drive', syncEnabled: true, label: 'My Drive', config: {} };
+  beforeEach(() => {
+    fs.mkdirSync(ts(), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+    fs.writeFileSync(path.join(ts(), '.sync-marker'), String(Math.floor(Date.now() / 1000) - 2 * 86400));
+  });
+  afterEach(async () => { vi.restoreAllMocks(); await writeWarnings([]); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+  const health = async (setup?: (svc: any) => void) => {
+    const svc = new SyncService(tmpHome) as any;
+    vi.spyOn(svc, 'probeInternet').mockResolvedValue(true);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
+    setup?.(svc);
+    await svc.runHealthCheck({ probeBackends: false });
+    return (await readWarnings()).filter((w) => w.code === 'PERSONAL_STALE');
+  };
+
+  it('is not shown the moment an app wakes up with an old success time, before any backup has been tried', async () => {
+    expect(await health()).toEqual([]);
+  });
+  it('is not shown for a failure that happened before the last sleep (older than the hourly poll plus slack)', async () => {
+    expect(await health((svc) => { svc.lastFailedCycleAt = Date.now() - 3 * 60 * 60_000; })).toEqual([]);
+  });
+  it('is shown when the last backup cycle failed and nothing has succeeded for over a day', async () => {
+    expect(await health((svc) => { svc.lastFailedCycleAt = Date.now() - 5 * 60_000; })).toHaveLength(1);
+  });
+  it('a success clears the memory of the failure and writes the success time', async () => {
+    const svc = new SyncService(tmpHome) as any;
+    vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'pushDrive').mockResolvedValue(0);
+    svc.lastFailedCycleAt = Date.now();
+    await svc.push({ force: true });
+    expect(svc.lastFailedCycleAt).toBeNull();
+    expect(Date.now() / 1000 - parseInt(fs.readFileSync(path.join(ts(), '.sync-marker'), 'utf8'), 10)).toBeLessThan(60);
+  });
+  it('a failing cycle leaves the success time alone and remembers the failure', async () => {
+    const svc = new SyncService(tmpHome) as any;
+    vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'pushDrive').mockResolvedValue(2);
+    const before = fs.readFileSync(path.join(ts(), '.sync-marker'), 'utf8');
+    await svc.push({ force: true });
+    expect(fs.readFileSync(path.join(ts(), '.sync-marker'), 'utf8')).toBe(before);
+    expect(svc.lastFailedCycleAt).not.toBeNull();
+  });
+});
+
+describe('the health check and the saved-settings file (B-2)', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-cfgheal-${process.pid}-${Date.now()}`);
+  const cfg = () => path.join(tmpHome, '.claude', 'toolkit-state', 'config.json');
+  beforeEach(() => { fs.mkdirSync(path.dirname(cfg()), { recursive: true }); setClaudeDirForTests(tmpHome); });
+  afterEach(async () => { vi.restoreAllMocks(); await writeWarnings([]); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+  const run = async () => {
+    const svc = new SyncService(tmpHome) as any;
+    vi.spyOn(svc, 'probeInternet').mockResolvedValue(true);
+    vi.spyOn(svc, 'autoDetectBackend').mockResolvedValue(null);
+    await svc.runHealthCheck({ probeBackends: false });
+    return (await readWarnings()).map((w) => w.code);
+  };
+
+  it('a damaged file with a saved copy is restored, the person is told once, and dismissing ends it for good', async () => {
+    const good = JSON.stringify({ storage_backends: [{ id: 'drive-1', type: 'drive', label: 'D', syncEnabled: true, config: {} }] });
+    fs.writeFileSync(cfg(), good); fs.writeFileSync(`${cfg()}.good`, good);
+    fs.writeFileSync(cfg(), '{"storage_backends":[{"id"');
+    expect(await run()).toContain('CONFIG_RESTORED');
+    expect(JSON.parse(fs.readFileSync(cfg(), 'utf8')).storage_backends).toHaveLength(1);
+    const state = await import('../src/main/sync-state');
+    await state.dismissWarning('CONFIG_RESTORED');
+    expect(await run()).not.toContain('CONFIG_RESTORED');
+    expect(fs.existsSync(`${cfg()}.recovered.json`)).toBe(false);
+  });
+
+  it('a file nothing can be read from shows the red notice (and not also "No sync configured") and is left untouched', async () => {
+    const damaged = '{"storage_backends":[{"id":"drive-1","ty';
+    fs.writeFileSync(cfg(), damaged);
+    const codes = await run();
+    expect(codes).toContain('CONFIG_DAMAGED');
+    expect(codes).not.toContain('PERSONAL_NOT_CONFIGURED');
+    expect(fs.readFileSync(cfg(), 'utf8')).toBe(damaged);
+    const state = await import('../src/main/sync-state');
+    expect(await state.startFreshBackupSettings()).toBe(true);
+    expect(await run()).not.toContain('CONFIG_DAMAGED');
   });
 });

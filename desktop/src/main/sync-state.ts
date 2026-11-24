@@ -32,6 +32,7 @@ import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing } from
 // sync-spaces-vs-legacy-marker precedence rule.
 import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 import { atomicWrite } from './atomic-write';
+import { readBackupConfig, updateBackupConfig, startFreshBackupConfig, readRecoveryNote, clearRecoveryNote } from './backup-config';
 import { syncSpacesBackupNow } from './sync-spaces/service';
 import { targetForBackend } from './sync-spaces/backup-targets';
 import type { BackupTarget } from './sync-spaces/daily-backup';
@@ -86,7 +87,9 @@ export type SyncFixAction =
   | { label: string; kind: 'open-sync-setup'; payload?: { backendId?: string } }
   | { label: string; kind: 'open-external'; payload: { url: string } }
   | { label: string; kind: 'retry'; payload: { backendId: string } }
-  | { label: string; kind: 'dismiss' };
+  | { label: string; kind: 'dismiss' }
+  // Moves an unreadable backup-settings file aside so backups can be set up again (backup fixes 2026-11-18, B-2).
+  | { label: string; kind: 'start-fresh' };
 
 /**
  * A single connected cloud backend instance.
@@ -219,37 +222,6 @@ async function readJson(filePath: string): Promise<any> {
   }
 }
 
-/**
- * Read config.json for a read-modify-WRITE.
- *
- * WHY (backup fixes 2026-11-18, D-5): readJson answers null for a missing file AND for one that cannot be read or
- * parsed, and every writer below did `(await readJson(...)) || {}` — so a damaged file was treated as "no config",
- * and the next add/update/remove/save wrote a brand-new file over it, silently deleting every saved backup
- * destination. Only a missing (or empty) file is "empty" now; anything else is `ok:false` and callers must not write.
- */
-async function readConfigStrict(): Promise<{ ok: true; config: any } | { ok: false }> {
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(configPath, 'utf8');
-  } catch (e: any) {
-    return e?.code === 'ENOENT' ? { ok: true, config: {} } : { ok: false };
-  }
-  if (!raw.trim()) return { ok: true, config: {} };
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ok: true, config: parsed } : { ok: false };
-  } catch {
-    return { ok: false };
-  }
-}
-
-/** The config for a write, or an error that says nothing was changed (shown to the person as the reason). */
-async function configForWrite(): Promise<any> {
-  const r = await readConfigStrict();
-  if (!r.ok) throw new Error("The saved backup settings couldn't be read, so nothing was changed.");
-  return r.config;
-}
-
 async function dirExists(dirPath: string): Promise<boolean> {
   try {
     const stat = await fs.promises.stat(dirPath);
@@ -377,21 +349,69 @@ export function syncLegacyKeys(config: any): void {
  * Read backend instances from config, auto-migrating if needed.
  * This is the single source of truth for what backends exist.
  */
-async function readBackendInstances(): Promise<BackendInstance[]> {
-  const strict = await readConfigStrict();
-  if (!strict.ok) return []; // damaged: report no backups, write nothing (see readConfigStrict)
-  const config = strict.config;
-
-  if (config.storage_backends && Array.isArray(config.storage_backends)) {
-    return config.storage_backends;
-  }
-
+export async function readBackendInstances(file: string = configPath): Promise<BackendInstance[]> {
+  // WHY the shared reader (backup fixes 2026-11-18, B-2): a damaged settings file is repaired (or reported damaged) by
+  // backup-config.ts, the one owner of this file, so every reader agrees what "damaged" means. Damaged and not
+  // repairable reads as "no backups" and writes nothing.
+  const r = await readBackupConfig(file);
+  if (!r.ok) return [];
+  if (Array.isArray(r.config.storage_backends)) return r.config.storage_backends;
   // Auto-migrate from flat keys on first read
-  const migrated = migrateConfigToV2(config);
-  config.storage_backends = migrated;
-  syncLegacyKeys(config);
-  await atomicWrite(configPath, JSON.stringify(config, null, 2));
-  return migrated;
+  return updateBackupConfig(file, (config) => {
+    if (Array.isArray(config.storage_backends)) return config.storage_backends as BackendInstance[]; // another caller got there first
+    const migrated = migrateConfigToV2(config);
+    config.storage_backends = migrated;
+    syncLegacyKeys(config);
+    return migrated;
+  }).catch(() => []);
+}
+
+// --- The settings file's own health, told to the person (backup fixes 2026-11-18, B-2) ---
+
+export const CONFIG_RESTORED_CODE = 'CONFIG_RESTORED';
+export const CONFIG_SALVAGED_CODE = 'CONFIG_SALVAGED';
+export const CONFIG_DAMAGED_CODE = 'CONFIG_DAMAGED';
+export const CONFIG_HEALTH_CODES = [CONFIG_RESTORED_CODE, CONFIG_SALVAGED_CODE, CONFIG_DAMAGED_CODE];
+
+/**
+ * The notices about the saved backup settings: one after the app repaired a damaged file on its own (until dismissed),
+ * or a red one when it is damaged and nothing could be repaired. Reading the file here is what triggers a repair, so
+ * launch-time checks bring a damaged file back before anything asks for the list.
+ */
+export async function configHealthWarnings(file: string = configPath): Promise<SyncWarning[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const read = await readBackupConfig(file);
+  if (!read.ok) {
+    return [{
+      code: CONFIG_DAMAGED_CODE, level: 'danger',
+      title: "Backup settings couldn't be read",
+      body: "Nothing was changed, so nothing was lost. Start fresh sets the unreadable file aside (it is kept, not deleted) so you can set up your backups again.",
+      fixAction: { label: 'Start fresh', kind: 'start-fresh' },
+      dismissible: false, createdEpoch: now,
+    }];
+  }
+  const note = await readRecoveryNote(file);
+  if (!note) return [];
+  if (note.kind === 'restored') {
+    return [{
+      code: CONFIG_RESTORED_CODE, level: 'warn',
+      title: 'Backup settings restored',
+      body: "Your backup settings file was damaged, so YouCoded brought back the last copy it had saved. The damaged file was kept next to it in case you need it.",
+      dismissible: true, createdEpoch: Math.floor(Date.parse(note.at) / 1000) || now,
+    }];
+  }
+  const n = note.backups;
+  return [{
+    code: CONFIG_SALVAGED_CODE, level: 'warn',
+    title: 'Please check your backups',
+    body: `Your backup settings file was damaged and no earlier copy was saved. YouCoded kept the ${n === 1 ? '1 backup' : `${n} backups`} it could still read. Please check the list is complete and add any that are missing. The damaged file was kept.`,
+    dismissible: true, createdEpoch: Math.floor(Date.parse(note.at) / 1000) || now,
+  }];
+}
+
+/** "Start fresh": set a damaged, unrepairable settings file aside. Resolves true when it did. */
+export async function startFreshBackupSettings(): Promise<boolean> {
+  return (await startFreshBackupConfig(configPath)) !== null;
 }
 
 // --- Warning store ---
@@ -544,7 +564,8 @@ export async function getSyncStatus(): Promise<SyncStatus> {
  * Returns the new multi-instance format with legacy keys for compat.
  */
 export async function getSyncConfig(): Promise<SyncConfig> {
-  const config = (await readJson(configPath)) || {};
+  const read = await readBackupConfig(configPath);
+  const config = read.ok ? read.config : {};
   const backends = config.storage_backends && Array.isArray(config.storage_backends)
     ? config.storage_backends
     : migrateConfigToV2(config);
@@ -568,27 +589,23 @@ export async function getSyncConfig(): Promise<SyncConfig> {
 export async function setSyncConfig(
   updates: Partial<SyncConfig>
 ): Promise<SyncConfig> {
-  const existing = await configForWrite();
-
-  if (updates.backends) {
-    // New model: replace the backends array and regenerate legacy keys
-    existing.storage_backends = updates.backends;
-    syncLegacyKeys(existing);
-  } else {
-    // Legacy flat-key update (old UI path) — merge and rebuild backends array
-    if (updates.PERSONAL_SYNC_BACKEND !== undefined) existing.PERSONAL_SYNC_BACKEND = updates.PERSONAL_SYNC_BACKEND;
-    if (updates.DRIVE_ROOT !== undefined) existing.DRIVE_ROOT = updates.DRIVE_ROOT;
-    if (updates.PERSONAL_SYNC_REPO !== undefined) existing.PERSONAL_SYNC_REPO = updates.PERSONAL_SYNC_REPO;
-    if (updates.ICLOUD_PATH !== undefined) existing.ICLOUD_PATH = updates.ICLOUD_PATH;
-    // Re-derive storage_backends from flat keys so they stay in sync
-    existing.storage_backends = migrateConfigToV2(existing);
-  }
-
-  if (updates.SYNC_WIFI_ONLY !== undefined) {
-    existing.SYNC_WIFI_ONLY = updates.SYNC_WIFI_ONLY;
-  }
-
-  await atomicWrite(configPath, JSON.stringify(existing, null, 2));
+  const existing = await updateBackupConfig(configPath, (existing) => {
+    if (updates.backends) {
+      // New model: replace the backends array and regenerate legacy keys
+      existing.storage_backends = updates.backends;
+      syncLegacyKeys(existing);
+    } else {
+      // Legacy flat-key update (old UI path) — merge and rebuild backends array
+      if (updates.PERSONAL_SYNC_BACKEND !== undefined) existing.PERSONAL_SYNC_BACKEND = updates.PERSONAL_SYNC_BACKEND;
+      if (updates.DRIVE_ROOT !== undefined) existing.DRIVE_ROOT = updates.DRIVE_ROOT;
+      if (updates.PERSONAL_SYNC_REPO !== undefined) existing.PERSONAL_SYNC_REPO = updates.PERSONAL_SYNC_REPO;
+      if (updates.ICLOUD_PATH !== undefined) existing.ICLOUD_PATH = updates.ICLOUD_PATH;
+      // Re-derive storage_backends from flat keys so they stay in sync
+      existing.storage_backends = migrateConfigToV2(existing);
+    }
+    if (updates.SYNC_WIFI_ONLY !== undefined) existing.SYNC_WIFI_ONLY = updates.SYNC_WIFI_ONLY;
+    return { ...existing };
+  });
 
   const backends: BackendInstance[] = existing.storage_backends || [];
   return {
@@ -614,39 +631,35 @@ export async function addBackend(
   // browser, so "offered nowhere" has to hold in the backend. Same plain words the rest of the fix uses.
   if (instance.type === 'github') throw new Error('GitHub backups are no longer supported.');
   if (instance.type === 'drive' && isRunningOnPhone()) throw new Error("Google Drive backup isn't available on this phone.");
-  const config = await configForWrite();
-  const backends: BackendInstance[] = config.storage_backends || migrateConfigToV2(config);
+  return updateBackupConfig(configPath, (config) => {
+    const backends: BackendInstance[] = config.storage_backends || migrateConfigToV2(config);
+    const id = generateBackendId(instance.type, instance.label);
 
-  const id = generateBackendId(instance.type, instance.label);
+    // Ensure ID uniqueness — append a counter if needed
+    let finalId = id;
+    let counter = 2;
+    while (backends.some(b => b.id === finalId)) {
+      finalId = `${id}-${counter}`;
+      counter++;
+    }
 
-  // Ensure ID uniqueness — append a counter if needed
-  let finalId = id;
-  let counter = 2;
-  while (backends.some(b => b.id === finalId)) {
-    finalId = `${id}-${counter}`;
-    counter++;
-  }
-
-  const newInstance: BackendInstance = { ...instance, id: finalId };
-  backends.push(newInstance);
-
-  config.storage_backends = backends;
-  syncLegacyKeys(config);
-  await atomicWrite(configPath, JSON.stringify(config, null, 2));
-
-  return newInstance;
+    const newInstance: BackendInstance = { ...instance, id: finalId };
+    backends.push(newInstance);
+    config.storage_backends = backends;
+    syncLegacyKeys(config);
+    return newInstance;
+  });
 }
 
 /**
  * Remove a backend instance by id. Cleans up per-backend state files.
  */
 export async function removeBackend(id: string): Promise<void> {
-  const config = await configForWrite();
-  const backends: BackendInstance[] = config.storage_backends || [];
-
-  config.storage_backends = backends.filter(b => b.id !== id);
-  syncLegacyKeys(config);
-  await atomicWrite(configPath, JSON.stringify(config, null, 2));
+  await updateBackupConfig(configPath, (config) => {
+    const backends: BackendInstance[] = config.storage_backends || [];
+    config.storage_backends = backends.filter(b => b.id !== id);
+    syncLegacyKeys(config);
+  });
 
   // Clean up per-backend marker file. The legacy .sync-error-<id> file is
   // retired as of the sync-warnings refactor — startup cleanup handles it.
@@ -666,23 +679,19 @@ export async function updateBackend(
   id: string,
   updates: Partial<Omit<BackendInstance, 'id' | 'type'>>
 ): Promise<BackendInstance | null> {
-  const config = await configForWrite();
-  const backends: BackendInstance[] = config.storage_backends || [];
-
-  const index = backends.findIndex(b => b.id === id);
-  if (index === -1) return null;
-
-  // Merge updates into the existing instance
-  const existing = backends[index];
-  if (updates.label !== undefined) existing.label = updates.label;
-  if (updates.syncEnabled !== undefined) existing.syncEnabled = updates.syncEnabled;
-  if (updates.config !== undefined) existing.config = { ...existing.config, ...updates.config };
-
-  config.storage_backends = backends;
-  syncLegacyKeys(config);
-  await atomicWrite(configPath, JSON.stringify(config, null, 2));
-
-  return existing;
+  return updateBackupConfig(configPath, (config) => {
+    const backends: BackendInstance[] = config.storage_backends || [];
+    const index = backends.findIndex(b => b.id === id);
+    if (index === -1) return null;
+    // Merge updates into the existing instance
+    const existing = backends[index];
+    if (updates.label !== undefined) existing.label = updates.label;
+    if (updates.syncEnabled !== undefined) existing.syncEnabled = updates.syncEnabled;
+    if (updates.config !== undefined) existing.config = { ...existing.config, ...updates.config };
+    config.storage_backends = backends;
+    syncLegacyKeys(config);
+    return existing;
+  });
 }
 
 // --- Force Sync & Per-Backend Sync ---
@@ -829,6 +838,9 @@ export async function dismissWarning(code: string): Promise<void> {
   const target = all.find((w) => w.code === code);
   if (!target || !target.dismissible) return;
   dismissedThisRun.add(code);
+  // WHY (B-2): the repair notice is kept on disk until the person has seen it; dismissing it must end it, or it would
+  // come back on the next launch.
+  if (code === CONFIG_RESTORED_CODE || code === CONFIG_SALVAGED_CODE) await clearRecoveryNote(configPath);
   const filtered = all.filter((w) => w !== target);
   await writeWarnings(filtered);
 }

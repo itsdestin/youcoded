@@ -32,6 +32,7 @@ import { writeSetupDownload } from './first-run-local';
 import { noteMilestone } from './analytics-service';
 import { checkInternet } from './network-check';
 import { atomicWrite } from './atomic-write';
+import { classifyConfigText, readBackupConfig, updateBackupConfig, ConfigDamagedError } from './backup-config';
 
 /** The line under the sign-in buttons when the app's own check says there is no connection (card #236). */
 const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
@@ -132,6 +133,11 @@ export function firstRunStateDir(): string {
  * must set this flag first, or the NEXT launch treats a months-old install as
  * a brand-new machine and re-runs the Node/Git/Claude installers.
  */
+/** Repair the settings file if it is damaged (see backup-config.ts). Called once at launch, before isFirstRun. */
+export async function healBackupConfig(): Promise<void> {
+  try { await readBackupConfig(CONFIG_FILE); } catch { /* the first-run check below still answers */ }
+}
+
 export function markSetupCompleted(): Promise<void> {
   // WHY queued + atomic (backup fixes 2026-11-18): this file also holds the saved backup destinations
   // (storage_backends). It was written with a plain writeFileSync, so a crash mid-write left a cut-off file,
@@ -140,32 +146,13 @@ export function markSetupCompleted(): Promise<void> {
   // parse failure leaves the file exactly as it is; the write goes through a temp file and a rename.
   return queueFirstRunWrite(async () => {
     try {
-      let config: Record<string, unknown> = {};
-      let raw: string | null = null;
-      try {
-        raw = await fs.promises.readFile(CONFIG_FILE, 'utf8');
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-          log('WARN', 'first-run', 'Settings file unreadable — left untouched, setup_completed not written', { error: String(err) });
-          return;
-        }
-      }
-      // Same rule as the backup code's readers (review F3): a zero-byte or blank file is "empty, first run" (the usual
-      // leftover of the old non-atomic write); only a NON-empty file that fails to parse is damaged and left alone.
-      if (raw !== null && raw.trim() !== '') {
-        try {
-          const parsed = JSON.parse(raw);
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
-          config = parsed;
-        } catch (err) {
-          log('WARN', 'first-run', 'Settings file damaged — left untouched, setup_completed not written', { error: String(err) });
-          return;
-        }
-      }
-      config.setup_completed = true;
-      await atomicWrite(CONFIG_FILE, JSON.stringify(config, null, 2));
+      // WHY the shared owner (B-2): backup-config.ts decides what "damaged" means for this file, repairs it from the
+      // last saved copy when it can, and refuses (writing nothing) when it cannot — the flag is then simply not recorded.
+      await updateBackupConfig(CONFIG_FILE, (config) => { config.setup_completed = true; });
     } catch (err) {
-      log('WARN', 'first-run', 'Failed to mark setup completed', { error: String(err) });
+      log('WARN', 'first-run', err instanceof ConfigDamagedError
+        ? 'Settings file damaged and not repairable — left untouched, setup_completed not written'
+        : 'Failed to mark setup completed', { error: String(err) });
     }
   });
 }
@@ -249,9 +236,11 @@ export class FirstRunManager extends EventEmitter {
     } catch { /* no state file = fresh */ }
 
     // Check if the wizard has written setup_completed
+    // Same meaning of "damaged" as everything else that reads this file (backup-config.ts); startup repairs it first
+    // (healBackupConfig) so a damaged file with a saved copy is not mistaken for a fresh install.
     try {
-      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      return config.setup_completed !== true;
+      const c = classifyConfigText(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      return !(c.kind === 'ok' && c.config.setup_completed === true);
     } catch {
       return true;
     }

@@ -28,7 +28,7 @@ import { getPermissionOverrides } from '../app-signals';
 import { IPC } from '../../shared/types';
 import { log, rotateLog } from '../logger';
 import { startPluginOffSwitch } from '../plugin-blocklist';
-import { FirstRunManager, markSetupCompleted, setupIsUsable } from '../first-run';
+import { FirstRunManager, healBackupConfig, markSetupCompleted, setupIsUsable } from '../first-run';
 import { bindFirstRunManager } from '../ipc/first-run';
 import { ChatGptAuth } from '../providers/chatgpt-auth';
 import { SecretsStore } from '../providers/secrets-store';
@@ -140,6 +140,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   startDailyHeartbeat({ platform: 'android' });
   let firstRunManager: FirstRunManager | undefined;
   try {
+    await healBackupConfig();
     if (FirstRunManager.isFirstRun()) firstRunManager = new FirstRunManager();
   } catch (e) {
     log('ERROR', 'Headless', 'First-run detection failed, skipping', { error: String(e) });

@@ -516,7 +516,6 @@
     {"file": "sync-service.ts", "fn": "SyncService.atomicWrite", "call": "fs.writeFileSync", "count": 2},
     {"file": "sync-service.ts", "fn": "SyncService.cleanupStaleBackendErrorFiles", "call": "fs.readdirSync", "count": 1},
     {"file": "sync-service.ts", "fn": "SyncService.cleanupStaleBackendErrorFiles", "call": "fs.unlinkSync", "count": 1},
-    {"file": "sync-service.ts", "fn": "SyncService.configGet", "call": "fs.readFileSync", "count": 1},
     {"file": "sync-service.ts", "fn": "SyncService.debounceCheck", "call": "fs.readFileSync", "count": 1},
     {"file": "sync-service.ts", "fn": "SyncService.dirExists", "call": "fs.statSync", "count": 1},
     {"file": "sync-service.ts", "fn": "SyncService.fileExists", "call": "fs.accessSync", "count": 1},

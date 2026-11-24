@@ -26,16 +26,18 @@ import os from 'os';
 import { execFile } from 'child_process';
 import { acquireOwnedLock, pidExists, type LockHandle } from './owned-lock';
 import { atomicWrite as atomicWriteAsync } from './atomic-write';
+import { readBackupConfig, updateBackupConfig } from './backup-config';
 import { promisify } from 'util';
 import {
   type BackendInstance,
   type SyncWarning,
   addOrReplaceWarning,
   clearWarningsByBackend,
+  CONFIG_HEALTH_CODES,
   clearWarningsByCode,
-  migrateConfigToV2,
+  configHealthWarnings,
+  readBackendInstances,
   readWarnings,
-  syncLegacyKeys,
   wasDismissedThisRun,
   writeWarnings,
 } from './sync-state';
@@ -86,6 +88,8 @@ const STALE_LOCK_TAKEOVER_MS = 2 * 60 * 60 * 1000;
 // L-2: this long with every backup skipped for a held lock shows the red warning.
 const BACKUP_SKIPPED_WARN_MS = 24 * 60 * 60 * 1000;
 const BACKUP_SKIPPED_CODE = 'BACKUP_SKIPPED';
+// A failed backup cycle counts as "lately" for this long (the hourly poll plus slack); see runHealthCheck's stale rule.
+const FAILED_CYCLE_RECENT_MS = 90 * 60 * 1000;
 // 10 min — generous because individual conversation slugs can grow to
 // hundreds of MB (one user has a 25 MB single .jsonl in a 156 MB slug).
 // The previous 60s value silently killed rclone mid-upload on big slugs,
@@ -143,7 +147,14 @@ export class SyncService extends EventEmitter {
   private claudeDir: string;
   private configPath: string;
   private localConfigPath: string;
+  // "The last time a backup actually finished with 0 errors" (backup fixes 2026-11-18, D-19): the "Last backed up"
+  // time and the "Extra backups are stale" warning read it, so only a real success writes it.
   private syncMarkerPath: string;
+  // "The last time a backup cycle was ATTEMPTED, whatever came of it": the 15-minute debounce reads this one. It used to
+  // be the success marker itself, which is why a failing backup still looked freshly backed up.
+  private attemptMarkerPath: string;
+  // When the last cycle that ended in failure finished (this app run only). The stale warning needs it: see runHealthCheck.
+  private lastFailedCycleAt: number | null = null;
   // Why: separate once-per-UTC-day stamp for the dated ~/.claude snapshot copy —
   // distinct from the 15-min .sync-marker debounce so the snapshot runs at most
   // once per day even though the daily-snapshot poll calls push() hourly.
@@ -191,7 +202,7 @@ export class SyncService extends EventEmitter {
       // otherwise never clear, and "No sync configured" would never appear,
       // until relaunch. The transition is remembered until a check actually
       // runs, so a tick skipped for lack of an audience does not lose it.
-      const configured = this.isSyncConfigured();
+      const configured = await this.isSyncConfigured();
       if (this.healthCheckGate() && (configured || this.wasSyncConfigured)) {
         try { await this.runHealthCheck({ probeBackends: false }); }
         catch (e) { this.logBackup('ERROR', `Periodic health check failed: ${e}`, 'sync.health'); }
@@ -206,8 +217,8 @@ export class SyncService extends EventEmitter {
    *  report that the launch run did not already write. The transition to
    *  configured is caught because this is re-read on every tick (a file read,
    *  no DNS), so a mid-session setup still clears "No sync configured". */
-  private isSyncConfigured(): boolean {
-    return this.isPrimarySyncEnabled() || this.getSyncEnabledBackends().length > 0;
+  private async isSyncConfigured(): Promise<boolean> {
+    return this.isPrimarySyncEnabled() || (await this.getSyncEnabledBackends()).length > 0;
   }
 
   // `home` is a TEST-ONLY override. Production passes nothing and keeps the
@@ -220,6 +231,7 @@ export class SyncService extends EventEmitter {
     this.configPath = path.join(this.claudeDir, 'toolkit-state', 'config.json');
     this.localConfigPath = path.join(this.claudeDir, 'toolkit-state', 'config.local.json');
     this.syncMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.sync-marker');
+    this.attemptMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.sync-attempt');
     this.snapshotMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.snapshot-marker');
     this.lockDir = path.join(this.claudeDir, 'toolkit-state', '.sync-lock');
     this.skippedSincePath = path.join(this.claudeDir, 'toolkit-state', '.sync-skipped-since');
@@ -286,7 +298,7 @@ export class SyncService extends EventEmitter {
     // warning set changed — and skipped entirely while nobody can see the
     // result or nothing is configured (HEALTH_POLL_INTERVAL_MS).
     this.healthChecksActive = true;
-    this.wasSyncConfigured = this.isSyncConfigured();
+    this.wasSyncConfigured = await this.isSyncConfigured();
     this.scheduleHealthCheck(this.nextHealthDelay());
 
     // Daily-snapshot poll. Non-force push() on launch (in case today's snapshot
@@ -331,74 +343,38 @@ export class SyncService extends EventEmitter {
   // =========================================================================
 
   /** Read a config key, checking local config first (machine-specific), then portable. */
-  private configGet(key: string, defaultValue = ''): string {
-    // Local config takes precedence (machine-specific, never synced)
-    for (const cfgPath of [this.localConfigPath, this.configPath]) {
-      try {
-        const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-        if (config[key] !== undefined && config[key] !== null) {
-          return String(config[key]);
-        }
-      } catch {}
-    }
+  private async configGet(key: string, defaultValue = ''): Promise<string> {
+    // Local config takes precedence (machine-specific, never synced). It is a different file from the saved-backups
+    // file and has no repair; the portable one goes through backup-config.ts like every other reader of it.
+    try {
+      const local = JSON.parse(await fs.promises.readFile(this.localConfigPath, 'utf8'));
+      if (local[key] !== undefined && local[key] !== null) return String(local[key]);
+    } catch {}
+    const main = await readBackupConfig(this.configPath);
+    if (main.ok && main.config[key] !== undefined && main.config[key] !== null) return String(main.config[key]);
     return defaultValue;
   }
 
   /**
-   * Read all backend instances from config. Auto-migrates from flat keys
-   * on first read if storage_backends array is missing.
+   * Read all backend instances from config (auto-migrating from flat keys on first read).
+   * WHY delegated (backup fixes 2026-11-18, B-2): this was a second copy of sync-state's reader with its own idea of a
+   * damaged file. One reader now, over the one owner of the file (backup-config.ts): a damaged file is repaired or,
+   * failing that, reads as "no backups" and is left alone.
    */
-  private getBackendInstances(): BackendInstance[] {
-    const strict = this.readConfigStrict();
-    // WHY (backup fixes 2026-11-18, D-5): a file that could not be read or parsed used to count as "no config yet",
-    // and the "migration" below then wrote an EMPTY backup list over it — silently turning every backup off. A damaged
-    // file is left exactly as it is (so it can still be recovered) and reads as "no backups" until it is repaired.
-    if (!strict.ok) return [];
-    const config = strict.config;
-    if (config.storage_backends && Array.isArray(config.storage_backends)) {
-      return config.storage_backends;
-    }
-    // Auto-migrate from flat keys
-    const migrated = migrateConfigToV2(config);
-    config.storage_backends = migrated;
-    syncLegacyKeys(config);
-    this.atomicWrite(this.configPath, JSON.stringify(config, null, 2));
-    return migrated;
-  }
-
-  private warnedUnreadableConfig = false;
-
-  /** Read the settings file for a read-modify-WRITE. Only a missing file is "empty"; a file that exists but cannot be
-   *  read or parsed is `ok:false` and must never be written back (see getBackendInstances). */
-  private readConfigStrict(): { ok: boolean; config: any } {
-    try {
-      const parsed = this.readJson(this.configPath, true);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { ok: true, config: parsed };
-      return this.unreadableConfig(new Error('not an object'));
-    } catch (e: any) {
-      if (e?.code === 'ENOENT') return { ok: true, config: {} };
-      return this.unreadableConfig(e);
-    }
-  }
-
-  private unreadableConfig(e: unknown): { ok: false; config: null } {
-    if (!this.warnedUnreadableConfig) {
-      this.warnedUnreadableConfig = true; // once, not on every 5-minute check
-      this.logBackup('WARN', `Settings file unreadable — left untouched: ${String(e)}`, 'sync.config');
-    }
-    return { ok: false, config: null };
+  private getBackendInstances(): Promise<BackendInstance[]> {
+    return readBackendInstances(this.configPath);
   }
 
   /** Get only backends with syncEnabled=true (for the automatic push loop). */
-  private getSyncEnabledBackends(): BackendInstance[] {
-    return this.getBackendInstances().filter(b => b.syncEnabled);
+  private async getSyncEnabledBackends(): Promise<BackendInstance[]> {
+    return (await this.getBackendInstances()).filter(b => b.syncEnabled);
   }
 
   /** Find a single backend by id (for manual push/pull). */
   // Kept public (used internally by push()'s per-backend "Upload now" path); the
   // former RestoreService caller was removed in sync-legacy-demolition.
-  public getBackendById(id: string): BackendInstance | null {
-    return this.getBackendInstances().find(b => b.id === id) || null;
+  public async getBackendById(id: string): Promise<BackendInstance | null> {
+    return (await this.getBackendInstances()).find(b => b.id === id) || null;
   }
 
   /** Per-backend sync marker path for tracking individual push times. */
@@ -460,8 +436,8 @@ export class SyncService extends EventEmitter {
   // =========================================================================
 
   /** Check if a file is owned by the toolkit (symlinked into TOOLKIT_ROOT). */
-  private isToolkitOwned(filePath: string): boolean {
-    const toolkitRoot = this.configGet('toolkit_root', '');
+  private async isToolkitOwned(filePath: string): Promise<boolean> {
+    const toolkitRoot = await this.configGet('toolkit_root', '');
     if (!toolkitRoot) return false;
 
     let resolved: string;
@@ -732,39 +708,39 @@ export class SyncService extends EventEmitter {
       return 0;
     }
 
+    // WHY one counting helper (backup fixes 2026-11-18, B-3 / triage D-4): the encyclopedia, skills, plans/specs and
+    // conversation-index copies used to throw their result away, so a Drive that refused only those showed
+    // "0 errors", wrote the day's success stamp and pruned old snapshots. Every copy now counts a failure the same way.
+    const copyStep = async (what: string, args: string[]) => {
+      const r = await this.rclone(args);
+      if (r.code !== 0) {
+        this.logBackup('WARN', `Drive push ${what} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+        if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+        errors++;
+      }
+    };
+
     // Memory files — per project key
     const projectsDir = path.join(this.claudeDir, 'projects');
     if (this.dirExists(projectsDir)) {
       for (const projectKey of fs.readdirSync(projectsDir)) {
         const memoryDir = path.join(projectsDir, projectKey, 'memory');
         if (!this.dirExists(memoryDir)) continue;
-        const r = await this.rclone(['copy', memoryDir + '/', `${remoteBase}/memory/${projectKey}/`, '--update', '--skip-links']);
-        if (r.code !== 0) {
-          this.logBackup('WARN', `Drive push memory/${projectKey} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
-          if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
-          errors++;
-        }
+        await copyStep(`memory/${projectKey}`, ['copy', memoryDir + '/', `${remoteBase}/memory/${projectKey}/`, '--update', '--skip-links']);
       }
     }
 
     // CLAUDE.md
     const claudeMd = path.join(this.claudeDir, 'CLAUDE.md');
-    if (this.fileExists(claudeMd)) {
-      const r = await this.rclone(['copyto', claudeMd, `${remoteBase}/CLAUDE.md`, '--update']);
-      if (r.code !== 0) {
-        this.logBackup('WARN', 'Drive push CLAUDE.md failed', 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
-        if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
-        errors++;
-      }
-    }
+    if (this.fileExists(claudeMd)) await copyStep('CLAUDE.md', ['copyto', claudeMd, `${remoteBase}/CLAUDE.md`, '--update']);
 
     // Encyclopedia
     const encDir = path.join(this.claudeDir, 'encyclopedia');
     if (this.dirExists(encDir)) {
-      await this.rclone(['copy', encDir + '/', `${remoteBase}/encyclopedia/`, '--update', '--max-depth', '1', '--include', '*.md']);
+      await copyStep('encyclopedia', ['copy', encDir + '/', `${remoteBase}/encyclopedia/`, '--update', '--max-depth', '1', '--include', '*.md']);
       // Also push to legacy encyclopedia path from config
-      const encRemotePath = this.configGet('encyclopedia_remote_path', 'Encyclopedia/System');
-      await this.rclone(['copy', encDir + '/', `${rcloneRemote}:${driveRoot}/${encRemotePath}/`, '--update', '--max-depth', '1', '--include', '*.md']);
+      const encRemotePath = await this.configGet('encyclopedia_remote_path', 'Encyclopedia/System');
+      await copyStep('encyclopedia (legacy path)', ['copy', encDir + '/', `${rcloneRemote}:${driveRoot}/${encRemotePath}/`, '--update', '--max-depth', '1', '--include', '*.md']);
     }
 
     // User-created skills
@@ -774,9 +750,9 @@ export class SyncService extends EventEmitter {
         const skillDir = path.join(skillsDir, skillName);
         if (!this.dirExists(skillDir)) continue;
         // Skip toolkit-owned skills (symlinked from toolkit)
-        if (this.isToolkitOwned(skillDir)) continue;
+        if (await this.isToolkitOwned(skillDir)) continue;
         if (!this.shouldSyncSkill(skillName)) continue;
-        await this.rclone(['copy', skillDir + '/', `${remoteBase}/skills/${skillName}/`, '--update', '--exclude', '.DS_Store']);
+        await copyStep(`skill ${skillName}`, ['copy', skillDir + '/', `${remoteBase}/skills/${skillName}/`, '--update', '--exclude', '.DS_Store']);
       }
     }
 
@@ -795,26 +771,17 @@ export class SyncService extends EventEmitter {
       [path.join(this.claudeDir, 'history.jsonl'), `${sysRemote}/history.jsonl`],
     ];
     for (const [local, remote] of sysFiles) {
-      if (this.fileExists(local)) {
-        const r = await this.rclone(['copyto', local, remote, '--update']);
-        if (r.code !== 0) {
-          this.logBackup('WARN', `Drive push ${path.basename(local)} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
-          if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
-          errors++;
-        }
-      }
+      if (this.fileExists(local)) await copyStep(path.basename(local), ['copyto', local, remote, '--update']);
     }
     // Plans and specs directories
     for (const dir of ['plans', 'specs']) {
       const localDir = path.join(this.claudeDir, dir);
-      if (this.dirExists(localDir)) {
-        await this.rclone(['copy', localDir + '/', `${sysRemote}/${dir}/`, '--update']);
-      }
+      if (this.dirExists(localDir)) await copyStep(dir, ['copy', localDir + '/', `${sysRemote}/${dir}/`, '--update']);
     }
 
     // Conversation index
     if (this.fileExists(this.conversationIndexPath)) {
-      await this.rclone(['copyto', this.conversationIndexPath, `${sysRemote}/conversation-index.json`, '--checksum']);
+      await copyStep('conversation-index.json', ['copyto', this.conversationIndexPath, `${sysRemote}/conversation-index.json`, '--checksum']);
     }
 
     // Why: tiered pruning of old dated snapshots. List the dated dirs under
@@ -850,7 +817,7 @@ export class SyncService extends EventEmitter {
 
   // Accepts a BackendInstance for per-instance iCloud path support
   private async pushiCloud(instance: BackendInstance, snapshot: SnapshotGate): Promise<number> {
-    const icloudPath = this.resolveICloudPath(instance);
+    const icloudPath = await this.resolveICloudPath(instance);
     if (!icloudPath) {
       this.logBackup('ERROR', 'iCloud Drive folder not found', 'sync.push.icloud');
       return 1;
@@ -925,7 +892,7 @@ export class SyncService extends EventEmitter {
       let skillsErrors = 0;
       for (const skillName of fs.readdirSync(skillsDir)) {
         const skillDir = path.join(skillsDir, skillName);
-        if (!this.dirExists(skillDir) || this.isToolkitOwned(skillDir)) continue;
+        if (!this.dirExists(skillDir) || (await this.isToolkitOwned(skillDir))) continue;
         if (!this.shouldSyncSkill(skillName)) continue;
         const dest = path.join(datedRoot, 'skills', skillName);
         fs.mkdirSync(dest, { recursive: true });
@@ -1026,8 +993,8 @@ export class SyncService extends EventEmitter {
   }
 
   /** Resolve iCloud Drive path from instance config or auto-detect. */
-  private resolveICloudPath(instance?: BackendInstance): string | null {
-    const configured = instance?.config.ICLOUD_PATH || this.configGet('ICLOUD_PATH', '');
+  private async resolveICloudPath(instance?: BackendInstance): Promise<string | null> {
+    const configured = instance?.config.ICLOUD_PATH || await this.configGet('ICLOUD_PATH', '');
     if (configured && this.dirExists(configured)) return configured;
 
     // Auto-detect by platform
@@ -1063,7 +1030,7 @@ export class SyncService extends EventEmitter {
       // hourly push and leave a red "rclone isn't installed" warning; push skips it below and any such warning
       // left from before is cleared here.
       if (isRunningOnPhone()) {
-        for (const b of this.getBackendInstances()) if (b.type === 'drive') await this.clearBackendFailures(b.id);
+        for (const b of await this.getBackendInstances()) if (b.type === 'drive') await this.clearBackendFailures(b.id);
       }
 
       // Plan 2c: the legacy conversation-index is FROZEN — no longer maintained
@@ -1081,7 +1048,7 @@ export class SyncService extends EventEmitter {
 
       try {
         // Debounce check (skip if force or targeting a specific backend)
-        if (!opts?.force && !opts?.backendId && !this.debounceCheck(this.syncMarkerPath, PUSH_DEBOUNCE_MIN)) {
+        if (!opts?.force && !opts?.backendId && !this.debounceCheck(this.attemptMarkerPath, PUSH_DEBOUNCE_MIN)) {
           this.logBackup('INFO', 'Push skipped — debounce', 'sync.push');
           return { success: true, errors: 0, backends: [] };
         }
@@ -1094,8 +1061,8 @@ export class SyncService extends EventEmitter {
         // could read a fresh "last backup" for a cycle that copied nothing. With nothing that can run,
         // the cycle ends exactly as one with no backups at all: nothing is stamped.
         const instances = (opts?.backendId
-          ? [this.getBackendById(opts.backendId)].filter(Boolean) as BackendInstance[]
-          : this.getSyncEnabledBackends()).filter((i) => i.type !== 'github' && !(i.type === 'drive' && isRunningOnPhone()));
+          ? [await this.getBackendById(opts.backendId)].filter(Boolean) as BackendInstance[]
+          : await this.getSyncEnabledBackends()).filter((i) => i.type !== 'github' && !(i.type === 'drive' && isRunningOnPhone()));
 
         if (instances.length === 0) return { success: true, errors: 0, backends: [] };
 
@@ -1146,7 +1113,8 @@ export class SyncService extends EventEmitter {
             pushedIds.push(instance.id);
 
             // Write per-backend marker for individual status tracking
-            this.debounceTouch(this.perBackendMarkerPath(instance.id));
+            // WHY only on success (D-19): a failed upload used to stamp this too, so the row read "backed up just now".
+            if (backendErrors === 0) this.debounceTouch(this.perBackendMarkerPath(instance.id));
             // pushDrive/pushiCloud handle their own warning clear on success
           } catch (e) {
             this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push', { stderr: String(e).slice(0, 500) });
@@ -1175,10 +1143,19 @@ export class SyncService extends EventEmitter {
         }
 
         // Write backup-meta.json on success
-        if (totalErrors === 0) this.writeBackupMeta();
+        if (totalErrors === 0) await this.writeBackupMeta();
 
-        // Update global debounce marker AFTER sync (critical ordering)
-        this.debounceTouch(this.syncMarkerPath);
+        // WHY two markers (backup fixes 2026-11-18, D-19): this one used to be touched after EVERY cycle, failed or not,
+        // so "Last backed up" and the 24-hour "Extra backups are stale" safety net could never see a failure. The attempt
+        // marker (debounce, after the sync — critical ordering) is always written; the success marker only when a backup
+        // really finished with 0 errors. An unreachable account therefore ages the success marker until the warning fires.
+        this.debounceTouch(this.attemptMarkerPath);
+        if (snapshotOutcomes.some(Boolean)) {
+          this.debounceTouch(this.syncMarkerPath);
+          this.lastFailedCycleAt = null;
+        } else if (totalErrors > 0) {
+          this.lastFailedCycleAt = Date.now();
+        }
 
         this.emit('push-complete', { errors: totalErrors });
         return { success: totalErrors === 0, errors: totalErrors, backends: pushedIds };
@@ -1277,20 +1254,23 @@ export class SyncService extends EventEmitter {
     // installs, and the release population is all new installs.
     // The warning now describes the whole picture: it fires only when NOTHING is
     // syncing, and the stale warning names the additional backups it's about.
+    // The saved backup settings' own health comes first: reading them here repairs a damaged file (B-2), and a file that
+    // cannot be repaired must say so rather than also claim "No sync configured".
+    const configWarnings = await configHealthWarnings(this.configPath);
+    warnings.push(...configWarnings);
+    const configDamaged = configWarnings.some((w) => w.level === 'danger');
     const primarySyncOn = this.isPrimarySyncEnabled();
-    const syncBackends = this.getSyncEnabledBackends();
-    if (syncBackends.length === 0) {
+    const syncBackends = await this.getSyncEnabledBackends();
+    if (configDamaged) {
+      // nothing to say about backups we cannot read; the warning above carries it
+    } else if (syncBackends.length === 0) {
       const detected = probeBackends ? await this.autoDetectBackend() : null;
       if (detected) {
         try {
-          // WHY strict (D-5): `|| {}` here wrote a settings file holding only this key over a file it could not read.
-          const strict = this.readConfigStrict();
-          if (strict.ok) {
-            const config = strict.config;
-            config.PERSONAL_SYNC_BACKEND = detected;
-            this.atomicWrite(this.configPath, JSON.stringify(config, null, 2));
-            this.logBackup('INFO', `Auto-detected sync backend: ${detected}`, 'sync.health');
-          }
+          // WHY the shared owner (D-5, B-2): a settings file that cannot be read is repaired or refused by backup-config.ts;
+          // `|| {}` here once wrote a file holding only this key over one it could not read.
+          await updateBackupConfig(this.configPath, (config) => { config.PERSONAL_SYNC_BACKEND = detected; });
+          this.logBackup('INFO', `Auto-detected sync backend: ${detected}`, 'sync.health');
         } catch {}
       } else if (!primarySyncOn) {
         warnings.push({
@@ -1309,7 +1289,12 @@ export class SyncService extends EventEmitter {
         const lastEpoch = parseInt(markerText, 10);
         if (!isNaN(lastEpoch)) {
           const age = Math.floor(Date.now() / 1000) - lastEpoch;
-          if (age >= 86400) {
+          // WHY also "a cycle failed lately" (D-19): without it a laptop that was asleep or closed for a day would show this the
+          // moment it wakes, seconds before its first backup runs. A backup that fails raises it; one that succeeds writes
+          // the marker and the warning never appears. The 90 minutes is the hourly poll plus slack: a failure older than that
+          // happened before the last sleep and says nothing about now.
+          const failedLately = this.lastFailedCycleAt !== null && Date.now() - this.lastFailedCycleAt < FAILED_CYCLE_RECENT_MS;
+          if (age >= 86400 && failedLately) {
             warnings.push({
               code: 'PERSONAL_STALE',
               level: 'warn',
@@ -1336,7 +1321,7 @@ export class SyncService extends EventEmitter {
     // and 'PROJECTS_UNSYNCED' are retained in the clear-set so any stale entries
     // from old .sync-warnings.json files (from before this demolition) get swept
     // out. Safe to drop from this set once all users have upgraded.
-    const healthCodes = new Set(['OFFLINE', 'PERSONAL_NOT_CONFIGURED', 'PERSONAL_STALE', 'SKILLS_UNROUTED', 'PROJECTS_UNSYNCED']);
+    const healthCodes = new Set(['OFFLINE', 'PERSONAL_NOT_CONFIGURED', 'PERSONAL_STALE', 'SKILLS_UNROUTED', 'PROJECTS_UNSYNCED', ...CONFIG_HEALTH_CODES]);
     const preserved = existing.filter((w) => !healthCodes.has(w.code));
     // A code the user dismissed stays dismissed for the rest of the app run —
     // otherwise the re-check that makes resolved warnings disappear would also
@@ -1374,7 +1359,7 @@ export class SyncService extends EventEmitter {
     // Check Google Drive (rclone + gdrive remote)
     // A phone has no rclone (backup fixes 2026-11-18): looking would only spawn a command that cannot exist.
     if (!isRunningOnPhone()) {
-      const driveRoot = this.configGet('DRIVE_ROOT', 'Claude');
+      const driveRoot = await this.configGet('DRIVE_ROOT', 'Claude');
       const rcloneResult = await this.rclone(['lsd', `gdrive:${driveRoot}/Backup/`]);
       if (rcloneResult.code === 0) return 'drive';
     }
@@ -1402,8 +1387,8 @@ export class SyncService extends EventEmitter {
   // =========================================================================
 
   /** Write backup-meta.json after successful sync. */
-  private writeBackupMeta(): void {
-    const toolkitRoot = this.configGet('toolkit_root', '');
+  private async writeBackupMeta(): Promise<void> {
+    const toolkitRoot = await this.configGet('toolkit_root', '');
     let toolkitVersion = 'unknown';
     if (toolkitRoot) {
       try { toolkitVersion = fs.readFileSync(path.join(toolkitRoot, 'VERSION'), 'utf8').trim(); } catch {}
