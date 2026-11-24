@@ -600,7 +600,7 @@ export class ChatStore {
         if (to > st.count) throw new StoreError('bad-argument', `range ends at ${to}, the head is ${st.count}`);
         if (from >= to) return [];
         if (from < st.evictedLines) return 'evicted';
-        this.assertServable(st, to);
+        this.assertServable(st, from, to);
         return this.readRange(st, from, to, true);
       });
     });
@@ -626,7 +626,7 @@ export class ChatStore {
               const r = this.mustRec(buf, i * REC);
               if (!r.conversation) continue;
               if (n < st.evictedLines) throw new StoreError('evicted', `line ${n}`);
-              this.assertServable(st, n + 1);
+              this.assertServable(st, n, n + 1);
               out.push({ line: n, bytes: (await this.readRange(st, n, n + 1, true))[0] });
             }
           }
@@ -640,12 +640,14 @@ export class ChatStore {
   }
 
   /**
-   * WHY (review 8 F3): read() must never serve a line the store itself reports as suspect. Wherever head() says `damagedFromLine` (a body that failed its chain, lines a rebuild set aside, a folder
-   * put back older than the high-water record), a read that reaches that line throws `corrupt`, so a caller cannot spread bad lines by forgetting to look at head() first.
+   * WHY (review 8 F3): read() must never serve a line the store itself has flagged. head().damagedFromLine names the first line that failed its chain (a rotted body, a hole, lines a rebuild set aside, a
+   * folder put back older than the high-water record); a read that includes that line throws `corrupt` whatever the bytes look like now, so a caller cannot spread a flagged line by forgetting head().
+   * Lines AFTER it are served: each is checked against its own chain value on the way out, and since a version never changes history that value can only be the true one (the F3 case, wrong lines served
+   * from another history, can no longer exist).
    */
-  private assertServable(st: VState, to: number): void {
+  private assertServable(st: VState, from: number, to: number): void {
     const bad = this.damagedFrom(st);
-    if (bad !== null && to > bad) throw new StoreError('corrupt', `line ${bad} is reported damaged (head.damagedFromLine); nothing from there on is served`);
+    if (bad !== null && from <= bad && bad < to) throw new StoreError('corrupt', `line ${bad} is reported damaged (head.damagedFromLine); it is not served`);
   }
 
   /** Slots [0, lostRecs) of the index hold no real record (review 5, F4); every scan starts at this slot. 0 normally. */
@@ -829,9 +831,11 @@ export class ChatStore {
       a = b;
     }
     await flush();
-    if (!wrote) return;                                                // a resend that found everything in place changes nothing (and costs no directory scan)
-    // the first line that is still not readable may now be a later one (or none)
+    // WHY the flag is cleared even when nothing was written (restructure): every line in range was just compared byte for byte with the chain-correct resend, so a line the store had flagged as bad is proven good
+    // now, and read() refuses flagged lines, so a stale flag would keep refusing a line that verifies.
     if (st.badLine !== null && st.badLine >= lo && st.badLine < hiLine) st.badLine = null;
+    if (!wrote) return;                                                // a resend that found everything in place writes nothing (and costs no directory scan)
+    // the first line that is still not readable may now be a later one (or none)
     const gb = await this.gapBadLine(st);
     if (gb !== null) st.badLine = st.badLine === null ? gb : Math.min(st.badLine, gb);
   }

@@ -21,7 +21,7 @@ describe('mesh store public surface', () => {
     for (const name of must) expect(store, name).toHaveProperty(name);
   });
   it('S2 methods named by the design exist on the store', () => {
-    const methods = ['head', 'hashAt', 'read', 'append', 'setAsideTail', 'tail', 'setAsideDamaged', 'replyEnds', 'controlLog', 'appendControl', 'summary', 'listVersions', 'hasExtra', 'readExtra', 'putExtra', 'evictBody', 'restoreBody', 'registerVersion', 'conversationLines', 'verify'];
+    const methods = ['head', 'hashAt', 'read', 'append', 'forkVersion', 'setAsideDamaged', 'replyEnds', 'controlLog', 'appendControl', 'summary', 'listVersions', 'hasExtra', 'readExtra', 'putExtra', 'evictBody', 'restoreBody', 'registerVersion', 'conversationLines', 'verify'];
     for (const m of methods) expect(typeof (store.ChatStore.prototype as unknown as Record<string, unknown>)[m], m).toBe('function');
   });
 });

@@ -73,7 +73,14 @@ export class Asides {
   /** Finish a move that retired.json names (idempotent; a no-op for a version that was never retired and for one whose aside folder says COMPLETE). */
   async finishAside(key: string, dir: string): Promise<void> {
     const note = nodePath.join(dir, RETIRED_FILE);
-    if (!(await this.fs.exists(note))) return;
+    if (!(await this.fs.exists(note))) {
+      // a crash between the aside folder and the note leaves a bare, unfinished aside folder: write the note now and finish the move, so the files never stay behind in a retired folder
+      const bare = await this.retiredName(key);
+      if (!bare || !ASIDE_RE.test(bare) || await this.fs.exists(nodePath.join(this.root, 'aside', bare, 'COMPLETE'))) return;
+      // a full disk only postpones it (the id is retired either way, and a read never fails for lack of space)
+      try { await writeSideFor(this.fs, note, { role: 'retired', key }, { asideName: bare, reason: 'the retirement was interrupted before its note was written' }); } // DESTRUCTIVE-OK(hint): a NEW existence-only statement; the version had none
+      catch (e) { if (isDiskFull(e)) return; throw e; }
+    }
     const ir = await readSideFor(this.fs, note, { role: 'retired', key });
     let { asideName, reason } = (ir.kind === 'ok' && ir.value ? ir.value : {}) as { asideName?: string; reason?: string };
     // WHY not an error when the note is unreadable or foreign (review 3, class fix): the id is retired either way and the move still has to be finished. The folder that retired it is found by name.

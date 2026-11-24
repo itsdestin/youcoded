@@ -166,38 +166,32 @@ describe('kill at every disk operation', () => {
     });
   }, 120_000);
 
-  it('setAsideTail: the tail is never lost, whichever step is cut', async () => {
-    const takeover = '11'.repeat(32);
+  it('forkVersion: the child is absent or complete, the parent is never touched, whichever step is cut', async () => {
     const FROM = 9;
     const r = await sweep({
-      name: 'setAsideTail',
+      name: 'forkVersion',
       setup: (root) => plainSetup(root, conv.length),
-      run: async (s) => { await s.setAsideTail(takeover, V(1), FROM); },
+      run: async (s) => { await s.forkVersion(V(1), FROM, V(2)); },
       check: async (root) => {
         const s = await ChatStore.open(root);
-        const tail = await s.tail(takeover);
-        const head = await s.head(V(1));
-        // either nothing happened, or the tail is complete; and in every case every line is somewhere
-        if (!tail) expect(head.lines).toBe(conv.length);
-        else {
-          expect(tail.fromLine).toBe(FROM);
-          expect(Buffer.concat(tail.lines).equals(Buffer.concat(conv.slice(FROM)))).toBe(true);
-          expect([FROM, conv.length]).toContain(head.lines);
-        }
+        const kids = (await s.listVersions()).filter((v) => v.version.equals(V(2)));
+        // either nothing happened, or the child is complete; in every case the parent holds every line
+        if (kids.length) { expect(kids[0].damaged).toBeNull(); expect(kids[0].head!.lines).toBe(FROM); expect(kids[0].head!.hash).toBe(REF.raw[FROM]); }
+        expect((await s.head(V(1))).lines).toBe(conv.length);
         expect((await s.verify(V(1))).ok).toBe(true);
-        // redo: completes
-        await s.setAsideTail(takeover, V(1), FROM);
-        expect((await s.head(V(1))).lines).toBe(FROM);
-        expect((await s.head(V(1))).hash).toBe(REF.raw[FROM]);
-        expect(Buffer.concat((await s.tail(takeover))!.lines).equals(Buffer.concat(conv.slice(FROM)))).toBe(true);
-        expect(await s.append(V(1), 0, FROM, [cc.user('new host')])).toBe('ok');
-        expect((await s.verify(V(1))).ok).toBe(true);
+        // redo: completes (idempotent)
+        await s.forkVersion(V(1), FROM, V(2));
+        expect((await s.head(V(2))).lines).toBe(FROM);
+        expect((await s.head(V(2))).hash).toBe(REF.raw[FROM]);
+        expect(await s.append(V(2), 0, FROM, [cc.user('new host')])).toBe('ok');
+        expect((await s.verify(V(2))).ok).toBe(true);
         await s.close();
       },
     });
+    expect(r.runs).toBeGreaterThan(0);
   }, 120_000);
 
-  it('setAsideDamaged: every byte is either still in the version or in aside/, never gone', async () => {
+  it('setAsideDamaged: every byte is either still in the version or in aside/, never gone; the id ends retired', async () => {
     let origIndex = Buffer.alloc(0);
     const r = await sweep({
       name: 'setAsideDamaged',
@@ -205,26 +199,24 @@ describe('kill at every disk operation', () => {
       run: async (s) => { await s.setAsideDamaged(V(1)); },
       check: async (root) => {
         const s = await ChatStore.open(root);
-        const head = await s.head(V(1)); // load() completes an interrupted move
+        const head = await s.head(V(1)).catch((e) => { expect(e.code).toBe('damaged'); return null; });   // load() completes an interrupted move
         const asideDirs = fs.existsSync(path.join(root, 'aside')) ? fs.readdirSync(path.join(root, 'aside')) : [];
-        if (head.lines === conv.length) expect(await s.verify(V(1))).toMatchObject({ ok: true });
+        if (head) { expect(head.lines).toBe(conv.length); expect(await s.verify(V(1))).toMatchObject({ ok: true }); expect(asideDirs).toEqual([]); }
         else {
-          expect(head.lines).toBe(0);
           expect(asideDirs.length).toBe(1);
           const files = fs.readdirSync(path.join(root, 'aside', asideDirs[0]));
           expect(files).toContain('index.bin');
           expect(files.some((f) => f.startsWith('body-'))).toBe(true);
           const bodyBytes = files.filter((f) => f.startsWith('body-')).reduce((n, f) => n + fs.statSync(path.join(root, 'aside', asideDirs[0], f)).size, 0);
           expect(bodyBytes).toBe(Buffer.concat(conv).length);
-          // H2: the aside copy's INDEX is complete too, byte for byte (it used to be overwritten by the fresh empty one)
           expect(fs.readFileSync(path.join(root, 'aside', asideDirs[0], 'index.bin')).equals(origIndex)).toBe(true);
         }
-        await s.setAsideDamaged(V(1)); // redo is safe
-        expect((await s.head(V(1))).lines).toBe(0);
-        expect(await s.append(V(1), 0, 0, conv)).toBe('ok');
+        await s.setAsideDamaged(V(1)); // redo is safe, and ends retired
+        await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
         await s.close();
       },
     });
+    expect(r.runs).toBeGreaterThan(0);
   }, 120_000);
 
   it('evictBody and restoreBody: chain values are never lost; a cut eviction is finished or undone', async () => {

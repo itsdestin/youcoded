@@ -207,52 +207,34 @@ describe('reply ends, summary, conversation reads', () => {
   });
 });
 
-describe('set-asides', () => {
-  const takeover = 'ab'.repeat(32);
-  it('setAsideTail keeps the tail, cuts the version back, tail() returns it, retry is safe, appends continue', async () => {
+describe('set-asides and forks', () => {
+  it('forkVersion at a point inside the conversation keeps the chain, the reply ends before the cut and the summary; the old version is unchanged', async () => {
     const { lines } = ccConversation();
     const s = await openWith(t.dir);
     await s.append(V(1), 0, 0, lines);
     const ref = refChains(lines);
-    const res = await s.setAsideTail(takeover, V(1), 8);
-    expect(res.lines).toBe(lines.length - 8);
-    expect((await s.head(V(1))).hash).toBe(ref.raw[8]);
-    const tail = (await s.tail(takeover))!;
-    expect(tail.fromLine).toBe(8);
-    expect(tail.fromHash).toBe(ref.raw[8]); expect(tail.headHash).toBe(ref.raw[lines.length]);
-    expect(Buffer.concat(tail.lines).equals(Buffer.concat(lines.slice(8)))).toBe(true);
-    expect(tail.replyEnds.every((n) => n >= 8)).toBe(true);
-    expect((await s.setAsideTail(takeover, V(1), 8)).lines).toBe(lines.length - 8); // idempotent
-    await rejects(s.setAsideTail(takeover, V(1), 5), 'bad-argument');
-    // the new host continues from the cut with different lines
-    const newer = [cc.user('new host line')];
-    expect(await s.append(V(1), 0, 8, newer)).toBe('ok');
+    expect(await s.forkVersion(V(1), 8, V(2))).toEqual({ lines: 8, created: true });
+    expect((await s.head(V(2))).hash).toBe(ref.raw[8]);
+    expect((await s.head(V(1))).hash).toBe(ref.raw[lines.length]);
+    expect((await s.replyEnds(V(2))).confirmed).toEqual((await s.replyEnds(V(1))).confirmed.filter((n) => n < 8));
+    expect(await s.append(V(2), 0, 8, [cc.user('new host line')])).toBe('ok');            // the new host continues from the cut with different lines
+    expect((await s.verify(V(2))).ok).toBe(true);
     expect((await s.verify(V(1))).ok).toBe(true);
-    expect((await s.replyEnds(V(1))).confirmed.every((n) => n < 8)).toBe(true);
-    expect(await s.tail('cd'.repeat(32))).toBeNull();
+    expect((await s.summary(V(2))).lines).toBe(9);
   });
 
-  it('setAsideTail beyond the head records an empty tail and changes nothing', async () => {
-    const s = await openWith(t.dir);
-    await s.append(V(1), 0, 0, [cc.user('a')]);
-    expect((await s.setAsideTail(takeover, V(1), 5)).lines).toBe(0);
-    expect((await s.head(V(1))).lines).toBe(1);
-  });
-
-  it('setAsideDamaged moves the files to aside/ (kept), starts the version empty, moves parked appends to rejected/ (they belong to the history that was set aside)', async () => {
+  it('setAsideDamaged moves the files to aside/ (kept) and RETIRES the id: nothing is served or appended under it any more, parks stay where they were', async () => {
     const lines = Array.from({ length: 5 }, (_, i) => cc.user('d' + i));
     const s = await openWith(t.dir);
     await s.append(V(1), 0, 0, lines.slice(0, 3));
     await s.append(V(1), 0, 4, lines.slice(4));
     const { asideName } = await s.setAsideDamaged(V(1));
-    expect((await s.head(V(1))).lines).toBe(0);
+    await rejects(s.head(V(1)), 'damaged');
+    await rejects(s.append(V(1), 0, 0, lines.slice(0, 4)), 'damaged');
     expect(fs.readdirSync(path.join(t.dir, 'aside', asideName)).sort()).toContain('index.bin');
-    expect(await s.append(V(1), 0, 0, lines.slice(0, 4))).toBe('ok'); // recopy; the old park does NOT join (round 7, F2: a recopy may be another history)
-    expect((await s.head(V(1))).lines).toBe(4);
-    expect((await s.rejectedList(V(1))).map((r) => r.reason)).toEqual(['quarantine']);
-    expect(await s.append(V(1), 0, 4, lines.slice(4))).toBe('ok');     // the caller resends the rejected line
-    expect((await s.head(V(1))).lines).toBe(5);
-    expect((await s.setAsideDamaged(V(1))).asideName).toBe(`${V(1).toString('hex')}-2`);
+    expect(fs.readdirSync(path.join(t.dir, 'versions', V(1).toString('hex'), 'parked')).length).toBe(1);   // kept, never read again
+    expect((await s.setAsideDamaged(V(1))).asideName).toBe(asideName);                                      // idempotent
+    expect(fs.readdirSync(path.join(t.dir, 'aside')).length).toBe(1);
   });
 });
 
@@ -309,13 +291,6 @@ describe('eviction', () => {
     expect((await s2.head(V(1))).hash).toBe(refChains([...lines, extra]).raw[21]);
   });
 
-  it('cannot cut a tail out of evicted lines', async () => {
-    const lines = Array.from({ length: 6 }, (_, i) => cc.user('c' + i));
-    const s = await openWith(t.dir, V(1), accept);
-    await s.append(V(1), 0, 0, lines);
-    await s.evictBody(V(1), await proofFor(s, 6));
-    await rejects(s.setAsideTail('ef'.repeat(8), V(1), 2), 'evicted');
-  });
 });
 
 describe('extras', () => {

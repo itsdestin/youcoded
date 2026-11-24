@@ -46,7 +46,7 @@ async function build(root: string, evict: boolean, vr: Variant = MAIN): Promise<
   await s2.append(V(1), 0, 52, A.slice(40, 44)).catch(() => undefined);           // a park (gap)
   await s2.append(V(2), 0, 6, B.slice(6, 14));
   await s2.appendControl(ctl(CHAT_A, 1)); await s2.appendControl(ctl(CHAT_A, 2)); await s2.appendControl(ctl(CHAT_B, 1)); await s2.putExtra(sha(extraBytes[1]), extraBytes[1]);
-  await s2.setAsideTail('abcdef012345', V(2), 12); await s2.append(V(2), 0, 12, B.slice(12, 14));   // a tail, then the lines re-appended
+  await s2.forkVersion(V(2), 12, V(5)); await s2.append(V(5), 0, 12, B.slice(12, 14));   // a takeover: a fork of chat B at line 12, then the new host's lines (the same as the old ones here)
   // a healed line: rot one body byte, resend
   const body0 = path.join(root, 'versions', vkey(1), 'body-0000000000000000.bin'); const b = fs.readFileSync(body0); b[30] ^= 0x40; fs.writeFileSync(body0, b);
   await s2.append(V(1), 0, 0, A.slice(0, 3));
@@ -55,15 +55,16 @@ async function build(root: string, evict: boolean, vr: Variant = MAIN): Promise<
   // a rebuild (replaced-index/), and a third version set aside (aside/ with COMPLETE)
   const ix = path.join(root, 'versions', vkey(2), 'index.bin'); const ib = fs.readFileSync(ix); ib[36 + 116 * 3 + 5] ^= 1; fs.writeFileSync(ix, ib);
   const s3 = await ChatStore.open(root, opts);
-  await s3.registerVersion(V(3), { chatId: vr.chatC, runtime: 'claude-code' }); await s3.append(V(3), 0, 0, mk('c' + vr.tag, 4)); await s3.setAsideDamaged(V(3)); await s3.append(V(3), 0, 0, mk('c' + vr.tag, 4));
+  await s3.registerVersion(V(3), { chatId: vr.chatC, runtime: 'claude-code' }); await s3.append(V(3), 0, 0, mk('c' + vr.tag, 4)); await s3.setAsideDamaged(V(3));
   await s3.registerVersion(V(1), { chatId: CHAT_A, runtime: 'claude-code' }); await s3.registerVersion(V(2), { chatId: CHAT_B, runtime: 'claude-code' });
   await s3.head(V(2));
   await s3.close();
-  // a fourth version whose checkpoint comes back OLDER than a set-aside: the rebuild reports the lines it claimed as set aside, which writes marks.bin
-  const s4 = await ChatStore.open(root, opts); await s4.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s4.append(V(4), 0, 0, mk('d' + vr.tag, vr.tag ? 14 : 12)); await s4.close();
-  const ckp = path.join(root, 'versions', vkey(4), 'checkpoint.bin'); const ckBefore = fs.readFileSync(ckp);
-  const s5 = await ChatStore.open(root, opts); await s5.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s5.setAsideTail('feedfacecafe', V(4), vr.tag ? 5 : 6); await s5.close();
-  fs.writeFileSync(ckp, ckBefore);
+  // a fourth version whose index and bodies come back SHORTER than its checkpoint: the rebuild reports the lines the checkpoint claimed as set aside, which writes marks.bin
+  const d4 = mk('d' + vr.tag, vr.tag ? 14 : 12);
+  const s4 = await ChatStore.open(root, opts); await s4.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s4.append(V(4), 0, 0, d4); await s4.close();
+  const v4 = path.join(root, 'versions', vkey(4)); const keep = vr.tag ? 5 : 6; const cutAt = d4.slice(0, keep).reduce((n, l) => n + l.length, 0);
+  fs.truncateSync(path.join(v4, 'index.bin'), 36 + 116 * keep);
+  for (const n of fs.readdirSync(v4)) { const m = /^body-([0-9a-f]{16})\.bin$/.exec(n); if (!m) continue; const at = parseInt(m[1], 16); if (at >= cutAt) fs.unlinkSync(path.join(v4, n)); else if (fs.statSync(path.join(v4, n)).size > cutAt - at) fs.truncateSync(path.join(v4, n), cutAt - at); }
   const s6 = await ChatStore.open(root, opts); await s6.registerVersion(V(4), { chatId: vr.chatC + '-d', runtime: 'claude-code' }); await s6.head(V(4)); await s6.close();
   return { older };
 }
@@ -123,7 +124,7 @@ async function readAll(s: ChatStore, lines: Buffer[], v: Buffer): Promise<string
 }
 
 /** Files whose loss destroys the only copy of some bytes (inventory.ts limit 1): lines in them may be reported damaged. */
-const ONLY_COPY = /(^|\/)(body-[0-9a-f]{16}\.bin|tails\/|parked\/|rejected\/|extras-bad\/|healed\/|torn\/)/;
+const ONLY_COPY = /(^|\/)(body-[0-9a-f]{16}\.bin|parked\/|rejected\/|extras-bad\/|healed\/|torn\/)/;
 
 describe.each([['without eviction', false], ['after an eviction', true]] as const)('every file x every wrong-file fault (%s)', (_name, evict) => {
   it('is served or reported, never silently fewer, never wrong', async () => {
@@ -135,7 +136,7 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
     const files = walk(golden).map((p) => path.relative(golden, p)).filter((r) => !/^LOCK/.test(r));
     // every file the scenario wrote is in the inventory (and the scenario reached the interesting ones)
     for (const f of files) expect(inventoryRow(f), f).not.toBeNull();
-    for (const must of ['checkpoint.bin', 'index.bin', 'meta.json', 'meta.copy', 'summary.json', 'control/', 'anchor.json', 'anchor.copy', 'extras/manifest.bin', 'tails/', 'healed/', 'replaced-index/', 'aside/', 'COMPLETE', 'parked/']) expect(files.some((f) => f.includes(must)), `scenario lacks ${must}`).toBe(true);
+    for (const must of ['checkpoint.bin', 'index.bin', 'meta.json', 'meta.copy', 'summary.json', 'control/', 'anchor.json', 'anchor.copy', 'extras/manifest.bin', 'retired.json', 'healed/', 'replaced-index/', 'aside/', 'COMPLETE', 'parked/']) expect(files.some((f) => f.includes(must)), `scenario lacks ${must}`).toBe(true);
     let runs = 0; const problems: string[] = [];
     let n = 0;
     for (const rel of files) {
@@ -147,7 +148,7 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
         runs++;
         const where = `${kind} ${rel}`;
         const onlyCopy = ONLY_COPY.test(rel) && kind !== 'older' ? true : ONLY_COPY.test(rel);
-        const inA = rel.includes(`versions/${vkey(1)}/`); const inB = rel.includes(`versions/${vkey(2)}/`);
+        const inA = rel.includes(`versions/${vkey(1)}/`); const inB = rel.includes(`versions/${vkey(2)}/`); const inK = rel.includes(`versions/${vkey(5)}/`);
         const indexAfterEviction = evict && /index\.bin$|replaced-index\//.test(rel) && inA;   // inventory.ts limit 2
         let s: ChatStore | null = null;
         try {
@@ -187,8 +188,9 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
           }
           // ---- extras: bytes, or a typed corrupt (reported)
           for (const b of extraBytes) { try { const g = await s.readExtra(sha(b)); if (g === null) { if (!/extras\//.test(rel) || kind === 'rotted') { if (!(kind === 'rotted' && /extras\//.test(rel))) problems.push(`${where}: extra silently absent`); } } else if (!g.equals(b)) problems.push(`${where}: wrong extra bytes`); } catch (e: any) { if (e?.code !== 'corrupt') problems.push(`${where}: extra read threw ${e?.code}`); } }
-          // ---- the set-aside tail of chat B
-          try { const tl = await s.tail('abcdef012345'); if (tl === null) problems.push(`${where}: the set-aside tail vanished silently`); else for (let i = 0; i < tl.lines.length; i++) if (!tl.lines[i].equals(B[tl.fromLine + i])) problems.push(`${where}: wrong tail bytes`); } catch (e: any) { if (e?.code !== 'corrupt' && e?.code !== 'bad-argument') problems.push(`${where}: tail threw ${e?.code}`); }
+          // ---- the fork of chat B (a takeover): an independent copy, so a fault in the parent never touches it, and a fault in it is served or reported like any version
+          try { const hk = await s.head(V(5)); const allK = await readAll(s, B.slice(0, hk.lines), V(5)); if (/[X?]/.test(allK)) problems.push(`${where}: fork wrong bytes ${allK}`); if (!inK && (hk.lines !== 14 || /[!]/.test(allK) || hk.damagedFromLine !== null)) problems.push(`${where}: the fork changed (${hk.lines} lines, ${allK})`); if (inK && hk.lines < 14 && hk.damagedFromLine === null && !onlyCopy) problems.push(`${where}: the fork shrank silently to ${hk.lines}`); }
+          catch (e: any) { if (!inK || !['damaged', 'corrupt'].includes(e?.code)) problems.push(`${where}: head(fork) threw ${e?.code}`); }
         } catch (e: any) { problems.push(`${where}: open/register threw ${e?.code ?? e?.message}`); }
         finally { await s?.close().catch(() => undefined); fs.rmSync(work, { recursive: true, force: true }); }
       }
@@ -201,12 +203,11 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
       'meta.copy': 'identical bytes to meta.json by design (one registration), so no distinct sibling exists; meta.json/meta.copy swaps across versions are the otherbuild/foreign cases',
       'extras-manifest': 'one manifest per root: its sibling is the other root\'s manifest (otherbuild) which is applied; kept for completeness',
       FORMAT: 'a constant, identical in every root',
-      begun: 'an existence-only marker whose bytes are identical in every instance, so no distinct sibling exists',
-      done: 'an existence-only marker whose bytes are identical in every instance, so no distinct sibling exists',
+      retired: 'one retired version per root, written with the same text in every root, so no distinct sibling exists',
     };
     const NOT_WRITTEN_BY_SCENARIO: Record<string, string> = {
       'meta.bad': 'created only after a damaged meta copy was healed', 'index.rebuild': 'scratch, exists only mid-rebuild', 'marks.bad': 'created only after an unreadable marks file was replaced',
-      'aside.intent': 'exists only while a set-aside is in flight', 'intent.bad': 'created only for a foreign note', tmp: 'swept at open', 'FORMAT.bad': 'created only after a damaged FORMAT', LOCK: 'excluded: the lock is the process\'s own',
+      tmp: 'swept at open', 'FORMAT.bad': 'created only after a damaged FORMAT', LOCK: 'excluded: the lock is the process\'s own',
       'extras-tmp': 'swept at open', 'control-tmp': 'swept at open', 'control-kept': 'created only after a torn control write', 'aside-complete': 'covered through aside/ files',
       rejected: 'created only when a park was rejected', 'extras-bad': 'created only after a rotted extra was read',
       torn: 'created only after a torn write', 'control-parked': 'a parked control entry only exists while its cause is missing',

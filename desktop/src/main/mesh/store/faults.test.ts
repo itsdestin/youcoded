@@ -415,20 +415,20 @@ describe('reads on a full disk never fail', () => {
       expect(holders.some((f) => fs.existsSync(f) && fs.readFileSync(f).includes(L[11])), `bytes kept after allocation ${n}`).toBe(true);
     }
   });
-  it('a quarantine whose damaged marker was not written yet (interrupted) is still reported damaged when read on a full disk', async () => {
+  it('a quarantine whose note was not written yet (killed right after the aside folder was made) is still reported damaged when read on a full disk, and finished when space returns', async () => {
     const L = rows(20); await build(t.dir, L);
     fs.unlinkSync(path.join(vdir(), 'index.bin')); fs.unlinkSync(path.join(vdir(), 'checkpoint.bin'));   // a version nothing can vouch for: quarantine
     const s = await ChatStore.open(t.dir); await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' }); await s.close();
     const name = fs.readdirSync(path.join(t.dir, 'aside'))[0];
-    fs.unlinkSync(path.join(vdir(), 'marks.bin'));                                      // the kill came before the marker
-    fs.unlinkSync(path.join(t.dir, 'aside', name, 'COMPLETE'));                          // (the COMPLETE mark is written after the marker, so it was not there either)
-    fs.writeFileSync(path.join(vdir(), 'aside.intent'), encodeSide({ role: 'intent', key: vhex }, { asideName: name, reason: 'interrupted' }));
+    fs.unlinkSync(path.join(vdir(), 'retired.json'));                                    // the kill came before the note
+    fs.unlinkSync(path.join(t.dir, 'aside', name, 'COMPLETE'));                          // (COMPLETE is written last, so it was not there either)
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
     await s2.close();
     const s3 = await ChatStore.open(t.dir);
-    await expect(s3.head(V(1))).rejects.toMatchObject({ code: 'damaged' });             // and with space the marker is written
-    expect(fs.existsSync(path.join(vdir(), 'marks.bin'))).toBe(true);
+    await expect(s3.head(V(1))).rejects.toMatchObject({ code: 'damaged' });             // and with space the note is written again
+    expect(fs.existsSync(path.join(vdir(), 'retired.json'))).toBe(true);
+    expect(fs.existsSync(path.join(t.dir, 'aside', name, 'COMPLETE'))).toBe(true);
     await s3.close();
   });
   it('a parked append that can now be applied is not applied while the disk is full, and the read still works', async () => {
@@ -438,7 +438,7 @@ describe('reads on a full disk never fail', () => {
     const hh = ch('sha256'); for (const l of L.slice(10, 13)) hh.update(l);
     const stem = `${'10'.padStart(16, '0')}-${hh.digest('hex').slice(0, 16)}`;
     fs.mkdirSync(path.join(vdir(), 'parked'), { recursive: true });
-    fs.writeFileSync(path.join(vdir(), 'parked', `${stem}.park`), sealEnv({ role: 'park', version: vhex, id: `${stem}@genesis` }, frameLines(L.slice(10, 13)))   /* WHY @genesis: a park's sealed id ends with the history it was parked in (parked.ts parkId); no takeover so far */);
+    fs.writeFileSync(path.join(vdir(), 'parked', `${stem}.park`), sealEnv({ role: 'park', version: vhex, id: stem }, frameLines(L.slice(10, 13))));
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     expect((await s2.head(V(1))).lines).toBe(10);
     await s2.close();
@@ -509,16 +509,6 @@ describe('a second copy that was found damaged is repaired when the version load
     flipAt(path.join(vdir(), 'checkpoint.bin'), 20);                          // now the OTHER slot
     expect((await readCheckpoint(realFs, vdir()))!.count).toBe(40);
   });
-  it('a cut lowers both checkpoint slots, so a flip in the newest slot never brings back a higher statement', async () => {
-    const s = await openWith(t.dir, V(1)); for (let i = 0; i < 40; i++) await s.append(V(1), 0, i, [L[i]]);
-    await s.setAsideTail('abcdef012345', V(1), 25); await s.close();
-    for (const pos of [20, 20 + 96]) {
-      const c = fs.readFileSync(path.join(vdir(), 'checkpoint.bin'));
-      flipAt(path.join(vdir(), 'checkpoint.bin'), pos);
-      const s2 = await ChatStore.open(t.dir); expect((await s2.head(V(1))).lines).toBe(25); await s2.close();
-      fs.writeFileSync(path.join(vdir(), 'checkpoint.bin'), c);
-    }
-  });
   it('the stale-chain bit lives in the checkpoint (stale-conv.json is gone) and survives reopening', async () => {
     const accept = { proofVerifier: () => true };
     await build(t.dir, rows(30), { evict: 10 });
@@ -542,19 +532,6 @@ describe('summary.json is checksummed: a flipped letter in the title is never sh
 });
 
 describe('kept copies are never overwritten or merged', () => {
-  it('after an aside folder is lost, a new set-aside never reuses the name of one that still exists', async () => {
-    const L = rows(10); await build(t.dir, L);
-    const s = await ChatStore.open(t.dir);
-    await s.setAsideDamaged(V(1)); await s.append(V(1), 0, 0, L); await s.setAsideDamaged(V(1)); await s.append(V(1), 0, 0, L);
-    const names = fs.readdirSync(path.join(t.dir, 'aside')).sort(); expect(names.length).toBe(2);
-    const keepIdx = fs.readFileSync(path.join(t.dir, 'aside', names[1], 'index.bin'));
-    fs.rmSync(path.join(t.dir, 'aside', names[0]), { recursive: true });
-    await s.setAsideDamaged(V(1));
-    const after = fs.readdirSync(path.join(t.dir, 'aside')).sort();
-    expect(after.length).toBe(2);
-    expect(fs.readFileSync(path.join(t.dir, 'aside', names[1], 'index.bin')).equals(keepIdx)).toBe(true);
-    await s.close();
-  });
   it('a healed line never reuses the name of a kept copy that still exists', async () => {
     const L = rows(12); await build(t.dir, L);
     const s = await ChatStore.open(t.dir);
@@ -596,20 +573,6 @@ describe('a full keep-area never wedges a rebuild', () => {
     await rejects(s2.head(V(1)), 'damaged');
     await s2.close();
     expect(fs.readdirSync(path.join(t.dir, 'aside')).length).toBe(1);
-  });
-});
-
-describe('clearing a damaged marker', () => {
-  it('is refused when the quarantined copy it names is not there, and the marker is kept', async () => {
-    const L = rows(30); await build(t.dir, L);
-    fs.unlinkSync(path.join(vdir(), 'index.bin')); fs.unlinkSync(path.join(vdir(), 'checkpoint.bin'));
-    const s = await ChatStore.open(t.dir);
-    await rejects(s.head(V(1)), 'damaged');                                    // nothing vouches: quarantined
-    const aside = fs.readdirSync(path.join(t.dir, 'aside'))[0];
-    fs.renameSync(path.join(t.dir, 'aside', aside), path.join(t.dir, 'elsewhere'));
-    await rejects(s.setAsideDamaged(V(1)), 'corrupt');
-    expect((await readMarksState(realFs, vdir())).value?.damaged).not.toBeNull();   // the marker is kept
-    await s.close();
   });
 });
 

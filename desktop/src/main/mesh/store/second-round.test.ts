@@ -11,6 +11,7 @@ import { REC, recPos } from './records';
 import { cc } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot } from './testkit';
 import { FaultFs } from './fault-fs';
+import { encodeSide } from './sidefile';
 import { readCheckpoint, writeCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
 
 let t: Awaited<ReturnType<typeof tmpRoot>>;
@@ -54,7 +55,7 @@ describe('N1: a rebuild never accepts bytes that only the damaged index could vo
     await s.close();
   });
 
-  it('missing index + one rotted body byte: quarantined intact (damaged), never accepted; a peer recopy restores it', async () => {
+  it('missing index + one rotted body byte: quarantined intact (damaged), never accepted; a peer recopy into a new id restores it', async () => {
     await build(t.dir, L);
     fs.unlinkSync(path.join(vdir(t.dir), 'index.bin'));
     const rotted = flipAt(body0(t.dir), rot());
@@ -62,9 +63,11 @@ describe('N1: a rebuild never accepts bytes that only the damaged index could vo
     await rejects(s.head(V(1)), 'damaged');
     const q = path.join(t.dir, 'aside', asideDirs(t.dir)[0]);
     expect(fs.readFileSync(path.join(q, 'body-0000000000000000.bin')).equals(rotted)).toBe(true);
-    await s.setAsideDamaged(V(1));
-    expect(await s.append(V(1), 0, 0, L)).toBe('ok');
-    expect((await s.head(V(1))).hash).toBe(refChains(L).raw[100]);
+    await s.setAsideDamaged(V(1));                                                    // idempotent: the id is already retired
+    await rejects(s.append(V(1), 0, 0, L), 'damaged');                                // never refilled under the same id ...
+    await s.registerVersion(V(9), { chatId: CHAT, runtime: 'claude-code' });          // ... the peer recopy goes into a NEW id
+    expect(await s.append(V(9), 0, 0, L)).toBe('ok');
+    expect((await s.head(V(9))).hash).toBe(refChains(L).raw[100]);
     await s.close();
   });
 
@@ -165,15 +168,15 @@ describe('N3: the rolling scrub covers every byte within a bounded number of cal
     expect((await s.head(V(1))).damagedFromLine).toBe(100);
     await s.close();
   });
-  it('the persisted mark survives a reopen and a cut shorter than the pass', async () => {
+  it('a scrub mark that is further than the head (an older folder put back next to a newer scrub.json) is clamped, not trusted', async () => {
     const L = rows(300);
     const s = await openWith(t.dir, V(1), { scrubOnOpenBytes: 0 });
-    await s.append(V(1), 0, 0, L);
-    await s.scrubStep(V(1), { maxBytes: 3000 });
-    await s.setAsideTail('ab'.repeat(8), V(1), 50);             // shorter than the mark
-    const rep = await s.scrubStep(V(1), { maxBytes: 1e9 });
-    expect(rep.total).toBe(50); expect(rep.damagedFromLine).toBeNull();
-    await s.close();
+    await s.append(V(1), 0, 0, L.slice(0, 50)); await s.close();
+    fs.writeFileSync(path.join(vdir(t.dir), 'scrub.json'), encodeSide({ role: 'scrub', key: vhex }, { lines: 200, passEnd: 300 }));
+    const s2 = await ChatStore.open(t.dir, { scrubOnOpenBytes: 0 });
+    const rep = await s2.scrubStep(V(1), { maxBytes: 1e9 });
+    expect(rep.total).toBe(50); expect(rep.damagedFromLine).toBeNull(); expect(rep.verifiedLines).toBe(50);
+    await s2.close();
   });
 });
 
@@ -243,26 +246,22 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     await s.close();
   });
 
-  it('N8: a garbage meta.json, evicted.json or damaged.json in one version never breaks listVersions or the other versions; each is listed with a typed reason and can be set aside', async () => {
+  it('N8: a garbage meta.json in one version never breaks listVersions or the other versions; each is listed with a typed reason and can be set aside', async () => {
     const s = await ChatStore.open(t.dir);
     for (const n of [1, 2, 3, 4]) { await s.registerVersion(V(n), { chatId: CHAT + n, runtime: 'claude-code' }); await s.append(V(n), 0, 0, rows(5, 'v' + n)); }
     await s.close();
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.json'), 'not json');
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.copy'), 'not json either');
-    fs.unlinkSync(path.join(vdir(t.dir, V(4).toString('hex')), 'index.bin'));   // a quarantined version has no live index (review 4: a marker next to a live index is an older copy and is ignored)
-    fs.writeFileSync(path.join(vdir(t.dir, V(4).toString('hex')), 'marks.bin'), 'garbage');
     const s2 = await ChatStore.open(t.dir);
     const lv = await s2.listVersions();
-    expect(lv.map((v) => v.damaged)).toEqual([null, 'unreadable: corrupt', null, 'unknown']);   // a garbage marks file with no index still reports damaged
+    expect(lv.map((v) => v.damaged)).toEqual([null, 'unreadable: corrupt', null, null]);
     expect(lv[0].head!.lines).toBe(5); expect(lv[1].chatId).toBeNull();
     expect((await s2.head(V(1))).lines).toBe(5);
     // the remedy does not itself need the bad file
-    for (const n of [2, 4]) await s2.setAsideDamaged(V(n));
+    await s2.setAsideDamaged(V(2));
     const lv2 = await s2.listVersions();
-    expect(lv2.filter((v) => v.damaged !== null)).toEqual([]);
-    expect(lv2.map((v) => v.head?.lines)).toEqual([5, 5, 5]);   // version 2 lost its registration (re-register it); 3 and 4 kept their lines (their bad files were only markers)
-    await s2.registerVersion(V(2), { chatId: CHAT + 2, runtime: 'claude-code' });
-    expect(await s2.append(V(2), 0, 0, rows(5, 'v2'))).toBe('ok');
+    expect(lv2.map((v) => v.damaged !== null)).toEqual([false, true, false, false]);   // version 2 is retired (its garbage meta stays); the others are untouched
+    expect(lv2.filter((v) => v.damaged === null).map((v) => v.head?.lines)).toEqual([5, 5, 5]);
     await s2.close();
   });
 });

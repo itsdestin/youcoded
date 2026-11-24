@@ -241,66 +241,6 @@ describe('C2: one writer per store root', () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------- H1
-describe('H1: setAsideTail replay never cuts lines appended since', () => {
-  const takeover = 'ab'.repeat(32);
-  it('a redelivered call after the new host appended returns the original result and leaves the new lines', async () => {
-    const L = rows(20);
-    const s = await openWith(t.dir); await s.append(V(1), 0, 0, L);
-    expect((await s.setAsideTail(takeover, V(1), 10)).lines).toBe(10);
-    const fresh = rows(5, 'new');
-    expect(await s.append(V(1), 0, 10, fresh)).toBe('ok');
-    expect((await s.setAsideTail(takeover, V(1), 10)).lines).toBe(10);
-    expect((await s.head(V(1))).lines).toBe(15);
-    expect(Buffer.concat((await s.read(V(1), 0, 10, 15)) as Buffer[]).equals(Buffer.concat(fresh))).toBe(true);
-    await s.close();
-  });
-  it('a retry after fromLine was clamped is accepted (it used to throw)', async () => {
-    const s = await openWith(t.dir); await s.append(V(1), 0, 0, rows(3));
-    expect((await s.setAsideTail(takeover, V(1), 9)).lines).toBe(0);
-    expect((await s.setAsideTail(takeover, V(1), 9)).lines).toBe(0);
-    expect((await s.head(V(1))).lines).toBe(3);
-    await s.close();
-  });
-  it('a retry whose cut was cut short still finishes the cut (lines beyond are exactly the saved tail)', async () => {
-    const L = rows(12);
-    const s = await openWith(t.dir); await s.append(V(1), 0, 0, L);
-    await s.setAsideTail(takeover, V(1), 4);
-    // simulate "tail file durable, cut not done": put the tail lines back and remove the "cut done" marker (N15)
-    expect(await s.append(V(1), 0, 4, L.slice(4))).toBe('ok');
-    fs.unlinkSync(path.join(vdir(t.dir), 'tails', `${takeover}.done`));
-    expect((await s.head(V(1))).lines).toBe(12);
-    await s.setAsideTail(takeover, V(1), 4);
-    expect((await s.head(V(1))).lines).toBe(4);
-    await s.close();
-  });
-  it('N15: once the cut is recorded as done, byte-identical lines appended later are NOT cut again by a replay', async () => {
-    const L = rows(12);
-    const s = await openWith(t.dir); await s.append(V(1), 0, 0, L);
-    await s.setAsideTail(takeover, V(1), 4);
-    expect(await s.append(V(1), 0, 4, L.slice(4))).toBe('ok');         // the new host happens to write the same lines
-    expect((await s.setAsideTail(takeover, V(1), 4)).lines).toBe(8);   // redelivered request: the original answer...
-    expect((await s.head(V(1))).lines).toBe(12);                       // ...and the lines stay
-    await s.close();
-  });
-});
-
-// ---------------------------------------------------------------------------------------------- H2
-describe('H2: set-aside of a damaged copy keeps the aside index at every kill point', () => {
-  it('a rerun after the files moved never moves the fresh index over the aside copy (intent removed before the fresh index)', async () => {
-    const L = rows(10); await build(t.dir, L);
-    const orig = fs.readFileSync(path.join(vdir(t.dir), 'index.bin'));
-    // state "moves done, intent still there, fresh header-only index already created": the review's kill point
-    const s = await ChatStore.open(t.dir); await s.setAsideDamaged(V(1)); await s.close();
-    const name = asideDirs(t.dir)[0];
-    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), encodeSide({ role: 'intent', key: V(1).toString('hex') }, { asideName: name }));
-    const s2 = await ChatStore.open(t.dir);
-    expect((await s2.head(V(1))).lines).toBe(0);
-    expect(fs.readFileSync(path.join(t.dir, 'aside', name, 'index.bin')).equals(orig)).toBe(true);
-    await s2.close();
-  });
-});
-
 // ---------------------------------------------------------------------------------------------- H3
 describe('H3: body bytes are checked against the chain', () => {
   it('a flipped body byte is a typed corrupt on read, flagged in head, and not ok in verify', async () => {
@@ -691,7 +631,7 @@ describe('L2/L4/L5/L6/L8/L9', () => {
     let thrown = false; let p: Promise<unknown> | undefined;
     try { p = s.append(V(1), 0, 0, [Buffer.from('no newline')]); } catch { thrown = true; }
     expect(thrown).toBe(false); await rejects(p!, 'bad-line');
-    for (const f of [() => s.putExtra('00'.repeat(32), Buffer.from('x')), () => s.hasExtra('../x'), () => s.restoreBody(V(1), [Buffer.from('x')]), () => s.setAsideTail('zz', V(1), 0), () => s.tail('zz'), () => s.evictBody(V(1), undefined as any)]) {
+    for (const f of [() => s.putExtra('00'.repeat(32), Buffer.from('x')), () => s.hasExtra('../x'), () => s.restoreBody(V(1), [Buffer.from('x')]), () => s.forkVersion(V(1), -1, V(2)), () => s.forkVersion(V(1), 0, Buffer.alloc(0)), () => s.evictBody(V(1), undefined as any)]) {
       let sync = false; let q: Promise<unknown> | undefined;
       try { q = f(); } catch { sync = true; }
       expect(sync).toBe(false); await expect(q).rejects.toBeInstanceOf(StoreError);
@@ -720,16 +660,6 @@ describe('L2/L4/L5/L6/L8/L9', () => {
     await s.close();
   });
 
-  it('L6: a tail file with a damaged header is refused as corrupt; tail() can be told which version', async () => {
-    const takeover = 'cd'.repeat(32);
-    const s = await openWith(t.dir); await s.append(V(1), 0, 0, rows(6)); await s.setAsideTail(takeover, V(1), 2);
-    expect((await s.tail(takeover, V(1)))!.fromLine).toBe(2);
-    expect(await s.tail(takeover, V(2))).toBeNull();
-    const tp = path.join(vdir(t.dir), 'tails', `${takeover}.tail`);
-    flip(tp, 14);
-    await rejects(s.tail(takeover), 'corrupt');
-    await s.close();
-  });
 
   it('L8: one append call above the size cap is refused with a typed error before anything is buffered', async () => {
     const s = await openWith(t.dir, V(1), { maxAppendBytes: 1000 });
@@ -779,7 +709,7 @@ describe('L3/L8 adapter', () => {
   });
 });
 
-describe('durability of acknowledged results under power loss (new directories, tails, extras, control)', () => {
+describe('durability of acknowledged results under power loss (new directories, forks, extras, control)', () => {
   it('every acknowledged result is still there after a power cut at any later operation', async () => {
     const L = rows(12); const body = Buffer.from('extra'); const eh = createHash('sha256').update(body).digest('hex');
     const idOf = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -788,7 +718,7 @@ describe('durability of acknowledged results under power loss (new directories, 
       await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }); p.reg = true;
       expect(await s.append(V(1), 0, 8, L.slice(8))).toBe('parked'); p.parked = true;
       expect(await s.append(V(1), 0, 0, L.slice(0, 5))).toBe('ok'); p.five = true;
-      expect((await s.setAsideTail('ee'.repeat(8), V(1), 3)).lines).toBe(2); p.tail = true;
+      expect((await s.forkVersion(V(1), 3, V(2))).lines).toBe(3); p.tail = true;
       await s.putExtra(eh, body); p.extra = true;
       expect(await s.appendControl({ id: idOf(c1b), chat: CHAT, seen: [], body: c1b })).toBe('ok'); p.c1 = true;
       expect(await s.appendControl({ id: idOf(c2b), chat: CHAT, seen: [idOf(Buffer.from('later'))], body: c2b })).toBe('parked'); p.c2 = true;
@@ -808,7 +738,7 @@ describe('durability of acknowledged results under power loss (new directories, 
           const h = await s2.head(V(1));
           if (p.five) expect(h.lines, where).toBeGreaterThanOrEqual(3);
           if (p.parked && !p.five) expect((await listFiles(r.dir)).some((x) => x.endsWith('.park')), where).toBe(true);
-          if (p.tail) expect(await s2.tail('ee'.repeat(8)), where).not.toBeNull();
+          if (p.tail) expect((await s2.head(V(2))).lines, where).toBe(3);
         }
         if (p.extra) expect(await s2.hasExtra(eh), where).toBe(true);
         if (p.c1) expect((await s2.controlLog(CHAT)).map((e) => e.id), where).toEqual([idOf(c1b)]);

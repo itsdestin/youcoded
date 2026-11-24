@@ -345,7 +345,7 @@ describe('older copies of a version\'s files are PREFIX-STATES: never different 
 });
 
 describe('read() never serves a line the store reports as suspect (review 8 F3)', () => {
-  it('once the scrub flags a rotted line, a read that reaches it or any later line throws `corrupt` even though the later bytes are fine', async () => {
+  it('once the scrub flags a rotted line, a read that includes it throws `corrupt`; lines after it are still served, each checked against its own chain value', async () => {
     const t = await tmpRoot('suspect-');
     const s = await open(t.dir);
     await s.append(P, 0, 0, A.slice(0, 20)); await s.close();
@@ -354,8 +354,12 @@ describe('read() never serves a line the store reports as suspect (review 8 F3)'
     await s2.scrubStep(P);
     expect((await s2.head(P)).damagedFromLine).toBe(4);
     expect(await s2.read(P, 0, 0, 4)).toEqual(A.slice(0, 4));                                          // below the damage: served
-    await expect(s2.read(P, 0, 10, 11)).rejects.toMatchObject({ code: 'corrupt' });                    // later, intact bytes: still refused, the head says suspect
-    await expect(s2.read(P, 0, 4, 5)).rejects.toMatchObject({ code: 'corrupt' });
+    await expect(s2.read(P, 0, 4, 5)).rejects.toMatchObject({ code: 'corrupt' });                      // the flagged line itself
+    await expect(s2.read(P, 0, 0, 20)).rejects.toMatchObject({ code: 'corrupt' });                     // a range that includes it
+    expect(await s2.read(P, 0, 10, 11)).toEqual(A.slice(10, 11));                                      // later lines are chain-checked one by one and are the truth
+    fs.writeFileSync(f, fs.readFileSync(f).map((x, i) => (i === A[0].length * 4 + 7 ? x ^ 0x40 : x)));  // the byte is repaired behind the store's back: the line verifies again, but the store still reports it
+    expect((await s2.head(P)).damagedFromLine).toBe(4);
+    await expect(s2.read(P, 0, 4, 5)).rejects.toMatchObject({ code: 'corrupt' });                      // what the head reports is never served, whatever the bytes say
     await s2.append(P, 0, 0, A.slice(0, 8));                                                           // a correct resend heals it
     expect((await s2.head(P)).damagedFromLine).toBeNull();
     expect(await s2.read(P, 0, 0, 20)).toEqual(A.slice(0, 20));

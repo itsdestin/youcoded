@@ -15,7 +15,7 @@ const walk = (d: string, out: string[] = []): string[] => { for (const e of fs.r
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
 describe('every file the store writes is in the inventory', () => {
-  it('a folder that has seen every operation (park, set aside, evict, restore, heal, rebuild, quarantine, control, extras) holds only inventoried names', async () => {
+  it('a folder that has seen every operation (park, fork, evict, restore, heal, rebuild, quarantine, retire, control, extras) holds only inventoried names', async () => {
     const t = await tmpRoot('inventory-');
     try {
       const vhex = V(1).toString('hex');
@@ -28,9 +28,9 @@ describe('every file the store writes is in the inventory', () => {
       const h = (await s.hashAt(V(1), 0, 10))!;
       await s.evictBody(V(1), { kind: 'holders-confirmed', version: vhex, through: 10, hash: h, acks: [{ holder: 'p', version: vhex, lines: 10, hash: h, signature: 's' }] });
       await s.restoreBody(V(1), L.slice(0, 10));
-      await s.setAsideTail('abcdef012345', V(1), 35);
-      await s.append(V(1), 0, 35, L.slice(35, 40));
-      await s.append(V(1), 0, 52, L.slice(52, 55));                                   // parked again, in the NEW history (the first park was moved to rejected/ by the takeover, review 6)
+      await s.forkVersion(V(1), 35, V(4)); await s.append(V(4), 0, 35, L.slice(35, 40));    // a takeover: a fork
+      await s.append(V(1), 0, 52, L.slice(52, 55));                                   // parked again
+      for (const p of await s.parkedList(V(1))) if (p.fromLine === 50) await s.releaseParked(V(1), p.name);   // the caller gives up on one park: it is kept in rejected/
       await s.scrubStep(V(1));
       const e1 = Buffer.from('e1'); const e2 = Buffer.from('e2');
       await s.appendControl({ id: sha(e2), chat: CHAT, seen: [sha(e1)], body: e2 });  // parked control entry
@@ -47,8 +47,7 @@ describe('every file the store writes is in the inventory', () => {
       await s2.head(V(1));
       // quarantine and an explicit set-aside
       await s2.setAsideDamaged(V(1));
-      await s2.append(V(1), 0, 0, L.slice(0, 5));
-      await s2.append(V(1), 0, 9, L.slice(9, 11));                                    // parked in the new, empty history (round 7: the set-aside moved the old parks to rejected/)
+      await expect(s2.append(V(1), 0, 0, L.slice(0, 5))).rejects.toMatchObject({ code: 'damaged' });   // a retired id is never refilled
       const v3 = V(3); await s2.registerVersion(v3, { chatId: CHAT, runtime: 'claude-code' }); await s2.append(v3, 0, 0, L.slice(0, 5));
       await s2.close();
       fs.truncateSync(path.join(t.dir, 'versions', v3.toString('hex'), 'index.bin'), 5);
@@ -61,7 +60,8 @@ describe('every file the store writes is in the inventory', () => {
       expect(names.some((n) => n.startsWith('aside/'))).toBe(true);
       expect(names.some((n) => n.includes('replaced-index/'))).toBe(true);
       expect(names.some((n) => n.includes('healed/'))).toBe(true);
-      expect(names.some((n) => n.includes('tails/'))).toBe(true);
+      expect(names.some((n) => n.endsWith('retired.json'))).toBe(true);
+      expect(names.some((n) => n.includes('forks/'))).toBe(false);                    // the work folder of a finished fork is gone (renamed into versions/)
       expect(names.some((n) => n.includes('parked/'))).toBe(true);
       expect(names.some((n) => n.includes('rejected/'))).toBe(true);
     } finally { await t.cleanup(); }

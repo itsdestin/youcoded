@@ -224,22 +224,6 @@ describe('F5 an older eviction record does not quarantine a healthy chat', () =>
   });
 });
 
-describe('F6 a deleted tail is never replaced by an empty one', () => {
-  it('delete the tail file after a done set-aside: tail() and a retry report corrupt, nothing new is written', async () => {
-    const { t, s, root } = await fresh(10);
-    const id = 'abcdef012345';
-    expect((await s.setAsideTail(id, V(1), 6)).lines).toBe(4);
-    await s.close();
-    const tp = path.join(vdir(root), 'tails', `${id}.tail`);
-    fs.rmSync(tp);
-    const s2 = await reopen(root);
-    await expect(s2.tail(id)).rejects.toMatchObject({ code: 'corrupt' });
-    await expect(s2.setAsideTail(id, V(1), 6)).rejects.toMatchObject({ code: 'corrupt' });
-    expect(fs.existsSync(tp)).toBe(false);                       // no empty valid tail was written over the evidence
-    await s2.close(); await t.cleanup();
-  });
-});
-
 describe('F7 restoreBody verifies what it restored', () => {
   it('S5: a rotted byte in the partly evicted chunk is repaired and reads back', async () => {
     const { t, s, ls, root } = await fresh(30);
@@ -292,7 +276,7 @@ describe('F8 an index file that belongs to another chat is detected as foreign',
 });
 
 describe('F9 version id length is limited and documented', () => {
-  it('65 bytes is a typed bad-argument; 64 bytes registers, appends and can be set aside and quarantined', async () => {
+  it('65 bytes is a typed bad-argument; 64 bytes registers, appends and can be quarantined and retired', async () => {
     const t = await tmpRoot('r4id-'); const s = await ChatStore.open(t.dir, opts);
     await expect(s.registerVersion(Buffer.alloc(65, 7), { chatId: 'c', runtime: 'claude-code' })).rejects.toMatchObject({ code: 'bad-argument' });
     await expect(s.registerVersion(Buffer.alloc(128, 7), { chatId: 'c', runtime: 'claude-code' })).rejects.toMatchObject({ code: 'bad-argument' });
@@ -302,9 +286,8 @@ describe('F9 version id length is limited and documented', () => {
     // the quarantine name is the longest name the store makes: it must fit
     await expect((s as any).asides.quarantineOrReport(id.toString('hex'), 'test')).rejects.toMatchObject({ code: 'damaged' });
     await expect(s.head(id)).rejects.toMatchObject({ code: 'damaged' });
-    expect((await s.setAsideDamaged(id)).asideName).toMatch(/-q1$/);
-    expect(await s.append(id, 0, 0, lines(3))).toBe('ok');
-    expect((await s.setAsideDamaged(id)).asideName).toMatch(/-2$/);   // a plain set-aside takes the next number
+    expect((await s.setAsideDamaged(id)).asideName).toMatch(/-q1$/);   // already retired by the quarantine: the same answer, nothing new
+    await expect(s.append(id, 0, 0, lines(3))).rejects.toMatchObject({ code: 'damaged' });   // a retired id is never refilled
     await s.close(); await t.cleanup();
   });
 });
@@ -354,21 +337,6 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     await s1.close(); await t.cleanup();
   });
 
-  it('an older checkpoint taken before a cut (it claims lines the cut removed) does not hide the chat: it is lowered, the claimed lines are reported', async () => {
-    const { t, s, root } = await fresh(30);
-    const cp = path.join(vdir(root), 'checkpoint.bin');
-    const before = fs.readFileSync(cp);
-    await s.setAsideTail('abcdef012345', V(1), 12);
-    await s.close();
-    fs.writeFileSync(cp, before);                                                            // the older statement: 30 lines
-    const s2 = await reopen(root);
-    const h = await s2.head(V(1));
-    expect(h.lines).toBe(12);
-    expect(h.damagedFromLine).not.toBeNull();                                                // the lines it vouched for are reported as set aside
-    expect(asideCount(root)).toBe(0);
-    expect((await s2.tail('abcdef012345'))!.lines.length).toBe(18);                          // and they are kept in the tail file
-    await s2.close(); await t.cleanup();
-  });
 
   it('an older checkpoint that records an eviction a restore has since undone does not relabel the restored lines as evicted (they are served)', async () => {
     const { t, s, ls, root } = await fresh(30);
@@ -384,21 +352,6 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     await s2.close(); await t.cleanup();
   });
 
-  it('an older checkpoint that still records an eviction that a restore has since undone does not quarantine the chat', async () => {
-    const { t, s, ls, root } = await fresh(30);
-    await evict(s, 20);
-    const cp = path.join(vdir(root), 'checkpoint.bin'); const evicted = fs.readFileSync(cp);
-    await s.restoreBody(V(1), ls);
-    await s.setAsideTail('abcdef012345', V(1), 9);
-    await s.close();
-    fs.writeFileSync(cp, evicted);                                                           // the older statement: 30 lines, 20 of them evicted
-    const s2 = await reopen(root);
-    const h = await s2.head(V(1));
-    expect(h.lines).toBeGreaterThanOrEqual(9);
-    expect(asideCount(root)).toBe(0);
-    expect((await readAll(s2, ls.slice(0, 9))).slice(0, 9)).toMatch(/^[.E]+$/);
-    await s2.close(); await t.cleanup();
-  });
 
   it('a body chunk that is too long (extra bytes past the next chunk) is harmless to a rebuild: the bytes past the next chunk\'s start are never read', async () => {
     const { t, s, ls, root } = await fresh(30);
@@ -411,19 +364,6 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     await s2.close(); await t.cleanup();
   });
 
-  it('an older checkpoint taken before a set-aside moved everything away leaves an empty chat reported from its head, not a quarantined one', async () => {
-    const { t, s, root } = await fresh(12);
-    const cp = path.join(vdir(root), 'checkpoint.bin'); const before = fs.readFileSync(cp);
-    await s.setAsideDamaged(V(1)); await s.close();
-    fs.writeFileSync(cp, before);                                                            // the older statement: 12 lines, none of which are here any more
-    const s2 = await reopen(root);
-    const h = await s2.head(V(1));
-    expect(h.lines).toBe(0); expect(h.damagedFromLine).toBe(0);
-    expect(fs.readdirSync(path.join(root, 'aside')).filter((n) => /-q\d+$/.test(n))).toEqual([]);   // nothing was quarantined
-    expect(await s2.append(V(1), 0, 0, lines(12))).toBe('ok');
-    expect((await s2.head(V(1))).damagedFromLine).toBeNull();                                // the report clears once the chat has refilled the 12 lines it claimed
-    await s2.close(); await t.cleanup();
-  });
 
   it('with the eviction record lost (checkpoint deleted) restoreBody still brings the bodies back from the lines the caller supplies', async () => {
     const { t, s, ls, root } = await fresh(30);
@@ -438,29 +378,7 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     await s2.close(); await t.cleanup();
   });
 
-  it('the report that a rebuild set lines aside survives a damaged marks file (reported from the head)', async () => {
-    const { t, s, root } = await fresh(30);
-    const cp = path.join(vdir(root), 'checkpoint.bin'); const before = fs.readFileSync(cp);
-    await s.setAsideTail('abcdef012345', V(1), 12); await s.close();
-    fs.writeFileSync(cp, before);                                                            // an older statement: a rebuild reports the lines it claimed as set aside
-    let s2 = await reopen(root);
-    expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();
-    await s2.close();
-    const mk = path.join(vdir(root), 'marks.bin'); const b = fs.readFileSync(mk); b[9] ^= 0x01; fs.writeFileSync(mk, b);   // the marker file is damaged
-    s2 = await reopen(root);
-    expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();                            // still reported (from the head)
-    await s2.close(); await t.cleanup();
-  });
 
-  it('deleting the quarantine marker file does not make the emptied chat look healthy: it is still reported damaged (the quarantined copy aside says so)', async () => {
-    const { t, s, root } = await fresh(10);
-    await expect((s as any).asides.quarantineOrReport(keyOfV(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
-    await s.close();
-    fs.rmSync(path.join(vdir(root), 'marks.bin'));
-    const s2 = await reopen(root);
-    await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
-    await s2.close(); await t.cleanup();
-  });
 
   it('the control log\'s independent record has two copies: losing one of them after a loss was reported does not silence the report', async () => {
     const t = await tmpRoot('r4c4-'); const root = t.dir; const chat = 'chat-e';

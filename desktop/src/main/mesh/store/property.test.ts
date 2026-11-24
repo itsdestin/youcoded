@@ -123,6 +123,8 @@ describe('not-a-prefix exactly when bytes differ', () => {
         await s.append(V(1), 0, 0, lines.slice(0, stored));
         const before = await s.head(V(1));
         for (let trial = 0; trial < 25; trial++) {
+          // WHY a fresh fork per trial (restructure): a version never shortens, so the reference state is re-made by copying it into a new version instead of cutting the last trial's growth back
+          const tv = V(100 + trial); await s.forkVersion(V(1), before.lines, tv);
           const from = Math.floor(rand() * (before.lines + 1));
           const len = 1 + Math.floor(rand() * 10);
           const piece = lines.slice(from, from + len).map((b) => Buffer.from(b));
@@ -136,15 +138,10 @@ describe('not-a-prefix exactly when bytes differ', () => {
             else mutatedInOverlap = !piece[k].equals(lines[from + k]) && from + k < before.lines; // a mutated line past the head just extends the chain
           }
           const exact = piece.every((b, i) => b.equals(lines[from + i]));
-          const res = await s.append(V(1), 0, from, piece);
+          const res = await s.append(tv, 0, from, piece);
           if (exact) { expect(res, `seed ${seed}`).toBe('ok'); same++; }
-          else if (mutatedInOverlap) { expect(res, `seed ${seed}`).toBe('not-a-prefix'); differ++; expect(await s.head(V(1))).toEqual(before); }
+          else if (mutatedInOverlap) { expect(res, `seed ${seed}`).toBe('not-a-prefix'); differ++; expect(await s.head(tv)).toMatchObject({ lines: before.lines, hash: before.hash }); }
           // a mutated line beyond the head with all earlier lines equal extends the store (a new, different continuation): not asserted here
-          if (res === 'ok') { // restore the reference state for the next trial
-            const h = await s.head(V(1));
-            if (h.lines !== before.lines) { await s.setAsideTail('ee'.repeat(8) + trial.toString(16).padStart(8, '0') + seed.toString(16).padStart(4, '0'), V(1), before.lines); }
-            expect((await s.head(V(1))).hash).toBe(before.hash);
-          }
         }
         await s.close();
       } finally { await t.cleanup(); }

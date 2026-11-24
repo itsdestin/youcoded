@@ -15,7 +15,6 @@ import { readCheckpoint, readCheckpointState, writeCheckpoint, CHECKPOINT_SLOT }
 import { crc32 } from './chain';
 import { realFs } from './fsio';
 import { parkId } from './parked';
-import { GENESIS_EPOCH } from './tails';
 
 const mk = (tag: string, n: number) => Array.from({ length: n }, (_, i) => nl({ type: 'user', uuid: `${tag}${i}`, message: { role: 'user', content: `${tag} ${'x'.repeat(40)} ${i}` } }));
 const opts = { chunkBytes: 700, proofVerifier: () => true };
@@ -95,7 +94,7 @@ describe('F1 a parked file is bound to its own position and lines', () => {
   });
   it('a park whose id matches its name but whose lines are others (a forged hash) is rejected: the line hash is checked against the lines', async () => {
     const x = await setup();
-    const forged = sealEnv({ role: 'park', version: keyOf(V(1)), id: parkId(x.names[0], GENESIS_EPOCH) }, frameLines(x.B));   // sealed with A's name, holding B's lines
+    const forged = sealEnv({ role: 'park', version: keyOf(V(1)), id: parkId(x.names[0]) }, frameLines(x.B));   // sealed with A's name, holding B's lines
     fs.writeFileSync(x.pa, forged);
     const s = await open(x.t.dir);
     await s.append(V(1), 0, 5, x.fill);
@@ -105,8 +104,8 @@ describe('F1 a parked file is bound to its own position and lines', () => {
   });
   it('a park sealed for ANOTHER version or as ANOTHER kind is rejected, never applied', async () => {
     const x = await setup();
-    fs.writeFileSync(x.pa, sealEnv({ role: 'park', version: keyOf(V(2)), id: parkId(x.names[0], GENESIS_EPOCH) }, frameLines(x.A)));
-    fs.writeFileSync(x.pb, sealEnv({ role: 'tail', version: keyOf(V(1)), id: parkId(x.names[1], GENESIS_EPOCH) }, frameLines(x.B)));
+    fs.writeFileSync(x.pa, sealEnv({ role: 'park', version: keyOf(V(2)), id: parkId(x.names[0]) }, frameLines(x.A)));
+    fs.writeFileSync(x.pb, sealEnv({ role: 'tail', version: keyOf(V(1)), id: parkId(x.names[1]) }, frameLines(x.B)));
     const s = await open(x.t.dir);
     await s.append(V(1), 0, 5, x.fill); await s.append(V(1), 0, 8, mk('Q', 4));
     const h = await s.head(V(1));
@@ -114,37 +113,6 @@ describe('F1 a parked file is bound to its own position and lines', () => {
     await s.append(V(1), 0, 12, mk('R', 1));                    // reaching the second one
     expect((await s.rejectedList(V(1))).length).toBe(2);
     await s.close(); await x.t.cleanup();
-  });
-});
-
-describe('F2 a set-aside tail is bound to its takeover id', () => {
-  async function setup() {
-    const t = await tmpRoot('r5-f2-');
-    const s = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    await s.append(V(1), 0, 0, mk('L', 8));
-    await s.setAsideTail('aaaaaaaaaaaa', V(1), 6);            // tail A = lines 6,7
-    await s.append(V(1), 0, 6, mk('M', 4));
-    await s.setAsideTail('bbbbbbbbbbbb', V(1), 3);            // tail B = lines 3..9
-    await s.close();
-    return { t, td: path.join(vdir(t.dir), 'tails') };
-  }
-  it('another tail of the SAME version copied over this id reads as corrupt, never as this tail', async () => {
-    const { t, td } = await setup();
-    fs.copyFileSync(path.join(td, 'bbbbbbbbbbbb.tail'), path.join(td, 'aaaaaaaaaaaa.tail'));
-    const s = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    await expect(s.tail('aaaaaaaaaaaa', V(1))).rejects.toMatchObject({ code: 'corrupt' });   // the old store returned B's seven lines
-    await expect(s.setAsideTail('aaaaaaaaaaaa', V(1), 6)).rejects.toMatchObject({ code: 'corrupt' });
-    const b = await s.tail('bbbbbbbbbbbb', V(1)); expect(b!.fromLine).toBe(3);
-    await s.close(); await t.cleanup();
-  });
-  it('a tail of ANOTHER version copied in is not returned for this version, and a scan across versions skips it', async () => {
-    const { t, td } = await setup();
-    const s0 = await open(t.dir, { ...opts, chunkBytes: 100000 }, V(2)); await s0.append(V(2), 0, 0, mk('Z', 5)); await s0.setAsideTail('cccccccccccc', V(2), 2); await s0.close();
-    fs.copyFileSync(path.join(vdir(t.dir, V(2)), 'tails', 'cccccccccccc.tail'), path.join(td, 'cccccccccccc.tail'));   // V(2)'s tail filed under V(1) too
-    const s = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    await expect(s.tail('cccccccccccc', V(1))).rejects.toMatchObject({ code: 'corrupt' });
-    const got = await s.tail('cccccccccccc'); expect(got && Buffer.from(got.version).equals(V(2))).toBe(true);   // found under its own version
-    await s.close(); await t.cleanup();
   });
 });
 
@@ -288,17 +256,19 @@ describe('F3 a whole chat folder put back is reported, never silent, nothing is 
     expect((await s.head(V(1))).rolledBack).toBeNull();
     await s.close(); fs.rmSync(snap, { recursive: true }); await t.cleanup();
   });
-  it('a deliberate cut (setAsideTail) and a deliberate set-aside are never reported as rollbacks', async () => {
+  it('a deliberate fork and a deliberate set-aside are never reported as rollbacks', async () => {
     const t = await tmpRoot('r5-f3b-');
     const s = await open(t.dir, { ...opts, chunkBytes: 100000 });
     await s.append(V(1), 0, 0, mk('c', 20)); await s.close();
     const s1 = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    await s1.setAsideTail('dddddddddddd', V(1), 10); await s1.close();
+    await s1.forkVersion(V(1), 10, V(2)); await s1.close();
     const s2 = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    expect((await s2.head(V(1))).rolledBack).toBeNull(); expect((await s2.head(V(1))).lines).toBe(10);
+    expect((await s2.head(V(2))).rolledBack).toBeNull(); expect((await s2.head(V(2))).lines).toBe(10);
+    expect((await s2.head(V(1))).rolledBack).toBeNull(); expect((await s2.head(V(1))).lines).toBe(20);
     await s2.setAsideDamaged(V(1)); await s2.close();
-    const s3 = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    expect((await s3.head(V(1))).rolledBack).toBeNull(); expect((await s3.head(V(1))).lines).toBe(0);
+    const s3 = await ChatStore.open(t.dir, { ...opts, chunkBytes: 100000 });
+    await expect(s3.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
+    expect((await s3.head(V(2))).rolledBack).toBeNull();
     await s3.close(); await t.cleanup();
   });
   it('the record is raised every HW_EVERY lines and at close, so a rollback of more than that is seen', async () => {
@@ -342,23 +312,6 @@ describe('the pieces behind F4: every reader copes with an index whose evicted p
     expect((await s2.head(V(1))).evictedLines).toBe(17);
     expect(await readAll(s2, L)).toBe('E'.repeat(17) + '.'.repeat(4));
     await s2.close(); await t.cleanup();
-  });
-});
-
-describe('the rebuild believes the checkpoint over an older index of a replaced history', () => {
-  it('an older index.bin whose records describe lines a set-aside tail later replaced costs no line', async () => {
-    const t = await tmpRoot('r5-old-');
-    const A = mk('A', 7), B = mk('B', 48);
-    let s = await open(t.dir, { ...opts, chunkBytes: 100000 }); await s.append(V(1), 0, 0, A); await s.close();
-    const ix = path.join(vdir(t.dir), 'index.bin'); const old = fs.readFileSync(ix);            // the index of history A (7 lines)
-    s = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    await s.setAsideTail('aaaaaaaa', V(1), 4); await s.append(V(1), 0, 4, B); await s.close();   // lines 4.. are replaced: history B
-    fs.writeFileSync(ix, old);                                                                    // ONE fault: the older index comes back
-    s = await open(t.dir, { ...opts, chunkBytes: 100000 });
-    const h = await s.head(V(1));
-    expect(h.lines).toBe(52); expect(h.damagedFromLine).toBeNull();                              // the old store answered head 7, damaged from 4, and 45 lines unserved
-    expect(await readAll(s, [...A.slice(0, 4), ...B])).toBe('.'.repeat(52));
-    await s.close(); await t.cleanup();
   });
 });
 
@@ -452,23 +405,6 @@ describe('each identity check can be killed on its own (the second layer that al
     const after = await readCheckpoint(realFs, vdir(t.dir));
     expect(after!.boundary!.h.toString('hex')).toBe(truth);
     await t.cleanup();
-  });
-});
-
-describe('the rebuild past the checkpoint', () => {
-  it('a missing body past the checkpoint ends the rebuild even when an OLDER index copy has a rotted record exactly at the cut and valid ones beyond it', async () => {
-    const t = await tmpRoot('r5-cut-');
-    const L = mk('z', 24); const o = { ...opts, chunkBytes: 1 << 20 };
-    let s = await open(t.dir, o); await s.append(V(1), 0, 0, L); await s.close();
-    const ix = path.join(vdir(t.dir), 'index.bin'); const b = fs.readFileSync(ix); b[36 + 116 * 7 + 5] ^= 1; fs.writeFileSync(ix, b);      // a rotted record 7 among valid ones
-    s = await open(t.dir, o); await s.head(V(1)); await s.setAsideTail('cccccccc', V(1), 7); await s.close();                          // the rebuild kept the old index in replaced-index/; the cut is at line 7
-    const s2 = await open(t.dir, o, V(2)); await s2.append(V(2), 0, 0, mk('o', 30)); await s2.close();
-    fs.copyFileSync(path.join(vdir(t.dir, V(2)), 'index.bin'), ix);                                                                    // ONE fault: another version's index
-    s = await open(t.dir, o);
-    const h = await s.head(V(1));                                                                                                     // found by fuzz seed 9708: this used to quarantine the version
-    expect(h.lines).toBe(7); expect(h.damagedFromLine).toBeNull();
-    expect(await readAll(s, L.slice(0, 7))).toBe('.'.repeat(7));
-    await s.close(); await t.cleanup();
   });
 });
 
