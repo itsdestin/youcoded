@@ -40,7 +40,7 @@ function renderPopover(text: string) {
   const utils = render(
     <NewCommentPopover
       comment={baseComment({ text })}
-      anchorRect={new DOMRect(0, 0, 10, 10)}
+      getAnchor={() => new DOMRect(0, 0, 10, 10)}
       boundsEl={bounds}
       onTextChange={onTextChange}
       onDone={onDone}
