@@ -27,6 +27,8 @@ interface OwnedLockDeps {
   processStart?: (pid: number) => Promise<string | null | undefined>;
   /** Does a process with this number exist? (default: process.kill(pid, 0); EPERM still means yes) */
   isAlive?: (pid: number) => boolean;
+  /** TEST SEAM: awaited between judging a lock stale and moving it aside, so a test can force another contender into that gap. */
+  beforeTakeover?: () => Promise<void>;
 }
 
 export interface OwnedLockOptions extends OwnedLockDeps {
@@ -77,6 +79,13 @@ async function readOwner(dir: string): Promise<{ owner: LockOwner | null; readab
   return { owner: null, readable: false, mtimeMs };
 }
 
+/** Same lock owner? By token when both have one, else by process number and creation time (older-format locks). */
+function sameOwner(a: LockOwner | null, b: LockOwner | null): boolean {
+  if (!a || !b) return a === b;
+  if (a.token && b.token) return a.token === b.token;
+  return a.pid === b.pid && a.createdAt === b.createdAt;
+}
+
 export async function acquireOwnedLock(lockDir: string, opts: OwnedLockOptions = {}): Promise<LockResult> {
   const myPid = opts.pid ?? process.pid;
   const now = opts.now ?? Date.now;
@@ -105,10 +114,22 @@ export async function acquireOwnedLock(lockDir: string, opts: OwnedLockOptions =
         else verdict = aged ? 'unverifiable-aged' : 'held';                                             // cannot verify: the age rule
       }
       if (verdict === 'held' || verdict === 'unverifiable') return { ok: false, reason: verdict, holder: held.owner ?? undefined };
-      // Rename first, then delete: two contenders cannot both remove a lock the other has just re-created.
+      // Rename first, then delete — and CHECK what was moved is the lock that was judged stale.
+      // WHY the check (backup fixes review 2026-11-24, F1): a rename acts on the PATH, not on the folder that was inspected.
+      // Two contenders can both judge the same leftover lock stale; the first moves it away and makes its own live lock,
+      // and the second's rename then moved THAT live lock aside and deleted it, so both believed they held the lock.
+      // Now the second reads the owner of what it moved; if that is not the owner it judged, it puts the folder back and
+      // backs off as "held". (If the path was re-made in between, the live owner still releases by its own token.)
+      await opts.beforeTakeover?.();
       const aside = `${lockDir}.stale-${myPid}-${now()}-${randomBytes(3).toString('hex')}`;
-      try { await fs.promises.rename(lockDir, aside); await fs.promises.rm(aside, { recursive: true, force: true }); }
-      catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
+      try { await fs.promises.rename(lockDir, aside); }
+      catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; tookOver = verdict; continue; }
+      const moved = await readOwner(aside);
+      if (!sameOwner(held.owner, moved.owner)) {
+        try { await fs.promises.rename(aside, lockDir); } catch { /* the path was re-made; the moved lock's owner still releases by its token */ } // benign: nothing more can be done, and the owner's token-checked release stays correct
+        return { ok: false, reason: 'held', holder: moved.owner ?? undefined };
+      }
+      await fs.promises.rm(aside, { recursive: true, force: true });
       tookOver = verdict;
       continue;
     }

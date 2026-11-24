@@ -69,6 +69,28 @@ describe('acquireOwnedLock', () => {
     expect(rs.filter((r) => r.ok)).toHaveLength(1);
   });
 
+  it('two contenders that both judged a leftover lock stale: the slower one does not delete the faster one\'s new live lock', async () => {
+    const dir = mk();
+    // A lock left by a process that is gone.
+    writeOwner(dir, { pid: 5, startTime: 's', createdAt: Date.now(), token: 'old' });
+    const dead = { isAlive: (pid: number) => pid !== 5, processStart: async () => 'x' };
+    let reached!: () => void; const paused = new Promise<void>((r) => { reached = r; });
+    let go!: () => void; const gate = new Promise<void>((r) => { go = r; });
+    // `slow` has judged the lock stale and is held just before it moves it aside.
+    const slow = acquireOwnedLock(dir, { ...dead, pid: 1, beforeTakeover: async () => { reached(); await gate; } });
+    await paused;
+    // `fast` takes the leftover lock over completely and now holds a live lock of its own.
+    const fast = await acquireOwnedLock(dir, { ...dead, pid: 2 });
+    if (!fast.ok) throw new Error('setup: fast should win');
+    go();
+    const slowResult = await slow;
+    expect(slowResult.ok).toBe(false);
+    // fast's lock is still there, still its own, and fast can still release it.
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'), 'utf8')).token).toBe(fast.lock.owner.token);
+    await fast.lock.release();
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
   it('a late release by a former owner does not remove the lock that replaced it', async () => {
     const dir = mk();
     const first = await acquireOwnedLock(dir, { pid: 1, processStart: async () => 'a' }); if (!first.ok) throw new Error('setup');
