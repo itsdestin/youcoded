@@ -1454,6 +1454,18 @@ describe('parseTranscriptLine — control messages written as user lines', () =>
       ]);
     });
 
+    it('reads the placeholder as an interrupt when its content is a plain string', () => {
+      const line = JSON.parse(makeResumePlaceholderLine());
+      line.message.content = 'No response requested.';
+      expect(parseTranscriptLine(JSON.stringify(line), 'sess-1').map((e) => e.type)).toEqual(['user-interrupt']);
+    });
+
+    it('keeps a <synthetic> reply that only starts with the placeholder words visible', () => {
+      const line = JSON.parse(makeResumePlaceholderLine());
+      line.message.content.push({ type: 'text', text: ' More to say.' });
+      expect(parseTranscriptLine(JSON.stringify(line), 'sess-1')[0]).toEqual(expect.objectContaining({ type: 'assistant-text' }));
+    });
+
     it('keeps other <synthetic> replies visible (only the exact placeholder is hidden)', () => {
       const events = parseTranscriptLine(makeResumePlaceholderLine({}, 'Rebooting now — this session will drop.'), 'sess-1');
       expect(events.map((e) => e.type)).toEqual(['assistant-text', 'turn-complete']);
