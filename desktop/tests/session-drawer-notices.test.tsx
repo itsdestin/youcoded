@@ -78,6 +78,19 @@ describe('Copy path', () => {
     expect(writeText).toHaveBeenCalledWith('/home/u/proj/notes.md');
     expect(t.got).toEqual([]);
   });
+  it('closing the drawer cancels the "Copied" reset, so nothing fires after it is gone', async () => {
+    clip(vi.fn().mockResolvedValue(undefined), false);
+    const set = vi.spyOn(window, 'setTimeout');
+    const clear = vi.spyOn(window, 'clearTimeout');
+    mount();
+    await press('Copy path');
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument());
+    const call = set.mock.calls.findIndex((c) => c[1] === 1500);
+    expect(call).toBeGreaterThanOrEqual(0);
+    const id = set.mock.results[call].value;
+    cleanup();
+    expect(clear).toHaveBeenCalledWith(id);
+  });
 });
 
 describe('Open with the default app', () => {

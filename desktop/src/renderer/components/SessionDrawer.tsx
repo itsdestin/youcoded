@@ -518,12 +518,17 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // A tick for a moment after Copy path, because on a phone the hover hint that
   // used to be the only acknowledgement never shows (tester U5, 2026-09-10).
   const [copiedPath, setCopiedPath] = useState(false);
+  // WHY a held, cleared timer: the tick's 1.5 s reset used to fire after the drawer closed,
+  // setting state on a gone component (it failed a test run whose page had already been torn down).
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
   const handleCopyPath = useCallback(() => {
     if (!absolutePath) return;
     void copyText(absolutePath).then((ok) => {
       if (!ok) { announceFailed('copy the path'); return; }
       setCopiedPath(true);
-      window.setTimeout(() => setCopiedPath(false), 1500);
+      window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopiedPath(false), 1500);
     });
   }, [absolutePath]);
 
