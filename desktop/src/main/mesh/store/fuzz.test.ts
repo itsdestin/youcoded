@@ -96,6 +96,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     checkpointEvery: [32, 32, 8][Math.floor(r() * 3)],
   };
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
+  let sameRewriteTakeover = false;                                         // round 7: a takeover with lines to cut finished and the new host continues with byte-identical lines (see the excuse in check())
   let staleIndexInjected = false;                                          // round 7: an OLDER index.bin (single fault, or in a pair) was put back AFTER a divergent takeover, so it may describe the replaced history; cleared when the version is emptied (setAsideDamaged) or the head is canonical again. The excuse below names this cause and is checked against it
   let lostReported = false;                                                // round 7: head().lostTakeovers was above 0 at some check: the loss of takeover evidence HAS been reported (a later check on a version that is `damaged` cannot read it again)
   let lostTakeoverFault = false;                                           // round 7: a fault or a rollback that can remove takeover evidence (tails/ or a rolled-back folder) was dealt: head().lostTakeovers may then be above 0
@@ -190,7 +191,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           if (i < exemptFrom && flagged === null && !lossy) { bad('shrunk-unreported', { tag, line: i, head: head.lines }); continue; }
           if (!present(canon[i], files)) {
             // destroyed by the fault itself: allowed only when reported
-            if (lossy && flagged !== null && flagged <= i) { ev('destroyed-and-reported'); continue; }
+            if (lossy && ((flagged !== null && flagged <= i) || reportedLostTakeover)) { ev('destroyed-and-reported'); continue; }
             if (i >= exemptFrom && lossy) { ev('destroyed-after-setaside'); continue; }
             bad('line-absent-everywhere', { tag, line: i, head: head.lines, rotted, flagged }); continue;
           }
@@ -203,7 +204,13 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     } else {
       for (let i = evictedMax; i < ackedMax; i++) if (!present(canon[i], files)) { if (lossy) { ev('destroyed-version-unreadable'); break; } bad('line-absent-everywhere(version-unreadable)', { tag, line: i, state, rotted }); break; }
       // review 4: ONE fault must never make a whole version unreadable, except in the documented limits of inventory.ts (the evicted lines' chain values live only in the index)
-      if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok') bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
+      // Round 7: ONE documented cost. When the new host rewrote byte-IDENTICAL lines after a takeover (a same-history takeover) and a crash then left the index ahead of the checkpoint, the lines
+      // are indistinguishable from an older copy put back (equal chain values mean equal lines; only WHEN they were written differs). The store stays loud rather than guess (store.ts, the check after
+      // settleIndex), so the version is quarantined with that exact reason; it is excused here only for that reason and only when such a takeover really happened.
+      let undecidableIdentical = false;
+      try { undecidableIdentical = sameRewriteTakeover && state === 'damaged' && fs.readFileSync(path.join(root, 'versions', key, 'marks.bin')).includes('older files put back'); } catch { /* no marks file: not this case */ }
+      if (undecidableIdentical) ev('undecidable-identical-rewrite-quarantined');
+      if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok' && !undecidableIdentical) bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
       if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
@@ -264,10 +271,12 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       if (!['corrupt', 'damaged', 'evicted', 'limit', 'disk-full', 'bad-argument'].includes(e?.code)) bad('takeover-threw-other', { code: e?.code, msg: String(e?.message).slice(0, 150) });
       return;
     }
+    // WHY (round 7): the store lowers the high-water record to the cut point on purpose (highwater.ts lowerHw), so lines past a takeover's cut are no longer covered by what the last clean close recorded
+    closedAckedMax = Math.min(closedAckedMax, p.from);
     pending = null; tailsAcked.push({ id: p.id, from: p.from, lines: p.lines });
     if (p.diverge) {
       canon = [...canon.slice(0, p.from), ...alt.slice(p.from)]; ref = refChains(canon); diverged = true; firstDiverge = Math.min(firstDiverge, p.from); ackedMax = Math.min(ackedMax, p.from); ev('takeover-diverged');
-    } else ev('takeover-same-history');
+    } else { if (p.lines.length > 0) sameRewriteTakeover = true; ev('takeover-same-history'); }
   }
 
   async function episode(n: number): Promise<void> {
@@ -300,7 +309,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} append ${from}+${cnt}`);
             const res = await s.append(V(1), 0, from, canon.slice(from, from + cnt));
-            if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); if (diverged && staleIndexInjected && hd && hd.damagedFromLine !== null) ev('not-a-prefix-on-a-flagged-stale-index'); else bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
+            if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); if (diverged && staleIndexInjected && hd && hd.damagedFromLine !== null) ev('not-a-prefix-on-a-flagged-stale-index'); else if (hd && hd.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault)) ev('not-a-prefix-on-a-folder-with-lost-takeovers'); else bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
           } else if (op < 0.62 && op >= 0.54) {
             const from = head + 2 + Math.floor(r() * 8); const cnt = 1 + Math.floor(r() * 5);
             if (from + cnt > canon.length) continue;
@@ -371,6 +380,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // (taken BEFORE this episode's fault, so an "older copy" is a true earlier state; the newest one equals the present and is skipped)
     if (!legacy && r() < 0.6) { const sn = snapshotRoot(); snaps.push(sn); snapClosed.set(sn, closedOk && !full ? ackedMax : -1); if (snaps.length > 3) snaps.shift(); }
     // WHOLE-FOLDER ROLLBACK (review 5, F3): chat 1's folder is replaced by its state at an earlier clean close. Only snapshots taken after a clean close count (the high-water record is raised there).
+    let rolledThisEpisode = false;
     // WHY no `!diverged` any more (round 7, review 7 item 6a): after the first divergent takeover this fuzz stopped dealing rollbacks, which is exactly where review 7's F1 lived. A rollback across a takeover is now
     // dealt like any other; its promise is the one in the oracle above (head().lostTakeovers, because the takeover count lives outside the folder).
     if (!legacy && !big && snaps.length && r() < 0.05) {
@@ -380,7 +390,9 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       if (then.length && snapClosed.get(sn) !== undefined && snapClosed.get(sn)! >= 0) {
         for (const p of here) fs.unlinkSync(path.join(root, p));
         for (const p of then) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), sn.get(p)!); }
-        rotted = true; lossy = true; rollbackDone = true; rollbackActive = true; lostTakeoverFault = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax);
+        // WHY `lossyBefore` (round 7): once an earlier destructive fault has made the version unreadable (`corrupt`), the high-water record cannot be raised (it is advisory and a failing read is swallowed), so a rollback after it is a second fault on a record that never saw the growth: only the first report is promised
+        const lossyBefore = lossy;
+        rotted = true; lossy = true; rollbackDone = true; rollbackActive = true; lostTakeoverFault = true; rolledThisEpisode = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted || lossyBefore ? 0 : Math.min(exemptFrom, closedAckedMax);
         pending = null;   // WHY: a takeover that was still waiting for its retry is moot on a folder put back to before it (its `from` would be clamped to the shorter head and write a legitimately empty tail)
         log.push(`ROLLBACK to a snapshot with ${then.length} files; closedAckedMax=${closedAckedMax}`); ev('rot'); ev('rollback');
       }
@@ -388,8 +400,9 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // TWO FILES OF ONE VERSION replaced by OLDER VALID COPIES TOGETHER (round 7, review 7 item 6b): a restore tool that puts back two files at once. Families: index+bodies, checkpoint+bodies, index+checkpoint,
     // tail+`.begun` (the markers of a takeover), and the whole tails/ folder. Each file is replaced by its copy from an earlier snapshot, or removed when the snapshot had none. A single fault never looked like this.
     // Promise: nothing is served from the wrong history without a typed error or a flag (`damaged`, damagedFromLine, rolledBack, lostTakeovers); the ordinary oracle above checks exactly that.
+    // (not in an episode that already dealt a whole-folder rollback: a rollback plus a pair plus the single fault is three faults on one folder, beyond what any promise here covers)
     let pairDone = false;
-    if (!legacy && !big && snaps.length && r() < 0.15) {
+    if (!legacy && !big && snaps.length && !rolledThisEpisode && r() < 0.15) {
       const sn = snaps[Math.floor(r() * snaps.length)];
       const FAMS: Record<string, (n: string) => boolean> = {
         'index+body': (n) => /^(index\.bin|body-[0-9a-f]{16}\.bin)$/.test(n),
@@ -407,7 +420,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         for (const p of changed) { const old = sn.get(p); if (old === undefined) fs.unlinkSync(path.join(root, p)); else { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), old); } }
         rotted = true; if (fam.includes('body') || fam.startsWith('tail')) lossy = true; if (fam.startsWith('tail')) lostTakeoverFault = true;
         if (diverged && fam.startsWith('index')) staleIndexInjected = true;
-        if (fam !== 'index+ck' && !fam.startsWith('tail')) pending = null;   // WHY: like a rollback, a takeover still waiting for its retry is moot when bodies are put back to before it (its `from` would be clamped to the shorter head and write a legitimately shorter tail)
+        if (!fam.startsWith('tail')) pending = null;   // WHY: like a rollback, a takeover still waiting for its retry is moot when the head is put back to before it (its `from` would be clamped to the shorter head and write a legitimately shorter tail)
         if (fam === 'index+ck') { rollbackActive = true; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax); }   // an older index AND checkpoint is a rolled-back HEAD (the bodies stay): promised like a rollback, i.e. reported when the head is below what the high-water record saw at the last clean close
         faultsSinceClean += 2; faultNote = `pair ${fam}`; pairDone = true; log.push(`PAIR FAULT ${fam} (${changed.length} files)`); ev('rot'); ev('pair-' + fam);
       }
