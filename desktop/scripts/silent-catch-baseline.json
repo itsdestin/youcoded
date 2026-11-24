@@ -1083,7 +1083,7 @@
     "pushDrive": 1,
     "pushiCloud": 2,
     "push": 1,
-    "runHealthCheck": 2,
+    "runHealthCheck": 1,
     "writeBackupMeta": 1
   },
   "main/sync-setup-handlers.ts": {

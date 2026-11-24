@@ -88,6 +88,9 @@ const STALE_LOCK_TAKEOVER_MS = 2 * 60 * 60 * 1000;
 // L-2: this long with every backup skipped for a held lock shows the red warning.
 const BACKUP_SKIPPED_WARN_MS = 24 * 60 * 60 * 1000;
 const BACKUP_SKIPPED_CODE = 'BACKUP_SKIPPED';
+// A named upload skipped for a busy lock is tried again after this long, up to QUEUED_UPLOAD_MAX_TRIES times (about 10 minutes).
+const QUEUED_RETRY_MS = 30 * 1000;
+const QUEUED_UPLOAD_MAX_TRIES = 20;
 // A failed backup cycle counts as "lately" for this long (the hourly poll plus slack); see runHealthCheck's stale rule.
 const FAILED_CYCLE_RECENT_MS = 90 * 60 * 1000;
 // 10 min — generous because individual conversation slugs can grow to
@@ -154,7 +157,12 @@ export class SyncService extends EventEmitter {
   // be the success marker itself, which is why a failing backup still looked freshly backed up.
   private attemptMarkerPath: string;
   // When the last cycle that ended in failure finished (this app run only). The stale warning needs it: see runHealthCheck.
-  private lastFailedCycleAt: number | null = null;
+  // Per backup: when its last failed cycle finished (this app run only). See the stale rule in runHealthCheck.
+  private lastFailedAt = new Map<string, number>();
+  // Named pushes (a first upload, "Upload now") that were skipped because another sync held the lock: retried, not dropped.
+  private queuedUploads = new Set<string>();
+  private queueTries = new Map<string, number>(); // backend id -> times it was skipped and queued
+  private queueTimer: NodeJS.Timeout | null = null;
   // Why: separate once-per-UTC-day stamp for the dated ~/.claude snapshot copy —
   // distinct from the 15-min .sync-marker debounce so the snapshot runs at most
   // once per day even though the daily-snapshot poll calls push() hourly.
@@ -328,6 +336,9 @@ export class SyncService extends EventEmitter {
       clearInterval(this.snapshotTimer);
       this.snapshotTimer = null;
     }
+    if (this.queueTimer) { clearTimeout(this.queueTimer); this.queueTimer = null; }
+    this.queuedUploads.clear();
+    this.queueTries.clear();
     this.healthChecksActive = false; // an in-flight check must not reschedule
     if (this.healthTimer) {
       clearTimeout(this.healthTimer);
@@ -380,6 +391,16 @@ export class SyncService extends EventEmitter {
   // former RestoreService caller was removed in sync-legacy-demolition.
   public async getBackendById(id: string): Promise<BackendInstance | null> {
     return (await this.getBackendInstances()).find(b => b.id === id) || null;
+  }
+
+  /** When this backup was added (epoch seconds). A backup from before this was recorded gets the time of the first check that saw it. */
+  private async backendAddedEpoch(backendId: string): Promise<number> {
+    const file = path.join(this.claudeDir, 'toolkit-state', `.sync-added-${backendId}`);
+    const known = parseInt((await fs.promises.readFile(file, 'utf8').catch(() => '')).trim(), 10);
+    if (!isNaN(known)) return known;
+    const nowSec = Math.floor(Date.now() / 1000);
+    await atomicWriteAsync(file, String(nowSec)).catch(() => {}); // benign: if it cannot be written the backup just counts from now again next check
+    return nowSec;
   }
 
   /** Per-backend sync marker path for tracking individual push times. */
@@ -1026,7 +1047,7 @@ export class SyncService extends EventEmitter {
    * - With force: bypasses the 15-minute debounce (manual "Back up now")
    */
   async push(opts?: { force?: boolean; backendId?: string }): Promise<PushResult> {
-    if (this.pushing) return { success: false, errors: 0, backends: [] };
+    if (this.pushing) { this.queueNamedUpload(opts); return { success: false, errors: 0, backends: [] }; }
     this.pushing = true;
 
     try {
@@ -1048,9 +1069,11 @@ export class SyncService extends EventEmitter {
       // Acquire lock
       if (!(await this.acquireLock())) {
         this.logBackup('INFO', 'Push skipped — another sync is running', 'sync.push');
+        this.queueNamedUpload(opts);
         return { success: false, errors: 0, backends: [] };
       }
 
+      if (opts?.backendId) { this.queueTries.delete(opts.backendId); this.queuedUploads.delete(opts.backendId); }
       try {
         // Debounce check (skip if force or targeting a specific backend)
         if (!opts?.force && !opts?.backendId && !this.debounceCheck(this.attemptMarkerPath, PUSH_DEBOUNCE_MIN)) {
@@ -1120,7 +1143,8 @@ export class SyncService extends EventEmitter {
 
             // Write per-backend marker for individual status tracking
             // WHY only on success (D-19): a failed upload used to stamp this too, so the row read "backed up just now".
-            if (backendErrors === 0) this.debounceTouch(this.perBackendMarkerPath(instance.id));
+            if (backendErrors === 0) { this.debounceTouch(this.perBackendMarkerPath(instance.id)); this.lastFailedAt.delete(instance.id); }
+            else this.lastFailedAt.set(instance.id, Date.now());
             // pushDrive/pushiCloud handle their own warning clear on success
           } catch (e) {
             this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push', { stderr: String(e).slice(0, 500) });
@@ -1129,6 +1153,7 @@ export class SyncService extends EventEmitter {
             // String(e) includes 'ENOENT' for spawn failures, letting the classifier
             // catch RCLONE_MISSING via its stderr substring match.
             await this.recordBackendFailure(instance, String(e));
+            this.lastFailedAt.set(instance.id, Date.now());
             if (instance.type === 'drive' || instance.type === 'icloud') snapshotOutcomes.push(false);
             totalErrors++;
           } finally {
@@ -1153,17 +1178,14 @@ export class SyncService extends EventEmitter {
         // Write backup-meta.json on success
         if (totalErrors === 0) await this.writeBackupMeta();
 
-        // WHY two markers (backup fixes 2026-11-18, D-19): this one used to be touched after EVERY cycle, failed or not,
-        // so "Last backed up" and the 24-hour "Extra backups are stale" safety net could never see a failure. The attempt
-        // marker (debounce, after the sync — critical ordering) is always written; the success marker only when a backup
-        // really finished with 0 errors. An unreachable account therefore ages the success marker until the warning fires.
+        // WHY markers (backup fixes 2026-11-18, D-19 + review F-H): this one used to be touched after EVERY cycle, failed or
+        // not, so "Last backed up" could never see a failure. The attempt marker (the 15-minute debounce, after the sync —
+        // critical ordering) is always written. The overall success marker below means "some backup finished with 0 errors
+        // this cycle" and feeds only the "Last backed up" time. The 24-hour "Extra backups are stale" warning does NOT read
+        // it: it reads each backup's OWN success marker (written above only when that backup had 0 errors), so one healthy
+        // backup can never hide another that keeps failing.
         this.debounceTouch(this.attemptMarkerPath);
-        if (snapshotOutcomes.some(Boolean)) {
-          this.debounceTouch(this.syncMarkerPath);
-          this.lastFailedCycleAt = null;
-        } else if (totalErrors > 0) {
-          this.lastFailedCycleAt = Date.now();
-        }
+        if (snapshotOutcomes.some(Boolean)) this.debounceTouch(this.syncMarkerPath);
 
         this.emit('push-complete', { errors: totalErrors });
         return { success: totalErrors === 0, errors: totalErrors, backends: pushedIds };
@@ -1172,7 +1194,43 @@ export class SyncService extends EventEmitter {
       }
     } finally {
       this.pushing = false;
+      if (this.queuedUploads.size > 0) this.armQueueTimer(0); // a finished push is the moment a queued upload can go
     }
+  }
+
+  /**
+   * WHY a queue (review F-I): the first upload after adding a backup is started in the background, and a push skipped
+   * because another sync holds the lock used to leave no trace — the new backup then waited for the next automatic
+   * (non-forced) hourly push, which may do nothing that day. A push NAMING a backup (first upload, "Upload now") that
+   * is skipped for a busy lock is now remembered and tried again (right after our own push ends, else every 30 seconds,
+   * up to 20 tries); the failure it may then meet is recorded as the usual red warning on that backup.
+   */
+  private queueNamedUpload(opts?: { force?: boolean; backendId?: string }): void {
+    const id = opts?.backendId;
+    if (!id) return; // the hourly poll retries itself
+    const tries = (this.queueTries.get(id) ?? 0) + 1;
+    if (tries > QUEUED_UPLOAD_MAX_TRIES) {
+      this.queueTries.delete(id);
+      this.queuedUploads.delete(id);
+      this.logBackup('WARN', `${id}: gave up waiting for the other backup to finish`, 'sync.push');
+      return;
+    }
+    this.queueTries.set(id, tries);
+    this.queuedUploads.add(id);
+    this.armQueueTimer(QUEUED_RETRY_MS);
+  }
+
+  private armQueueTimer(delayMs: number): void {
+    if (this.queueTimer) { if (delayMs > 0) return; clearTimeout(this.queueTimer); }
+    this.queueTimer = setTimeout(() => {
+      this.queueTimer = null;
+      const next = this.queuedUploads.values().next();
+      if (next.done) return;
+      this.queuedUploads.delete(next.value);
+      // A skip queues it again (counting the try); a run that starts clears the count in push().
+      this.push({ force: true, backendId: next.value }).catch((e) => this.logBackup('ERROR', `Queued upload failed: ${e}`, 'sync.push'));
+    }, delayMs);
+    this.queueTimer.unref?.();
   }
 
   // Conversation Index Management: FULLY RETIRED from SyncService (Plan 2c).
@@ -1292,31 +1350,48 @@ export class SyncService extends EventEmitter {
         });
       }
     } else {
+      // THE STALE WARNING (backup fixes 2026-11-18, D-19 + review F-H). Per backup, not per app: a backup counts as stale
+      // when it has had no success for 24 hours (its own success marker; a backup that NEVER succeeded counts from the day
+      // it was added) AND one of its backup cycles failed in this app run within the last 90 minutes. The second condition
+      // is what keeps a laptop that was merely asleep, offline or closed from showing it the moment it wakes, seconds
+      // before its first backup runs. What a person sees:
+      //   app left open, backup failing      -> within ~5 minutes of the first failing hourly cycle after the 24 hours, and it
+      //                                         stays (every failing hourly cycle renews the 90 minutes); a hidden window shows it
+      //                                         within ~5 minutes of someone looking;
+      //   app restarted every day            -> not at launch; the launch backup then fails within seconds to minutes and the
+      //                                         next 5-minute check shows it (closing the app inside that 5 minutes misses it);
+      //   laptop asleep overnight            -> nothing on wake; if the morning's backup succeeds, never; if it fails, within
+      //                                         ~5 minutes of that failure;
+      //   a second backup that is healthy    -> NO effect: the failing backup still raises it;
+      //   a backup that never once succeeded -> raises it once it is 24 hours old (counted from when it was added; a backup
+      //                                         from before this was recorded counts from the first check that saw it) and its
+      //                                         cycles are failing.
+      // Not shown: a backup whose cycles are skipped (another sync running — that has its own 24-hour warning) or an app that
+      // is hidden with no phone connected (checks pause).
       try {
-        const markerText = fs.readFileSync(this.syncMarkerPath, 'utf8').trim();
-        const lastEpoch = parseInt(markerText, 10);
-        if (!isNaN(lastEpoch)) {
-          const age = Math.floor(Date.now() / 1000) - lastEpoch;
-          // WHY also "a cycle failed lately" (D-19): without it a laptop that was asleep or closed for a day would show this the
-          // moment it wakes, seconds before its first backup runs. A backup that fails raises it; one that succeeds writes
-          // the marker and the warning never appears. The 90 minutes is the hourly poll plus slack: a failure older than that
-          // happened before the last sleep and says nothing about now.
-          const failedLately = this.lastFailedCycleAt !== null && Date.now() - this.lastFailedCycleAt < FAILED_CYCLE_RECENT_MS;
-          if (age >= 86400 && failedLately) {
-            warnings.push({
-              code: 'PERSONAL_STALE',
-              level: 'warn',
-              // Named for what the marker actually tracks: the legacy
-              // Drive/iCloud snapshot pushes. GitHub sync spaces has its own
-              // status in the panel and never stamps this marker.
-              title: 'Extra backups are stale',
-              body: "Your additional cloud backups (Drive or iCloud) haven't succeeded in over 24 hours. Check Backup & Sync for details.",
-              dismissible: true,
-              createdEpoch: now,
-            });
-          }
+        const nowSec = Math.floor(Date.now() / 1000);
+        let stale = false;
+        for (const b of syncBackends) {
+          if (b.type !== 'drive' && b.type !== 'icloud') continue;
+          if (b.type === 'drive' && isRunningOnPhone()) continue;
+          const marker = parseInt((await fs.promises.readFile(this.perBackendMarkerPath(b.id), 'utf8').catch(() => '')).trim(), 10);
+          const since = !isNaN(marker) ? marker : await this.backendAddedEpoch(b.id);
+          const failedAt = this.lastFailedAt.get(b.id);
+          if (nowSec - since >= 86400 && failedAt !== undefined && Date.now() - failedAt < FAILED_CYCLE_RECENT_MS) stale = true;
         }
-      } catch {}
+        if (stale) {
+          warnings.push({
+            code: 'PERSONAL_STALE',
+            level: 'warn',
+            // Named for what the markers actually track: the Drive/iCloud snapshot pushes. GitHub sync spaces has its
+            // own status in the panel and never stamps them.
+            title: 'Extra backups are stale',
+            body: "Your additional cloud backups (Drive or iCloud) haven't succeeded in over 24 hours. Check Backup & Sync for details.",
+            dismissible: true,
+            createdEpoch: now,
+          });
+        }
+      } catch (e) { this.logBackup('WARN', `Stale-backup check failed: ${String(e)}`, 'sync.health'); }
     }
 
     // (The unsynced-projects discovery warning was removed in

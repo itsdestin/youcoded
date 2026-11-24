@@ -2494,7 +2494,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           config: { PERSONAL_SYNC_REPO: 'https://github.com/you/claude-sync' },
           lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 600, lastError: null,
         }] : []),
-      ].filter(() => syncWarnMode !== 'damaged'), // an unreadable settings file reads as no backups
+      ].filter(() => syncWarnMode !== 'damaged' && syncWarnMode !== 'write-failed'), // an unusable settings file reads as no backups
       lastSyncEpoch: Math.floor(SYNC_NOW / 1000) - 120,
       backupMeta: {
         last_backup: new Date(SYNC_NOW - 300_000).toISOString(),
@@ -2503,7 +2503,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       },
       // `?syncWarn=timeout` (small-fixes-2): the Google Drive backup's "timed out" warning,
       // made by the REAL classifier so its fix button reads whatever main writes ("Try again").
-      warnings: syncWarnMode === 'restored' || syncWarnMode === 'salvaged' || syncWarnMode === 'damaged'
+      warnings: syncWarnMode === 'restored' || syncWarnMode === 'salvaged' || syncWarnMode === 'damaged' || syncWarnMode === 'write-failed'
         // The real wording (shared with main), as the backend would put it in the list (backup fixes 2026-11-18, B-2).
         ? [{ ...configNotice(syncWarnMode, 2), createdEpoch: 0 }]
         : syncWarnMode === 'timeout'

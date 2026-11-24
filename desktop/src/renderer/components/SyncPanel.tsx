@@ -769,6 +769,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       case 'dismiss':
         await handleDismiss(w.code);
         break;
+      case 'recheck-settings':
+        // Asking for the status reads the settings file again, which retries a repair that could not be saved.
+        try { await refreshStatus(); setActionFailure(null); }
+        catch (e) { failAction("Couldn't check the backup settings", e, () => { void handleFixAction(w); }); }
+        break;
       case 'start-fresh':
         // Sets the unreadable settings file aside (kept, dated) so backups can be set up again; the notice goes with it.
         try {

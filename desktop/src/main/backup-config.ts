@@ -53,11 +53,19 @@ export interface RecoveryNote {
   backups: number;
 }
 
-export type BackupConfigRead = { ok: true; config: ConfigObject } | { ok: false; reason: string };
+/** `unreadable`: damaged and nothing could be restored or salvaged (the only case "Start fresh" is for).
+ *  `write-failed`: a repair was possible but could not be SAVED (full disk, permissions): nothing was changed, and retrying may work. */
+export type ConfigFailureKind = 'unreadable' | 'write-failed';
+export type BackupConfigRead = { ok: true; config: ConfigObject } | { ok: false; kind: ConfigFailureKind; reason: string };
 
-/** Thrown by `updateBackupConfig` when the file is damaged and nothing could be repaired: nothing was written. */
+/** Thrown by `updateBackupConfig` when the file could not be used and nothing was written. */
 export class ConfigDamagedError extends Error {
-  constructor() { super("The saved backup settings couldn't be read, so nothing was changed."); this.name = 'ConfigDamagedError'; }
+  constructor(readonly kind: ConfigFailureKind = 'unreadable') {
+    super(kind === 'write-failed'
+      ? "The saved backup settings needed repairing but the repair couldn't be saved, so nothing was changed."
+      : "The saved backup settings couldn't be read, so nothing was changed.");
+    this.name = 'ConfigDamagedError';
+  }
 }
 
 const goodPath = (file: string) => `${file}.good`;
@@ -142,7 +150,8 @@ const isBackupEntry = (v: any) => v && typeof v === 'object' && !Array.isArray(v
 /**
  * Keep what can be read from a cut-off settings file. Only values that are COMPLETE in the text are kept, in order,
  * up to the first break; a backup entry cut off halfway is dropped, never completed. Needs at least one complete
- * backup entry (without one there is nothing worth keeping, and migrating from older keys would be a guess).
+ * backup entry, or a readable `setup_completed: true` (anything else is not worth keeping, and migrating from older
+ * keys would be a guess).
  */
 export function salvageConfigText(raw: string): { config: ConfigObject; backups: number } | null {
   let i = skipWs(raw, 0);
@@ -188,7 +197,12 @@ export function salvageConfigText(raw: string): { config: ConfigObject; backups:
     i = e;
   }
   const backups = Array.isArray(out.storage_backends) ? out.storage_backends.length : 0;
-  return backups > 0 ? { config: out, backups } : null;
+  // WHY also "setup_completed was readable" (review F-F): a file cut off inside the list used to give up when no backup
+  // entry was complete, and an install whose setup flag WAS readable then looked brand new and re-ran the setup wizard.
+  // The flag is kept; the list is then honestly empty ("0 backups", and the person is asked to check), never guessed.
+  if (backups === 0 && out.setup_completed !== true) return null;
+  if (!Array.isArray(out.storage_backends)) out.storage_backends = [];
+  return { config: out, backups };
 }
 
 // ---------------------------------------------------------------------------
@@ -197,16 +211,54 @@ export function salvageConfigText(raw: string): { config: ConfigObject; backups:
 
 const countBackups = (c: ConfigObject) => (Array.isArray(c.storage_backends) ? c.storage_backends.length : 0);
 
-/** Write `config` safely: serialise, check that the text parses back, write it atomically, read the file back, and only
- *  then refresh the last-known-good copy. Throws if the main write fails; a failed copy is only logged. */
-async function writeInner(file: string, config: ConfigObject): Promise<void> {
-  const text = JSON.stringify(config, null, 2);
+/** The text written to disk. WHY `storage_backends` LAST (review F-F): a cut-off file loses its tail, so the small values
+ *  (`setup_completed`, the older flat keys) written first survive a cut that the long backup list does not. */
+function serialize(config: ConfigObject): string {
+  const { storage_backends, ...rest } = config;
+  return JSON.stringify(storage_backends === undefined ? rest : { ...rest, storage_backends }, null, 2);
+}
+
+/**
+ * Write `config` safely. THE INVARIANT (review F-D): at every instant the last-known-good copy holds either what the
+ * live file holds or what the live file is ABOUT to hold (a change that was asked for and serialises fine) — never
+ * something OLDER than the live file. So after a crash at any point, a later restore can bring back a change that was
+ * made a moment late, but never a backup the person had already removed. That is why the copy is refreshed BEFORE the
+ * live file is written; if the live write then fails or does not read back identically, the copy is put back to what it
+ * was (a change reported as failed must not come back later).
+ *
+ * `explicit` = the person asked for this change (add / remove / pause / save). A silent write (a migration, the
+ * setup flag) never replaces a copy that holds MORE backups than the new content (review F-A: a first-run-shaped file
+ * must not overwrite a good copy that still holds the person's backups).
+ */
+async function writeInner(file: string, config: ConfigObject, explicit: boolean): Promise<void> {
+  const text = serialize(config);
   if (classifyConfigText(text).kind !== 'ok') throw new Error('The settings could not be written safely.');
-  await atomicWrite(file, text);
-  const landed = await readText(file);
-  if (!('text' in landed) || landed.text !== text) return; // do not bless a copy of something that did not land
-  try { await atomicWrite(goodPath(file), text); }
-  catch (e) { log('WARN', 'backup-config', 'Could not refresh the last-known-good settings copy', { error: String(e) }); }
+  const prev = await readText(goodPath(file));
+  const prevText = 'text' in prev ? prev.text : null;
+  let refreshGood = true;
+  if (!explicit && prevText !== null) {
+    const pc = classifyConfigText(prevText);
+    if (pc.kind === 'ok' && countBackups(pc.config) > countBackups(config)) refreshGood = false;
+  }
+  let copied = false;
+  if (refreshGood) {
+    try { await atomicWrite(goodPath(file), text); copied = true; }
+    catch (e) { log('WARN', 'backup-config', 'Could not refresh the last-known-good settings copy', { error: String(e) }); }
+  }
+  try {
+    await atomicWrite(file, text);
+    const landed = await readText(file);
+    if (!('text' in landed) || landed.text !== text) throw new Error('The settings file did not read back as written.');
+  } catch (e) {
+    if (copied) {
+      // Put the copy back to what it was: a change reported as failed must not return later from the copy.
+      try {
+        if (prevText !== null) await atomicWrite(goodPath(file), prevText);
+        else await fs.promises.unlink(goodPath(file));
+      } catch (e2) { log('WARN', 'backup-config', 'Could not put the settings copy back after a failed write', { error: String(e2) }); }
+    }
+    throw e;
+  }
 }
 
 async function writeNote(file: string, note: RecoveryNote): Promise<void> {
@@ -214,8 +266,11 @@ async function writeNote(file: string, note: RecoveryNote): Promise<void> {
   catch (e) { log('WARN', 'backup-config', 'Could not write the recovery note', { error: String(e) }); }
 }
 
-/** The file is not usable as it stands. Try the good copy, then a salvage; otherwise report it damaged. */
-async function repair(file: string, judged: { text: string } | { unreadable: string }, reason: string): Promise<BackupConfigRead> {
+type Judged = { text: string } | { unreadable: string } | { missing: true };
+
+/** The file is not usable as it stands (damaged, unreadable, blank or missing beside a good copy). Try the good copy,
+ *  then a salvage; otherwise report it unreadable. A repair that cannot be SAVED is `write-failed`, never "damaged". */
+async function repair(file: string, judged: Judged, reason: string): Promise<BackupConfigRead> {
   let replacement: { config: ConfigObject; kind: RecoveryNote['kind'] } | null = null;
   const good = await readText(goodPath(file));
   if ('text' in good) {
@@ -226,32 +281,58 @@ async function repair(file: string, judged: { text: string } | { unreadable: str
     const s = salvageConfigText(judged.text);
     if (s) replacement = { config: s.config, kind: 'salvaged' };
   }
-  if (!replacement) return { ok: false, reason };
+  if (!replacement) return { ok: false, kind: 'unreadable', reason };
 
-  // Another process may have repaired it a moment ago: only move aside what was judged.
+  // Another process may have repaired it a moment ago: only touch what was judged.
   const again = await readText(file);
-  const same = 'text' in judged ? 'text' in again && again.text === judged.text : 'unreadable' in again;
+  const same = 'missing' in judged ? 'missing' in again
+    : 'text' in judged ? 'text' in again && again.text === judged.text
+    : 'unreadable' in again;
   if (!same) return readInner(file);
 
-  let aside: string;
-  try { aside = await moveAside(file); }
-  catch (e) { return { ok: false, reason: `${reason}; could not move it aside: ${String((e as Error)?.message ?? e)}` }; }
+  let aside: string | null = null;
+  if (!('missing' in judged)) {
+    try { aside = await moveAside(file); }
+    catch (e) {
+      // Gone already: the other copy of the app repaired it between our check and our move. Read what is there now.
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return readInner(file);
+      return { ok: false, kind: 'write-failed', reason: `${reason}; could not move it aside: ${String((e as Error)?.message ?? e)}` };
+    }
+    // The move acts on the path: if what we moved is not the text we judged (someone repaired it in between), put it back.
+    if ('text' in judged) {
+      const moved = await readText(path.join(path.dirname(file), aside));
+      if (!('text' in moved) || moved.text !== judged.text) {
+        // benign: the undo is best effort; if the path was re-made meanwhile the re-read just below finds the live file
+        try { await fs.promises.rename(path.join(path.dirname(file), aside), file); } catch { /* re-made meanwhile */ }
+        return readInner(file);
+      }
+    }
+  }
   try {
-    await writeInner(file, replacement.config);
+    await writeInner(file, replacement.config, true);
   } catch (e) {
     // Put the original back rather than leave no file at all.
-    // benign: this is the undo of a failed repair; the failure itself is returned to the caller just below
-    try { await fs.promises.rename(path.join(path.dirname(file), aside), file); } catch { /* nothing more to do */ }
-    return { ok: false, reason: `${reason}; could not write the repaired file: ${String((e as Error)?.message ?? e)}` };
+    if (aside) {
+      // benign: this is the undo of a failed repair; the failure itself is returned to the caller just below
+      try { await fs.promises.rename(path.join(path.dirname(file), aside), file); } catch { /* nothing more to do */ }
+    }
+    return { ok: false, kind: 'write-failed', reason: `${reason}; could not write the repaired file: ${String((e as Error)?.message ?? e)}` };
   }
-  await writeNote(file, { kind: replacement.kind, at: new Date().toISOString(), damagedCopy: aside, backups: countBackups(replacement.config) });
-  log('WARN', 'backup-config', `Settings file was damaged (${reason}); ${replacement.kind === 'restored' ? 'restored from the last saved copy' : 'kept what could be read'}`, { damagedCopy: aside });
+  await writeNote(file, { kind: replacement.kind, at: new Date().toISOString(), damagedCopy: aside ?? '(the file was missing)', backups: countBackups(replacement.config) });
+  log('WARN', 'backup-config', `Settings file was unusable (${reason}); ${replacement.kind === 'restored' ? 'restored from the last saved copy' : 'kept what could be read'}`, { damagedCopy: aside });
   return { ok: true, config: replacement.config };
 }
 
 async function readInner(file: string): Promise<BackupConfigRead> {
   const read = await readText(file);
-  if ('missing' in read) return { ok: true, config: {} };
+  // WHY a missing file with a good copy is restored too (review F-A): a stop between "damaged file moved aside" and
+  // "repaired file written" leaves exactly that, and reading it as a fresh first run would let the next harmless write
+  // replace the copy. A true first run has no good copy either, so "missing + good copy" is the restore case.
+  if ('missing' in read) {
+    const good = await readText(goodPath(file));
+    if ('text' in good && classifyConfigText(good.text).kind === 'ok') return repair(file, { missing: true }, 'the file was missing');
+    return { ok: true, config: {} };
+  }
   if ('unreadable' in read) return repair(file, read, read.unreadable);
   const c = classifyConfigText(read.text);
   if (c.kind === 'ok') return { ok: true, config: c.config };
@@ -262,35 +343,42 @@ async function readInner(file: string): Promise<BackupConfigRead> {
   return { ok: true, config: {} };
 }
 
-/** Read the settings, repairing a damaged file first. `ok:false` means damaged and not repairable: nothing was changed. */
+/** Read the settings, repairing a damaged file first. `ok:false` means it could not be used: nothing was changed. */
 export function readBackupConfig(file: string): Promise<BackupConfigRead> {
   return queued(file, () => readInner(file));
 }
 
 /**
  * Read-modify-write the settings in one step, with the same repair as a read. `mutate` edits the object it is given
- * (or returns a replacement) and may return a value for the caller. Throws ConfigDamagedError — writing nothing —
- * when the file is damaged and could not be repaired.
+ * and may return a value for the caller. Throws ConfigDamagedError — writing nothing — when the file could not be used.
+ * `opts.explicit`: the person asked for this change (see writeInner); silent maintenance writes leave it off.
  */
-export function updateBackupConfig<T = void>(file: string, mutate: (config: ConfigObject) => T | Promise<T>): Promise<T> {
+export function updateBackupConfig<T = void>(file: string, mutate: (config: ConfigObject) => T | Promise<T>, opts: { explicit?: boolean } = {}): Promise<T> {
   return queued(file, async () => {
     const r = await readInner(file);
-    if (!r.ok) throw new ConfigDamagedError();
+    if (!r.ok) throw new ConfigDamagedError(r.kind);
     const result = await mutate(r.config);
-    await writeInner(file, r.config);
+    await writeInner(file, r.config, opts.explicit === true);
     return result;
   });
 }
 
 /**
- * "Start fresh": move a damaged file aside (kept, dated) so the person can set up again. Refuses when the file is
- * healthy or repairable — it never moves a usable file. Returns the new name, or null when there was nothing to do.
+ * "Start fresh": move an unreadable file aside (kept, dated) so the person can set up again. Refuses — answers null — when
+ * the file is healthy, repairable (a good copy or readable content exists) or only failed to be REPAIRED (a full disk
+ * is not a damaged file; review F-C). Returns the new name when it moved the file.
  */
 export function startFreshBackupConfig(file: string): Promise<string | null> {
   return queued(file, async () => {
-    if ((await readInner(file)).ok) return null;
+    const r = await readInner(file);
+    if (r.ok || r.kind !== 'unreadable') return null;
+    // Belt and braces: never set aside a file a repair could still use.
+    const good = await readText(goodPath(file));
+    if ('text' in good && classifyConfigText(good.text).kind === 'ok') return null;
+    const now = await readText(file);
+    if ('text' in now && salvageConfigText(now.text)) return null;
+    if ('missing' in now) return null;
     const aside = await moveAside(file);
-    // The good copy (if any) was unreadable too, or repair would have used it; leave it be.
     log('WARN', 'backup-config', 'Settings file moved aside at the person\'s request', { damagedCopy: aside });
     return aside;
   });
@@ -303,7 +391,7 @@ export async function readRecoveryNote(file: string): Promise<RecoveryNote | nul
   try {
     const n = JSON.parse(r.text);
     return n && (n.kind === 'restored' || n.kind === 'salvaged') && typeof n.damagedCopy === 'string' ? n : null;
-  } catch { return null; }
+  } catch { return null; } // benign: an unreadable note just means nothing to tell
 }
 
 export async function clearRecoveryNote(file: string): Promise<void> {

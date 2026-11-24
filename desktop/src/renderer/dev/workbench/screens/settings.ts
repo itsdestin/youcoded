@@ -151,6 +151,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#uploading', 'dialog'), params: { syncWarn: 'uploading' } },
   { ...settings('settings/sync#config-restored', 'dialog'), params: { syncWarn: 'restored' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#config-salvaged', 'dialog'), params: { syncWarn: 'salvaged' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  { ...settings('settings/sync#config-write-failed', 'dialog', 'error-state'), params: { syncWarn: 'write-failed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#config-damaged', 'dialog', 'error-state'), params: { syncWarn: 'damaged' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
   { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },

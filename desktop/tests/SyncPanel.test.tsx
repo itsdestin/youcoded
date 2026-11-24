@@ -312,6 +312,27 @@ describe('the saved-settings notices', () => {
   });
 });
 
+// F-I / F-C: what is there when the panel is opened later, and the write-failure notice's Try again.
+describe('opening the panel after a background upload failed, and the write-failure notice', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+  it('a failure that happened while the panel was closed shows on the backup\'s row and in its red box with Try again', async () => {
+    const api = stub({}, [RETRY_WARNING]);
+    (await api.getStatus()).backends[0].lastError = 'Backup failed'; // what the backend derives from the recorded warning
+    render(<SyncSection autoOpen />);
+    expect(await screen.findByText('Backup failed', { selector: 'div.text-3xs' })).toBeInTheDocument();
+    const retry = screen.getAllByRole('button', { name: 'Try again' })[0];
+    fireEvent.click(retry);
+    await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('drive-1'));
+  });
+  it('"Try again" on the settings-write notice reads the status again (which retries the repair)', async () => {
+    const api = stub({}, [{ code: 'CONFIG_WRITE_FAILED', level: 'danger', title: "Backup settings couldn't be saved", body: 'x', fixAction: { label: 'Try again', kind: 'recheck-settings' }, dismissible: false, createdEpoch: 0 }]);
+    render(<SyncSection autoOpen />);
+    const before = api.getStatus.mock.calls.length;
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(api.getStatus.mock.calls.length).toBeGreaterThan(before));
+  });
+});
+
 // Regression test for "YouCoded failed to start" when opening Backup & sync
 // (reported by Destin 2026-09-04, seen on the PUBLIC landing page's live demo).
 //

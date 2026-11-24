@@ -255,10 +255,10 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
     }));
     // Two days ago — past the 24h staleness threshold.
     const twoDaysAgo = Math.floor(Date.now() / 1000) - 2 * 86400;
-    fs.writeFileSync(path.join(toolkitState, '.sync-marker'), String(twoDaysAgo));
+    fs.writeFileSync(path.join(toolkitState, '.sync-marker-drive-1'), String(twoDaysAgo));
 
     const svc = makeService() as any;
-    svc.lastFailedCycleAt = Date.now() - 10 * 60_000; // the last backup cycle failed ten minutes ago
+    svc.lastFailedAt.set('drive-1', Date.now() - 10 * 60_000); // that backup's last cycle failed ten minutes ago
     await svc.runHealthCheck();
 
     const stale = (await readWarnings()).find((w) => w.code === 'PERSONAL_STALE');
@@ -664,13 +664,13 @@ describe('SyncService Drive snapshot counts every copy (B-3)', () => {
     vi.spyOn(svc, 'rclone').mockImplementation((async (args: string[]) => {
       calls.push(args);
       if (args[0] === 'lsf') return { code: 0, stdout: '2000-01-01/\n', stderr: '' };
-      const failing = failOn !== null && args.some((a) => a.includes(failOn));
+      const failing = failOn !== null && String(args[2] ?? '').includes(failOn); // by DESTINATION: the source folder name is the same for both encyclopedia copies
       return { code: failing ? 1 : 0, stdout: '', stderr: failing ? 'quota exceeded' : '' };
     }) as any);
     return { svc, calls };
   }
 
-  it.each([['encyclopedia', '/encyclopedia/'], ['skills', '/skills/mine/'], ['plans', '/plans/'], ['conversation index', 'conversation-index.json']])(
+  it.each([['encyclopedia', '/personal/encyclopedia/'], ['encyclopedia (legacy path)', 'Encyclopedia/System'], ['skills', '/skills/mine/'], ['plans', '/plans/'], ['conversation index', 'conversation-index.json']])(
     'a Drive that refuses only the %s copy is not "0 errors": no day stamp, no pruning, a red warning, no fresh success time',
     async (_n, failOn) => {
       const { svc, calls } = service(failOn);
@@ -716,7 +716,7 @@ describe('SyncService Drive snapshot counts every copy (B-3)', () => {
   });
 
   it('a failed cycle still holds off the next automatic push for 15 minutes (the attempt marker), without a success time', async () => {
-    const { svc, calls } = service('/encyclopedia/');
+    const { svc, calls } = service('/personal/encyclopedia/');
     await svc.push({ force: true });
     const before = calls.length;
     await svc.push(); // automatic, not forced
@@ -725,53 +725,173 @@ describe('SyncService Drive snapshot counts every copy (B-3)', () => {
   });
 });
 
-describe('"Extra backups are stale" (B-4)', () => {
+describe('"Extra backups are stale" (B-4, per backup)', () => {
   const tmpHome = path.join(os.tmpdir(), `sync-service-stale-${process.pid}-${Date.now()}`);
   const ts = () => path.join(tmpHome, '.claude', 'toolkit-state');
-  const drive = { id: 'drive-1', type: 'drive', syncEnabled: true, label: 'My Drive', config: {} };
-  beforeEach(() => {
-    fs.mkdirSync(ts(), { recursive: true });
-    setClaudeDirForTests(tmpHome);
-    fs.writeFileSync(path.join(ts(), '.sync-marker'), String(Math.floor(Date.now() / 1000) - 2 * 86400));
-  });
+  const mk = (id: string) => ({ id, type: 'drive', syncEnabled: true, label: id, config: {} });
+  const drive = mk('drive-1');
+  const DAY = 86400;
+  const ago = (sec: number) => String(Math.floor(Date.now() / 1000) - sec);
+  const marker = (id: string, sec: number) => fs.writeFileSync(path.join(ts(), `.sync-marker-${id}`), ago(sec));
+  const added = (id: string, sec: number) => fs.writeFileSync(path.join(ts(), `.sync-added-${id}`), ago(sec));
+  const failed = (svc: any, id: string, msAgo: number) => svc.lastFailedAt.set(id, Date.now() - msAgo);
+  beforeEach(() => { fs.mkdirSync(ts(), { recursive: true }); setClaudeDirForTests(tmpHome); });
   afterEach(async () => { vi.restoreAllMocks(); await writeWarnings([]); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
-  const health = async (setup?: (svc: any) => void) => {
+  const health = async (backends: any[], setup?: (svc: any) => void) => {
     const svc = new SyncService(tmpHome) as any;
     vi.spyOn(svc, 'probeInternet').mockResolvedValue(true);
-    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue(backends);
     setup?.(svc);
     await svc.runHealthCheck({ probeBackends: false });
     return (await readWarnings()).filter((w) => w.code === 'PERSONAL_STALE');
   };
 
   it('is not shown the moment an app wakes up with an old success time, before any backup has been tried', async () => {
-    expect(await health()).toEqual([]);
+    marker('drive-1', 2 * DAY);
+    expect(await health([drive])).toEqual([]);
   });
   it('is not shown for a failure that happened before the last sleep (older than the hourly poll plus slack)', async () => {
-    expect(await health((svc) => { svc.lastFailedCycleAt = Date.now() - 3 * 60 * 60_000; })).toEqual([]);
+    marker('drive-1', 2 * DAY);
+    expect(await health([drive], (svc) => failed(svc, 'drive-1', 3 * 60 * 60_000))).toEqual([]);
   });
-  it('is shown when the last backup cycle failed and nothing has succeeded for over a day', async () => {
-    expect(await health((svc) => { svc.lastFailedCycleAt = Date.now() - 5 * 60_000; })).toHaveLength(1);
+  it('is shown when that backup\'s last cycle failed and it has not succeeded for over a day', async () => {
+    marker('drive-1', 2 * DAY);
+    expect(await health([drive], (svc) => failed(svc, 'drive-1', 5 * 60_000))).toHaveLength(1);
   });
-  it('a success clears the memory of the failure and writes the success time', async () => {
+  it('is not shown while that backup succeeded within the day, even if a cycle just failed', async () => {
+    marker('drive-1', 3600);
+    expect(await health([drive], (svc) => failed(svc, 'drive-1', 5 * 60_000))).toEqual([]);
+  });
+  it('a second, healthy backup does not hide one that keeps failing', async () => {
+    marker('drive-1', 2 * DAY); marker('drive-2', 60);
+    expect(await health([drive, mk('drive-2')], (svc) => failed(svc, 'drive-1', 5 * 60_000))).toHaveLength(1);
+  });
+  it('a backup that never succeeded raises it once it is more than a day old and its cycles fail', async () => {
+    added('drive-1', 2 * DAY);
+    expect(await health([drive], (svc) => failed(svc, 'drive-1', 5 * 60_000))).toHaveLength(1);
+  });
+  it('a backup added an hour ago that has not succeeded yet does not', async () => {
+    added('drive-1', 3600);
+    expect(await health([drive], (svc) => failed(svc, 'drive-1', 5 * 60_000))).toEqual([]);
+  });
+  it('a backup from before the added-time was recorded counts from the first check that sees it (and that is written down)', async () => {
+    expect(await health([drive], (svc) => failed(svc, 'drive-1', 5 * 60_000))).toEqual([]);
+    expect(Date.now() / 1000 - parseInt(fs.readFileSync(path.join(ts(), '.sync-added-drive-1'), 'utf8'), 10)).toBeLessThan(60);
+  });
+  it('a success clears that backup\'s memory of failing and writes its success time and the overall one', async () => {
     const svc = new SyncService(tmpHome) as any;
     vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
     vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
     vi.spyOn(svc, 'pushDrive').mockResolvedValue(0);
-    svc.lastFailedCycleAt = Date.now();
+    failed(svc, 'drive-1', 0);
     await svc.push({ force: true });
-    expect(svc.lastFailedCycleAt).toBeNull();
-    expect(Date.now() / 1000 - parseInt(fs.readFileSync(path.join(ts(), '.sync-marker'), 'utf8'), 10)).toBeLessThan(60);
+    expect(svc.lastFailedAt.has('drive-1')).toBe(false);
+    for (const f of ['.sync-marker', '.sync-marker-drive-1']) {
+      expect(Date.now() / 1000 - parseInt(fs.readFileSync(path.join(ts(), f), 'utf8'), 10)).toBeLessThan(60);
+    }
   });
-  it('a failing cycle leaves the success time alone and remembers the failure', async () => {
+  it('a failing cycle leaves that backup\'s success time alone and remembers the failure for it only', async () => {
+    const svc = new SyncService(tmpHome) as any;
+    const other = mk('drive-2');
+    vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive, other]);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive, other]);
+    vi.spyOn(svc, 'pushDrive').mockImplementation((async (i: any) => (i.id === 'drive-1' ? 2 : 0)) as any);
+    marker('drive-1', 3 * DAY);
+    const before = fs.readFileSync(path.join(ts(), '.sync-marker-drive-1'), 'utf8');
+    await svc.push({ force: true });
+    expect(fs.readFileSync(path.join(ts(), '.sync-marker-drive-1'), 'utf8')).toBe(before);
+    expect(svc.lastFailedAt.has('drive-1')).toBe(true);
+    expect(svc.lastFailedAt.has('drive-2')).toBe(false);
+    expect(fs.existsSync(path.join(ts(), '.sync-marker-drive-2'))).toBe(true);
+  });
+  it('a push that throws also counts as that backup failing', async () => {
     const svc = new SyncService(tmpHome) as any;
     vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
     vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
-    vi.spyOn(svc, 'pushDrive').mockResolvedValue(2);
-    const before = fs.readFileSync(path.join(ts(), '.sync-marker'), 'utf8');
+    vi.spyOn(svc, 'pushDrive').mockRejectedValue(new Error('boom'));
     await svc.push({ force: true });
-    expect(fs.readFileSync(path.join(ts(), '.sync-marker'), 'utf8')).toBe(before);
-    expect(svc.lastFailedCycleAt).not.toBeNull();
+    expect(svc.lastFailedAt.has('drive-1')).toBe(true);
+  });
+});
+
+// Review F-I: a named upload (the first one after adding a backup, "Upload now") skipped for a busy lock is queued, not dropped.
+describe('a named upload skipped because another sync is running (F-I)', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-queue-${process.pid}-${Date.now()}`);
+  const drive = { id: 'drive-1', type: 'drive', syncEnabled: true, label: 'My Drive', config: {} };
+  beforeEach(() => {
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'toolkit-state'), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); await writeWarnings([]); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+
+  function service(lockAnswers: boolean[]) {
+    const svc = new SyncService(tmpHome) as any;
+    vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
+    vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
+    const acquire = vi.spyOn(svc, 'acquireLock').mockImplementation(async () => lockAnswers.shift() ?? true);
+    const pushDrive = vi.spyOn(svc, 'pushDrive').mockResolvedValue(0);
+    return { svc, acquire, pushDrive };
+  }
+
+  it('is tried again after a short wait and then runs', async () => {
+    const { svc, pushDrive } = service([false]);
+    expect(await svc.push({ force: true, backendId: 'drive-1' })).toMatchObject({ success: false, backends: [] });
+    expect(pushDrive).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.waitFor(() => expect(pushDrive).toHaveBeenCalledTimes(1));
+  });
+  it('keeps trying while the lock stays busy, and stops asking once it ran', async () => {
+    const { svc, acquire, pushDrive } = service([false, false]);
+    await svc.push({ force: true, backendId: 'drive-1' });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.waitFor(() => expect(pushDrive).toHaveBeenCalledTimes(1));
+    const tries = acquire.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(acquire.mock.calls.length).toBe(tries);
+  });
+  it('gives up after about ten minutes of a busy lock rather than asking forever', async () => {
+    const { svc, acquire } = service(Array(100).fill(false));
+    await svc.push({ force: true, backendId: 'drive-1' });
+    for (let i = 0; i < 30; i++) await vi.advanceTimersByTimeAsync(31_000);
+    const tries = acquire.mock.calls.length;
+    expect(tries).toBeLessThanOrEqual(22);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(acquire.mock.calls.length).toBe(tries);
+  });
+  it('the hourly poll (no backup named) is not queued: it retries itself', async () => {
+    const { svc, acquire } = service([false]);
+    await svc.push();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(acquire).toHaveBeenCalledTimes(1);
+  });
+  it('a push skipped because this very service is already pushing is queued too', async () => {
+    const { svc, pushDrive } = service([]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    pushDrive.mockImplementationOnce(async () => { await gate; return 0; });
+    const first = svc.push({ force: true, backendId: 'drive-1' });
+    await vi.waitFor(() => expect(pushDrive).toHaveBeenCalledTimes(1));
+    expect(await svc.push({ force: true, backendId: 'drive-1' })).toMatchObject({ success: false });
+    release();
+    await first;
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(pushDrive).toHaveBeenCalledTimes(2)); // the skipped one ran once the first finished
+  });
+  it('stopping the service drops the queue', async () => {
+    const { svc, pushDrive } = service([false]);
+    await svc.push({ force: true, backendId: 'drive-1' });
+    svc.stop();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(pushDrive).not.toHaveBeenCalled();
+  });
+  it('a failure of the queued upload is recorded as the usual red warning on that backup (so it is there when the panel is next opened)', async () => {
+    const { svc, pushDrive } = service([false]);
+    pushDrive.mockImplementation((async () => { await (svc as any).recordBackendFailure(drive, 'quota exceeded'); return 1; }) as any);
+    await svc.push({ force: true, backendId: 'drive-1' });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.waitFor(async () => expect((await readWarnings()).some((w) => w.backendId === 'drive-1' && w.level === 'danger')).toBe(true));
   });
 });
 

@@ -33,7 +33,8 @@ import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing, space
 import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 import { atomicWrite } from './atomic-write';
 import { configNotice } from '../shared/backup-config-notices';
-import { readBackupConfig, updateBackupConfig, startFreshBackupConfig, readRecoveryNote, clearRecoveryNote } from './backup-config';
+import { readBackupConfig, updateBackupConfig, startFreshBackupConfig, readRecoveryNote, clearRecoveryNote, ConfigDamagedError } from './backup-config';
+import { log } from './logger';
 import { syncSpacesBackupNow } from './sync-spaces/service';
 import { targetForBackend } from './sync-spaces/backup-targets';
 import type { BackupTarget } from './sync-spaces/daily-backup';
@@ -90,7 +91,9 @@ export type SyncFixAction =
   | { label: string; kind: 'retry'; payload: { backendId: string } }
   | { label: string; kind: 'dismiss' }
   // Moves an unreadable backup-settings file aside so backups can be set up again (backup fixes 2026-11-18, B-2).
-  | { label: string; kind: 'start-fresh' };
+  | { label: string; kind: 'start-fresh' }
+  // Reads the settings file again (which retries a repair that could not be saved).
+  | { label: string; kind: 'recheck-settings' };
 
 /**
  * A single connected cloud backend instance.
@@ -359,14 +362,22 @@ export async function readBackendInstances(file: string = configPath): Promise<B
   const r = await readBackupConfig(file);
   if (!r.ok) return [];
   if (Array.isArray(r.config.storage_backends)) return r.config.storage_backends;
-  // Auto-migrate from flat keys on first read
-  return updateBackupConfig(file, (config) => {
-    if (Array.isArray(config.storage_backends)) return config.storage_backends as BackendInstance[]; // another caller got there first
-    const migrated = migrateConfigToV2(config);
-    config.storage_backends = migrated;
-    syncLegacyKeys(config);
+  // Auto-migrate from flat keys on first read. The list is computed from what was just read, so a migration that cannot be
+  // SAVED (full disk, read-only folder) still answers with the right list for this read instead of "no backups" (review F-G);
+  // it is logged, and tried again on the next read.
+  const migrated = migrateConfigToV2({ ...r.config });
+  try {
+    return await updateBackupConfig(file, (config) => {
+      if (Array.isArray(config.storage_backends)) return config.storage_backends as BackendInstance[]; // another caller got there first
+      config.storage_backends = migrated;
+      syncLegacyKeys(config);
+      return migrated;
+    });
+  } catch (e) {
+    if (e instanceof ConfigDamagedError) return []; // the file became unusable between the two reads: the settings notice says so
+    log('WARN', 'sync-state', 'Could not save the migrated backup list; using it for now', { error: String(e) });
     return migrated;
-  }).catch(() => []); // benign: unreadable settings already read as "no backups"; the notice about it comes from the settings-file check
+  }
 }
 
 // --- The settings file's own health, told to the person (backup fixes 2026-11-18, B-2) ---
@@ -374,7 +385,8 @@ export async function readBackendInstances(file: string = configPath): Promise<B
 const CONFIG_RESTORED_CODE = 'CONFIG_RESTORED';
 const CONFIG_SALVAGED_CODE = 'CONFIG_SALVAGED';
 const CONFIG_DAMAGED_CODE = 'CONFIG_DAMAGED';
-export const CONFIG_HEALTH_CODES = [CONFIG_RESTORED_CODE, CONFIG_SALVAGED_CODE, CONFIG_DAMAGED_CODE];
+const CONFIG_WRITE_FAILED_CODE = 'CONFIG_WRITE_FAILED';
+export const CONFIG_HEALTH_CODES = [CONFIG_RESTORED_CODE, CONFIG_SALVAGED_CODE, CONFIG_DAMAGED_CODE, CONFIG_WRITE_FAILED_CODE];
 
 /**
  * The notices about the saved backup settings: one after the app repaired a damaged file on its own (until dismissed),
@@ -384,7 +396,7 @@ export const CONFIG_HEALTH_CODES = [CONFIG_RESTORED_CODE, CONFIG_SALVAGED_CODE, 
 export async function configHealthWarnings(file: string = configPath): Promise<SyncWarning[]> {
   const now = Math.floor(Date.now() / 1000);
   const read = await readBackupConfig(file);
-  if (!read.ok) return [{ ...configNotice('damaged'), createdEpoch: now }];
+  if (!read.ok) return [{ ...configNotice(read.kind === 'write-failed' ? 'write-failed' : 'damaged'), createdEpoch: now }];
   const note = await readRecoveryNote(file);
   if (!note) return [];
   return [{ ...configNotice(note.kind, note.backups), createdEpoch: Math.floor(Date.parse(note.at) / 1000) || now }];
@@ -596,7 +608,7 @@ export async function setSyncConfig(
     }
     if (updates.SYNC_WIFI_ONLY !== undefined) existing.SYNC_WIFI_ONLY = updates.SYNC_WIFI_ONLY;
     return { ...existing };
-  });
+  }, { explicit: true });
 
   const backends: BackendInstance[] = existing.storage_backends || [];
   return {
@@ -622,7 +634,7 @@ export async function addBackend(
   // browser, so "offered nowhere" has to hold in the backend. Same plain words the rest of the fix uses.
   if (instance.type === 'github') throw new Error('GitHub backups are no longer supported.');
   if (instance.type === 'drive' && isRunningOnPhone()) throw new Error("Google Drive backup isn't available on this phone.");
-  return updateBackupConfig(configPath, (config) => {
+  const added = await updateBackupConfig(configPath, (config) => {
     const backends: BackendInstance[] = config.storage_backends || migrateConfigToV2(config);
     const id = generateBackendId(instance.type, instance.label);
 
@@ -639,7 +651,11 @@ export async function addBackend(
     config.storage_backends = backends;
     syncLegacyKeys(config);
     return newInstance;
-  });
+  }, { explicit: true });
+  // When it was added: the stale-backup warning counts a backup that never succeeded from this moment (sync-service.ts).
+  await atomicWrite(path.join(claudeDir, 'toolkit-state', `.sync-added-${added.id}`), String(Math.floor(Date.now() / 1000)))
+    .catch((e) => log('WARN', 'sync-state', 'Could not record when the backup was added', { error: String(e) }));
+  return added;
 }
 
 /**
@@ -650,12 +666,14 @@ export async function removeBackend(id: string): Promise<void> {
     const backends: BackendInstance[] = config.storage_backends || [];
     config.storage_backends = backends.filter(b => b.id !== id);
     syncLegacyKeys(config);
-  });
+  }, { explicit: true });
 
   // Clean up per-backend marker file. The legacy .sync-error-<id> file is
   // retired as of the sync-warnings refactor — startup cleanup handles it.
   const markerPath = path.join(claudeDir, 'toolkit-state', `.sync-marker-${id}`);
   try { await fs.promises.unlink(markerPath); } catch { /* may not exist */ }
+  // benign: a backup from before this was recorded has no added-time file
+  try { await fs.promises.unlink(path.join(claudeDir, 'toolkit-state', `.sync-added-${id}`)); } catch { /* may not exist */ }
 
   // Clear any outstanding warnings scoped to this backend so a removed backend
   // doesn't leave a phantom red dot forever.
@@ -682,7 +700,7 @@ export async function updateBackend(
     config.storage_backends = backends;
     syncLegacyKeys(config);
     return existing;
-  });
+  }, { explicit: true });
 }
 
 // --- "A backup copy is running" (backup fixes 2026-11-18, B-1) ---
@@ -846,13 +864,20 @@ export function wasDismissedThisRun(code: string): boolean {
  * (enforced server-side so UI bugs can't silence danger-level push failures).
  */
 export async function dismissWarning(code: string): Promise<void> {
+  // WHY first, and not only when the warning is already stored (review F-E): the panel builds the repair notice from the
+  // settings file itself, so it can be on screen before any health check has stored it. Dismissing must end it either way,
+  // or the notice would return on the next launch.
+  if (code === CONFIG_RESTORED_CODE || code === CONFIG_SALVAGED_CODE) {
+    dismissedThisRun.add(code);
+    await clearRecoveryNote(configPath);
+    const stored = await readWarnings();
+    if (stored.some((w) => w.code === code)) await writeWarnings(stored.filter((w) => w.code !== code));
+    return;
+  }
   const all = await readWarnings();
   const target = all.find((w) => w.code === code);
   if (!target || !target.dismissible) return;
   dismissedThisRun.add(code);
-  // WHY (B-2): the repair notice is kept on disk until the person has seen it; dismissing it must end it, or it would
-  // come back on the next launch.
-  if (code === CONFIG_RESTORED_CODE || code === CONFIG_SALVAGED_CODE) await clearRecoveryNote(configPath);
   const filtered = all.filter((w) => w !== target);
   await writeWarnings(filtered);
 }
