@@ -109,6 +109,14 @@ interface Props {
   updateStatus: UpdateStatus;
 }
 
+// WHY (Destin, 2026-11-23): each release's notes open with a "**Claude Code CLI baseline:** …"
+// line for the release team. It means nothing to users, so the popup leaves it out; the file on
+// GitHub keeps it.
+const BASELINE_LINE = /^\s*\*\*Claude Code CLI baseline:\*\*.*(?:\r?\n)?/gm;
+function withoutBaseline(body: string): string {
+  return body.replace(BASELINE_LINE, '').trim();
+}
+
 export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   const [data, setData] = useState<ChangelogData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -438,27 +446,17 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // placeholder showed at the top of the official notes. The parsed entries drop all three,
     // and both views now look the same. The raw-markdown branch below is only a fallback for a
     // file with no version headings at all.
-    // Filter by CHRONOLOGICAL position, not semver. CHANGELOG.md is authored
-    // top-newest-bottom-oldest, so source order is release order. Semver math breaks
-    // when a project resets its version numbers (e.g. YouCoded went 2.4.0 → 1.0.0);
-    // "older" entries can semver-compare as "newer." Position-based filter handles
-    // resets correctly.
-    const currentIdx = data.entries.findIndex(e => e.version === updateStatus.current);
     let shown: ChangelogEntry[];
     if (!updateStatus.update_available) {
       // No update waiting: every version, newest first.
       shown = data.entries;
-    } else if (currentIdx === -1) {
-      // User's current version isn't in the changelog (never-released local build,
-      // stale file, etc.) — fall back to newest entry only.
-      shown = data.entries.length > 0 ? [data.entries[0]] : [];
-    } else if (currentIdx === 0) {
-      // User is already at the top of the file — no newer entries. Fall back to the
-      // newest so the popup isn't empty when `update_available` is true (e.g. the
-      // CHANGELOG lags a fresh release).
-      shown = [data.entries[0]];
     } else {
-      shown = data.entries.slice(0, currentIdx);
+      // WHY only the version on offer (Destin, 2026-11-23: "only shows the whats new for latest
+      // update version"): this used to list every version between the user's and the newest.
+      // Prefer the entry named by the update itself; fall back to the newest in the file (the
+      // file is written newest-first) when the notes lag a fresh release.
+      const latest = data.entries.find(e => e.version === updateStatus.latest);
+      shown = latest ? [latest] : data.entries.slice(0, 1);
     }
     // WHY a labelled card per version (Destin, close-session-4#CS4-1; guide: nothing bare on
     // the popup — a group is a small label and a card): the notes sat bare on the popup under
@@ -472,7 +470,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             {/* text-fg text-sm: the notes set no colour of their own (in chat they inherit
                 the bubble's); here they inherited the page default, near-invisible on dark
                 themes like Halftone Dimension (seen on close-session-5's preview). */}
-            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={e.body} /></div>
+            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={withoutBaseline(e.body)} /></div>
           </section>
         ))}
       </>
