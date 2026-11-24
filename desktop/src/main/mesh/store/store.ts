@@ -36,7 +36,8 @@ import { readSideFor, writeSideFor, keepBadSideFile, formatLine, parseFormat } f
 import { readMarksState, readPartial, readDamaged, setMarks } from './marks';
 import { resetHw, checkRollback, noteHw, lowerHwTo, readHw, type HwEnv } from './highwater';
 import { Extras, bytesUnder } from './extras';
-import { asLine, decodeTailFile, encodeTailFile, isDiskFull, validateProofShape, ForeignTail, type TailFile } from './storeutil';
+import { asLine, isDiskFull, validateProofShape, ForeignTail, type TailFile } from './storeutil';
+import { setAsideTailLocked, readTailFile, readEpoch, tailWasProtected, LOST_TAIL, type TailEnv } from './tails';
 import { chainStep, defaultChainSeeds, hex, unhex, versionTag, type ChainSeedFn, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, type ReplyEndOptions } from './classify';
 import { HDR, REC, NONE, decodeRecord, indexHeader, recPos, type Rec } from './records';
@@ -58,7 +59,6 @@ const SUMMARY_SAVE_EVERY = 2048;
 const TAKEOVER_RE = /^[0-9a-f]{8,128}$/;
 /** Longest version id the store accepts (see keyOf). */
 const MAX_VERSION_ID_BYTES = 64;
-const MAX_TAILS = 1024;
 const MAX_REJECTED_BYTES = 256 * MIB;
 const DEFAULT_MAX_EXTRAS = 4 * 1024 * MIB;
 const LOAD_SCRUB_RECORDS = 8192;
@@ -396,7 +396,7 @@ export class ChatStore {
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv, marks, hw, rolledBack: null,
-      parked: new Map(), parkedBytes: 0,
+      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir),
     };
     await this.restoreRedundancy(st);
     await this.checkRollback(st);
@@ -570,6 +570,7 @@ export class ChatStore {
   /**
    * Lines [from, to), as raw bytes with their newlines, each checked against the chain (H3); `evicted` when
    * any of them has no body here. A range past the head is refused (L4), not silently clamped.
+   * NOTE FOR CALLERS (review 6, B4): a `corrupt` throw here is the damage signal; head().damagedFromLine can still be null until the next scrub, so a screen must not decide "healthy" from head() alone.
    */
   read(version: VersionId, segment: number, from: number, to: number): Promise<Buffer[] | 'evicted'> {
     return this.guard(() => {
@@ -1088,58 +1089,20 @@ export class ChatStore {
 
   // ---- set-asides ----------------------------------------------------------------------------------
   /**
-   * An old host's tail: save lines [fromLine, head) under `takeoverId` (sealed with the version AND the id, review 5 F2) and cut the version back. Tail file durable first, then the cut, so a kill between
-   * them loses nothing and a retry finishes the cut. IDEMPOTENT per takeover id: a retry returns the original result and cuts only when the version still holds exactly the saved tail.
+   * An old host's tail: save lines [fromLine, head) under `takeoverId` (sealed with the version AND the id, review 5 F2) and cut the version back. IDEMPOTENT per takeover id: a retry returns the
+   * original result and cuts only when the version still holds exactly the saved tail. The ordered steps, what a crash behind each leaves and what the retry does are in tails.ts (review 6).
+   * Every call ALSO starts a new history for parked appends, even when there is nothing to cut (tails.ts, invariant H).
    */
   setAsideTail(takeoverId: string, version: VersionId, fromLine: number): Promise<{ lines: number }> {
     return this.guard(() => {
       if (!TAKEOVER_RE.test(takeoverId)) throw new StoreError('bad-argument', 'takeover id must be hex');
       if (!Number.isSafeInteger(fromLine) || fromLine < 0) throw new StoreError('bad-argument', 'fromLine');
       const key = this.keyOf(version);
-      return this.exclusive(() => this.mutate(key, async () => {
-        const st = await this.state(version);
-        const dir = nodePath.join(st.dir, 'tails');
-        const path = nodePath.join(dir, `${takeoverId}.tail`);
-        const existing = await this.readTailFile(path, key, takeoverId);
-        // WHY (review 4, F6): a `.done` marker with no tail file means the tail (the only copy of the cut lines) was lost. A retry must not write an empty valid tail over
-        // that evidence; it is reported, and nothing is written.
-        if (!existing && await this.fs.exists(nodePath.join(dir, `${takeoverId}.done`))) throw new StoreError('corrupt', 'the saved tail file is missing although the cut was marked done');
-        if (existing) {
-          const L = existing.lines.length;
-          // a request past the head was clamped to the head the first time: the same request again is the same retry
-          const same = existing.fromLine === fromLine || (L === 0 && fromLine > existing.fromLine);
-          if (!same) throw new StoreError('bad-argument', 'takeover id already used for a different tail');
-          // N15: a persisted "cut done" marker. Without it, lines the new host appended that happen to be byte-identical to the saved
-          // tail would satisfy this test and be cut a second time. (Residual: a kill between the cut and the marker, then the same
-          // lines re-appended before this retry, still cuts once more; the tail file keeps them.)
-          const done = await this.fs.exists(nodePath.join(dir, `${takeoverId}.done`));
-          if (!done && L > 0 && st.count === existing.fromLine + L && hex((await this.stateAtLine(st, st.count)).h) === existing.headHash) { await this.cutTo(st, existing.fromLine); await this.markCutDone(dir, takeoverId); }
-          return { lines: L };
-        }
-        if (fromLine < st.evictedLines) throw new StoreError('evicted', 'tail lines have no body here');
-        if ((await this.fs.readdir(dir)).filter((n) => n.endsWith('.tail')).length >= MAX_TAILS) throw new StoreError('limit', 'too many set-aside tails for this version');
-        const from = Math.min(fromLine, st.count);
-        const lines = from < st.count ? await this.readRange(st, from, st.count, true) : [];
-        const fromRec = await this.stateAtLine(st, from);
-        const re = await this.confirmedBetween(st, from, st.count);
-        const header = {
-          fromLine: from, fromHash: hex(fromRec.h), fromConv: hex(fromRec.c), headHash: hex(st.h), headConv: hex(st.c),
-          replyEnds: re, pending: st.rs.cand && st.rs.cand.n >= from ? st.rs.cand.n : null,
-        };
-        await mkdirDurable(this.fs, dir);
-        await writeFileAtomic(this.fs, path, encodeTailFile(key, takeoverId, header, lines)); // DESTRUCTIVE-OK(kept-copy-first): a NEW file (checked absent above)
-        // WHY read it back before cutting: the cut deletes the only other copy of these lines, so it acts on the bytes that are really in the tail file
-        const back = await this.readTailFile(path, key, takeoverId);
-        if (!back || back.lines.length !== lines.length || !back.lines.every((l, i) => l.equals(lines[i]))) throw new StoreError('corrupt', 'the tail file does not read back as written; nothing was cut');
-        if (st.count > from) await this.cutTo(st, from);
-        await this.markCutDone(dir, takeoverId);
-        return { lines: lines.length };
-      }));
+      return this.exclusive(() => this.mutate(key, async () => setAsideTailLocked(this.tailEnv(), await this.state(version), takeoverId, fromLine)));
     });
   }
-
-  private async markCutDone(dir: string, takeoverId: string): Promise<void> {
-    await writeFileAtomic(this.fs, nodePath.join(dir, `${takeoverId}.done`), Buffer.from('cut done\n')); // DESTRUCTIVE-OK(hint): an existence-only marker
+  private tailEnv(): TailEnv {
+    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n) };
   }
 
   /** A previously set-aside tail, with the chain values around it, or null. Pass `version` to look in one version only. */
@@ -1152,18 +1115,13 @@ export class ChatStore {
         for (const key of keys) {
           let t: TailFile | null;
           // asked of ONE version: a file that is not that version's tail for this id throws `corrupt`. Looking across versions, a tail for THIS id sealed for another version is found under its own folder, so it is skipped here; any other file under this name is an overwritten tail and throws
-          try { t = await this.readTailFile(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.tail`), key, takeoverId); } catch (e) { if (only || !(e instanceof ForeignTail && e.elsewhere)) throw e; continue; }
-          if (!t && await this.fs.exists(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.done`))) throw new StoreError('corrupt', 'the saved tail file is missing although the cut was marked done');
+          try { t = await readTailFile(this.fs, nodePath.join(this.vdir(key), 'tails', `${takeoverId}.tail`), key, takeoverId); } catch (e) { if (only || !(e instanceof ForeignTail && e.elsewhere)) throw e; continue; }
+          if (!t && await tailWasProtected(this.fs, this.vdir(key), takeoverId)) throw LOST_TAIL();   // review 6 B2: the intent marker counts too, not only `.done`
           if (t) return { version: unhex(key), fromLine: t.fromLine, fromHash: t.fromHash, fromConversationHash: t.fromConv, headHash: t.headHash, headConversationHash: t.headConv, lines: t.lines, replyEnds: t.replyEnds, pendingReplyEnd: t.pending };
         }
         return null;
       });
     });
-  }
-
-  private async readTailFile(path: string, key: string, takeoverId: string): Promise<TailFile | null> {
-    const b = await this.fs.readFile(path);
-    return b ? decodeTailFile(b, key, takeoverId) : null;
   }
 
   private async stateAtLine(st: VState, n: number): Promise<{ h: Buffer; c: Buffer }> {

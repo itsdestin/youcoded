@@ -438,7 +438,7 @@ describe('reads on a full disk never fail', () => {
     const hh = ch('sha256'); for (const l of L.slice(10, 13)) hh.update(l);
     const stem = `${'10'.padStart(16, '0')}-${hh.digest('hex').slice(0, 16)}`;
     fs.mkdirSync(path.join(vdir(), 'parked'), { recursive: true });
-    fs.writeFileSync(path.join(vdir(), 'parked', `${stem}.park`), sealEnv({ role: 'park', version: vhex, id: stem }, frameLines(L.slice(10, 13))));
+    fs.writeFileSync(path.join(vdir(), 'parked', `${stem}.park`), sealEnv({ role: 'park', version: vhex, id: `${stem}@genesis` }, frameLines(L.slice(10, 13)))   /* WHY @genesis: a park's sealed id ends with the history it was parked in (parked.ts parkId); no takeover so far */);
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     expect((await s2.head(V(1))).lines).toBe(10);
     await s2.close();

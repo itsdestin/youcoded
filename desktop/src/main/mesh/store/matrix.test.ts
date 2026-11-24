@@ -201,6 +201,7 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
       'meta.copy': 'identical bytes to meta.json by design (one registration), so no distinct sibling exists; meta.json/meta.copy swaps across versions are the otherbuild/foreign cases',
       'extras-manifest': 'one manifest per root: its sibling is the other root\'s manifest (otherbuild) which is applied; kept for completeness',
       FORMAT: 'a constant, identical in every root',
+      begun: 'an existence-only marker whose bytes are identical in every instance, so no distinct sibling exists',
       done: 'an existence-only marker whose bytes are identical in every instance, so no distinct sibling exists',
     };
     const NOT_WRITTEN_BY_SCENARIO: Record<string, string> = {

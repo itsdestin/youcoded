@@ -30,6 +30,7 @@ describe('every file the store writes is in the inventory', () => {
       await s.restoreBody(V(1), L.slice(0, 10));
       await s.setAsideTail('abcdef012345', V(1), 35);
       await s.append(V(1), 0, 35, L.slice(35, 40));
+      await s.append(V(1), 0, 52, L.slice(52, 55));                                   // parked again, in the NEW history (the first park was moved to rejected/ by the takeover, review 6)
       await s.scrubStep(V(1));
       const e1 = Buffer.from('e1'); const e2 = Buffer.from('e2');
       await s.appendControl({ id: sha(e2), chat: CHAT, seen: [sha(e1)], body: e2 });  // parked control entry
@@ -61,6 +62,7 @@ describe('every file the store writes is in the inventory', () => {
       expect(names.some((n) => n.includes('healed/'))).toBe(true);
       expect(names.some((n) => n.includes('tails/'))).toBe(true);
       expect(names.some((n) => n.includes('parked/'))).toBe(true);
+      expect(names.some((n) => n.includes('rejected/'))).toBe(true);
     } finally { await t.cleanup(); }
   });
 });

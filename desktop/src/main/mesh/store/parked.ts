@@ -11,6 +11,13 @@ import type { VState } from './vstate';
 
 const MAX_REJECTED = 1024;
 
+/**
+ * WHY the epoch is part of the sealed id (review 6, B1): a park used to be bound to its position and lines but not to the HISTORY it was parked against, so after a takeover the old host's
+ * park was drained onto the new host's lines. The id is now `<position>-<line hash>@<epoch>` (tails.ts: the epoch is read from disk and changes at every takeover), so the invariant is:
+ * a parked append is only ever drained onto the history it was parked against. Every other place that touches parks (cut time, open, drain) is a second layer on top of this one.
+ */
+export const parkId = (name: string, epoch: string): string => `${name.slice(0, -5)}@${epoch}`;
+
 export class Parked {
   constructor(
     private readonly fs: Fs,
@@ -41,7 +48,7 @@ export class Parked {
     // WHY the envelope (review 5, F1): a park used to carry only a version tag; its POSITION lived in the file NAME alone, so a valid park placed under another park's name was drained at the
     // wrong place with no report. Now the position and the line hash (the name's stem `<position>-<hash>`) are sealed INSIDE the file with the version key, and the drain compares them
     // with the name: a file that is not the one its name says (another position, another version, another kind) is rejected, never applied.
-    const data = sealEnv({ role: 'park', version: st.key, id: name.slice(0, -5) }, frameLines(lines));
+    const data = sealEnv({ role: 'park', version: st.key, id: parkId(name, st.epoch) }, frameLines(lines));
     if (st.parked.has(name)) {
       // WHY not simply "already parked" (the file could have rotted since): an intact copy is enough, a damaged one is kept in rejected/ and replaced
       const have = await this.fs.readFile(nodePath.join(st.dir, 'parked', name));
@@ -55,6 +62,20 @@ export class Parked {
     // DESTRUCTIVE-OK(verified-record): the name is derived from the lines' hash, so a file of this name holds the same lines; a rotted one was moved to rejected/ above
     await writeFileAtomic(this.fs, nodePath.join(dir, name), data);
     st.parked.set(name, data.length); st.parkedBytes += data.length;
+  }
+
+  /**
+   * At a takeover (tails.ts step 4): every park that does not belong to the CURRENT history is moved to rejected/ (kept, never deleted, never applied). A park that cannot be read at all is
+   * moved too (it is in rejected/ for a human to find). At the rejected/ cap a park stays in parked/, where the epoch still refuses it on read.
+   */
+  async rejectOutsideEpoch(st: VState): Promise<void> {
+    for (const name of [...st.parked.keys()].sort()) {
+      const path = nodePath.join(st.dir, 'parked', name);
+      const raw = await this.fs.readFile(path);
+      if (raw === null) { this.forget(st, name); continue; }
+      if (openEnv(raw, { role: 'park', version: st.key, id: parkId(name, st.epoch) }).kind === 'ok') continue;   // parked in this history: it stays
+      await this.moveAway(st, path, name);
+    }
   }
 
   forget(st: VState, name: string): void {
@@ -76,7 +97,7 @@ export class Parked {
         const raw = await this.fs.readFile(path);
         if (raw === null) { this.forget(st, name); progressed = true; continue; }   // the file is gone (parks are provisional): nothing to apply or move
         // every field is checked against what the NAME claims (envelope.ts): kind, version, and the position-and-hash id. A mismatch is a misplaced park: rejected (kept), never applied.
-        const env = openEnv(raw, { role: 'park', version: st.key, id: name.slice(0, -5) });
+        const env = openEnv(raw, { role: 'park', version: st.key, id: parkId(name, st.epoch) });
         let lines = env.kind === 'ok' ? unframeLines(env.payload) : null;
         // the line hash in the id must also be the hash of the lines the file really holds (a forged or mixed-up file cannot pass with matching framing alone)
         if (lines) { const h = createHash('sha256'); for (const l of lines) h.update(l); if (h.digest('hex').slice(0, 16) !== name.slice(17, 33)) lines = null; }

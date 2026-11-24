@@ -14,6 +14,8 @@ import { HW_EVERY, hwPath } from './highwater';
 import { readCheckpoint, readCheckpointState, writeCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
 import { crc32 } from './chain';
 import { realFs } from './fsio';
+import { parkId } from './parked';
+import { GENESIS_EPOCH } from './tails';
 
 const mk = (tag: string, n: number) => Array.from({ length: n }, (_, i) => nl({ type: 'user', uuid: `${tag}${i}`, message: { role: 'user', content: `${tag} ${'x'.repeat(40)} ${i}` } }));
 const opts = { chunkBytes: 700, proofVerifier: () => true };
@@ -93,7 +95,7 @@ describe('F1 a parked file is bound to its own position and lines', () => {
   });
   it('a park whose id matches its name but whose lines are others (a forged hash) is rejected: the line hash is checked against the lines', async () => {
     const x = await setup();
-    const forged = sealEnv({ role: 'park', version: keyOf(V(1)), id: x.names[0].slice(0, -5) }, frameLines(x.B));   // sealed with A's name, holding B's lines
+    const forged = sealEnv({ role: 'park', version: keyOf(V(1)), id: parkId(x.names[0], GENESIS_EPOCH) }, frameLines(x.B));   // sealed with A's name, holding B's lines
     fs.writeFileSync(x.pa, forged);
     const s = await open(x.t.dir);
     await s.append(V(1), 0, 5, x.fill);
@@ -103,8 +105,8 @@ describe('F1 a parked file is bound to its own position and lines', () => {
   });
   it('a park sealed for ANOTHER version or as ANOTHER kind is rejected, never applied', async () => {
     const x = await setup();
-    fs.writeFileSync(x.pa, sealEnv({ role: 'park', version: keyOf(V(2)), id: x.names[0].slice(0, -5) }, frameLines(x.A)));
-    fs.writeFileSync(x.pb, sealEnv({ role: 'tail', version: keyOf(V(1)), id: x.names[1].slice(0, -5) }, frameLines(x.B)));
+    fs.writeFileSync(x.pa, sealEnv({ role: 'park', version: keyOf(V(2)), id: parkId(x.names[0], GENESIS_EPOCH) }, frameLines(x.A)));
+    fs.writeFileSync(x.pb, sealEnv({ role: 'tail', version: keyOf(V(1)), id: parkId(x.names[1], GENESIS_EPOCH) }, frameLines(x.B)));
     const s = await open(x.t.dir);
     await s.append(V(1), 0, 5, x.fill); await s.append(V(1), 0, 8, mk('Q', 4));
     const h = await s.head(V(1));

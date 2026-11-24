@@ -57,6 +57,8 @@ export interface VState {
   /** The head was found behind the high-water record (a whole folder put back): reported through damagedFromLine and head.rolledBack until the head passes `had`. Never persisted: it is re-derived at each open. */
   rolledBack: { from: number; had: number } | null;
   /** Parked append files: name -> size, kept in memory so a park never rescans the folder (M4). */
+  /** The history identity (tails.ts readEpoch), read from disk at load and after a takeover begins: parks are sealed with it and applied only while it is unchanged. */
+  epoch: string;
   parked: Map<string, number>;
   parkedBytes: number;
 }
