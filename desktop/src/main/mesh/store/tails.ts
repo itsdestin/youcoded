@@ -123,6 +123,13 @@ export interface TailEnv {
 //  Why this order is the simplest that works: the only thing that must never be absent when the cut happens is the evidence, so the tail comes first and `.begun` (the intent) second, before
 //  ANY change to the version or its parks. `.done` only decides one thing: whether lines that merely LOOK like the saved tail (the new host wrote the same bytes) may be cut a second time.
 // ---------------------------------------------------------------------------------------------------------------------------------------------------------
+/** The version's head lies on this tail's branch: strictly past the cut and no further than the tail's end, with the chain value the tail's own lines give at that count. */
+function holdsTailPrefix(st: VState, tail: TailFile): boolean {
+  if (st.count <= tail.fromLine || st.count > tail.fromLine + tail.lines.length) return false;
+  let h: Buffer = unhex(tail.fromHash);
+  for (let i = 0; i < st.count - tail.fromLine; i++) h = chainStep(h, tail.lines[i]);
+  return hex(h) === hex(st.h);
+}
 export async function setAsideTailLocked(e: TailEnv, st: VState, takeoverId: string, fromLine: number): Promise<{ lines: number }> {
   const { fs } = e;
   const key = st.key; const dir = st.dir;
@@ -168,7 +175,11 @@ export async function setAsideTailLocked(e: TailEnv, st: VState, takeoverId: str
     // step 4: parks of the old history are kept in rejected/ (never deleted, never applied)
     await e.parked.rejectOutsideEpoch(st);
     // step 5: cut only when the version still holds exactly the saved tail (a first run always does; a retry after a finished cut does not)
-    if (L > 0 && st.count === tail.fromLine + L && hex((await e.stateAtLine(st, st.count)).h) === tail.headHash) await e.cutTo(st, tail.fromLine);
+    // WHY a PREFIX of the tail also counts (round 7, found by the fuzz when it put an older index and bodies back during a pending takeover): the old rule cut only when the version held ALL of the
+    // tail. A version that holds the tail's first k lines (an older copy of index and bodies from before the old host wrote the rest) is just as much "still holding the replaced history", and the retry
+    // used to call the cut done (writing `.done`) and leave those lines in place, mixing the two histories. Proof that the lines past the cut are the tail's: the chain value at the head, which covers
+    // every line, equals the chain value along the tail's own lines at that count. Before `.done` the new host has not been answered, so lines past the cut cannot be its own.
+    if (L > 0 && await holdsTailPrefix(st, tail)) await e.cutTo(st, tail.fromLine);
     // step 6 (N15): without this marker, lines the new host appended that happen to be byte-identical to the saved tail would be cut a second time by a replay
     await writeFileAtomic(fs, marker(dir, takeoverId, 'done'), Buffer.from('cut done\n')); // DESTRUCTIVE-OK(hint): an existence-only marker
   }

@@ -182,3 +182,22 @@ describe('F5 rejected parks carry a reason and a count, and the rejected/ cap ne
     await s.close(); await t.cleanup();
   });
 });
+
+describe('a takeover that is still pending when older files return finishes its cut (found by the round-7 fuzz once pair faults and evictions ran)', () => {
+  it('older index + bodies holding only a PREFIX of the saved tail (the version is shorter than the tail): the retry still cuts at the takeover point instead of calling the cut done', async () => {
+    const t = await tmpRoot('r7-pend-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 20)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });                                  // the older state: 20 lines of A
+    s = await open(t.dir);
+    await s.append(V(1), 0, 20, A.slice(20, 50)); await s.setAsideTail(TID, V(1), 10); await s.close();   // cut at 10; the tail holds A10..49
+    fs.rmSync(path.join(vdir(t.dir), 'tails', `${TID}.done`));                    // the takeover is still pending (its last marker not written yet)
+    putBack(t.dir, snap, ['index', 'body']);                                      // the older index and bodies come back: 20 lines of A
+    s = await open(t.dir);
+    expect((await s.setAsideTail(TID, V(1), 10)).lines).toBe(40);
+    expect((await s.head(V(1))).lines).toBe(10);                                  // not 20: lines 10..19 belong to the history that was replaced
+    expect(await s.append(V(1), 0, 10, B.slice(10, 25))).toBe('ok');
+    for (let i = 0; i < 25; i++) expect(((await s.read(V(1), 0, i, i + 1)) as Buffer[])[0].equals(truth(10, 25)[i]), `line ${i}`).toBe(true);
+    await s.close(); fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+});

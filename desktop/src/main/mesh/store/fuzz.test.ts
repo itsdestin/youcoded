@@ -96,6 +96,9 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     checkpointEvery: [32, 32, 8][Math.floor(r() * 3)],
   };
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
+  let staleIndexInjected = false;                                          // round 7: an OLDER index.bin (single fault, or in a pair) was put back AFTER a divergent takeover, so it may describe the replaced history; cleared when the version is emptied (setAsideDamaged) or the head is canonical again. The excuse below names this cause and is checked against it
+  let lostReported = false;                                                // round 7: head().lostTakeovers was above 0 at some check: the loss of takeover evidence HAS been reported (a later check on a version that is `damaged` cannot read it again)
+  let lostTakeoverFault = false;                                           // round 7: a fault or a rollback that can remove takeover evidence (tails/ or a rolled-back folder) was dealt: head().lostTakeovers may then be above 0
   let closedAckedMax = 0; let rollbackDone = false; let hwFaulted = false; let rollbackActive = false;   // a fault hit the high-water record: a rollback on top of it is two faults, and the record can only under-report
      // acknowledged count at the last CLEAN close (the high-water record is raised there); whether a whole-folder rollback was dealt
   let ack2Max = 0; let faultsSinceClean = 0; let faultNote = ''; let faultOnIndexAfterEviction = false;
@@ -159,7 +162,15 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       // WHY the one narrow excuse (review 6): an OLDER index.bin from before a takeover, put into a version that was emptied since (setAsideDamaged), still states the OLD history's head. The store
       // reports every line as damaged from 0 (its bodies are not there), which is at or before the first line where the two histories differ, so a caller refetches from there; and no line is
       // served from it (the read oracle below stays strict). Any head that differs WITHOUT such a report is still a violation.
-      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= firstDiverge) ev('stale-history-head-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine }); }
+      // Round 7 (review 7, item 5): the excuse now CHECKS the cause it names: the fault just dealt was an older index.bin (faultNote), the version was emptied after a divergent takeover, and the store flagged damage from 0..first divergence.
+      const staleIndexCause = diverged && staleIndexInjected;
+      if (head.lostTakeovers > 0) lostReported = true;
+      // Round 7 (F3): a rollback or loss of tails/ across a takeover is REPORTED by head().lostTakeovers (the count outside the folder), which is the promise for that case; the lines served are then not trusted.
+      const reportedLostTakeover = head.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault);
+      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= firstDiverge && staleIndexCause) ev('stale-history-head-reported'); else if (reportedLostTakeover) ev('head-of-another-history-lost-takeover-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine, faultNote, lostTakeovers: head.lostTakeovers }); }
+      if (head.hash === ref.raw[head.lines]) staleIndexInjected = false;   // the version shows the canonical history again: the cause is spent
+      if (head.lostTakeovers > 0 && !rotted && !lossy) bad('false-alarm-lost-takeovers-without-any-fault', { tag, lost: head.lostTakeovers });
+      if (head.lostTakeovers > 0 && !reportedLostTakeover) bad('lost-takeovers-reported-for-no-reason-we-dealt', { tag, lost: head.lostTakeovers, fault: faultNote });
       const flagged: number | null = head.damagedFromLine;
       // review 4 (F1, F4, F5): a line may only read as evicted when an evictBody call covered it. A deleted chunk, an older marker, a foreign file must never do it.
       if (head.evictedLines > evictedMax) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, evictedMax, fault: faultNote });
@@ -172,7 +183,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           try { got = await s.read(V(1), 0, i, i + 1); }
           catch (e: any) { ev('read-throw-' + e?.code); if (e?.code !== 'corrupt') bad('read-threw-other', { tag, i, code: e?.code }); else if (!rotted && !lossy) bad('corrupt-read-without-any-fault', { tag, i }); continue; }
           if (got === 'evicted') { ev('read-evicted'); continue; }
-          if (!(got as Buffer[])[0].equals(canon[i])) bad('WRONG-BYTES-SERVED', { tag, line: i, headLines: head.lines });
+          if (!(got as Buffer[])[0].equals(canon[i])) { if (reportedLostTakeover) ev('wrong-bytes-with-a-report'); else bad('WRONG-BYTES-SERVED', { tag, line: i, headLines: head.lines, fault: faultNote }); }
         } else {
           if (i < exemptFrom && flagged === null && !lossy) { bad('shrunk-unreported', { tag, line: i, head: head.lines }); continue; }
           if (!present(canon[i], files)) {
@@ -191,7 +202,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       for (let i = evictedMax; i < ackedMax; i++) if (!present(canon[i], files)) { if (lossy) { ev('destroyed-version-unreadable'); break; } bad('line-absent-everywhere(version-unreadable)', { tag, line: i, state, rotted }); break; }
       // review 4: ONE fault must never make a whole version unreadable, except in the documented limits of inventory.ts (the evicted lines' chain values live only in the index)
       if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok') bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
-      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
+      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
@@ -213,7 +224,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     for (const ta of tailsAcked) {
       try {
         const t = await s.tail(ta.id);
-        if (t === null) { if ((tailFaults.get(ta.id) ?? 0) <= 1 && !rollbackDone) bad('tail-vanished-without-report', { tag, id: ta.id, fault: faultNote }); }
+        if (t === null) { if (lostReported || (head && head.lostTakeovers > 0)) ev('tail-gone-reported-by-lostTakeovers'); else if ((tailFaults.get(ta.id) ?? 0) <= 1 && !rollbackDone) bad('tail-vanished-without-report', { tag, id: ta.id, fault: faultNote }); }
         else {
           for (let i = 0; i < t.lines.length; i++) if (!t.lines[i].equals(ta.lines[i] ?? Buffer.alloc(0))) bad('tail-WRONG-BYTES', { tag, i });
           // review 6 (B2): a tail that is served must be COMPLETE; a shorter one means a retry wrote an empty tail over a lost one
@@ -287,7 +298,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} append ${from}+${cnt}`);
             const res = await s.append(V(1), 0, from, canon.slice(from, from + cnt));
-            if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
+            if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); if (diverged && staleIndexInjected && hd && hd.damagedFromLine !== null) ev('not-a-prefix-on-a-flagged-stale-index'); else bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
           } else if (op < 0.62 && op >= 0.54) {
             const from = head + 2 + Math.floor(r() * 8); const cnt = 1 + Math.floor(r() * 5);
             if (from + cnt > canon.length) continue;
@@ -304,7 +315,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             exemptFrom = Math.min(exemptFrom, from);
             pending = { id: tid, from, lines: canon.slice(from, head), diverge };
             await settleTakeover(s);
-          } else if (op < 0.78) {          } else if (op < 0.78) {
+          } else if (op < 0.78) {   // WHY one branch (round 7): this line used to be written twice, which made the first `else if` an EMPTY block, so evict and restore never ran in this fuzz after round 6
             if (head < 3 || !hd) continue;
             const through = 1 + Math.floor(r() * head);
             log.push(`ep${n} evict ${through}`);
@@ -328,7 +339,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} extra`);
             await s.putExtra(sha(b), b); extraAcked.push(b);
           } else if (op < 0.985 || legacy) { log.push(`ep${n} scrub`); await s.scrubStep(V(1), { maxBytes: 1 << 20 }); }
-          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; }
+          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; }
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
           if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
@@ -358,20 +369,48 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // (taken BEFORE this episode's fault, so an "older copy" is a true earlier state; the newest one equals the present and is skipped)
     if (!legacy && r() < 0.6) { const sn = snapshotRoot(); snaps.push(sn); snapClosed.set(sn, closedOk && !full ? ackedMax : -1); if (snaps.length > 3) snaps.shift(); }
     // WHOLE-FOLDER ROLLBACK (review 5, F3): chat 1's folder is replaced by its state at an earlier clean close. Only snapshots taken after a clean close count (the high-water record is raised there).
-    if (!legacy && !big && !diverged && snaps.length && r() < 0.05) {
+    // WHY no `!diverged` any more (round 7, review 7 item 6a): after the first divergent takeover this fuzz stopped dealing rollbacks, which is exactly where review 7's F1 lived. A rollback across a takeover is now
+    // dealt like any other; its promise is the one in the oracle above (head().lostTakeovers, because the takeover count lives outside the folder).
+    if (!legacy && !big && snaps.length && r() < 0.05) {
       const sn = snaps[Math.floor(r() * snaps.length)];
       const pre = `versions/${key}/`; const here = walk(root).map((p) => path.relative(root, p)).filter((p) => p.startsWith(pre));
       const then = [...sn.keys()].filter((p) => p.startsWith(pre));
       if (then.length && snapClosed.get(sn) !== undefined && snapClosed.get(sn)! >= 0) {
         for (const p of here) fs.unlinkSync(path.join(root, p));
         for (const p of then) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), sn.get(p)!); }
-        rotted = true; lossy = true; rollbackDone = true; rollbackActive = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax);
+        rotted = true; lossy = true; rollbackDone = true; rollbackActive = true; lostTakeoverFault = true; faultsSinceClean++; faultNote = 'rollback'; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax);
         pending = null;   // WHY: a takeover that was still waiting for its retry is moot on a folder put back to before it (its `from` would be clamped to the shorter head and write a legitimately empty tail)
         log.push(`ROLLBACK to a snapshot with ${then.length} files; closedAckedMax=${closedAckedMax}`); ev('rot'); ev('rollback');
       }
     }
+    // TWO FILES OF ONE VERSION replaced by OLDER VALID COPIES TOGETHER (round 7, review 7 item 6b): a restore tool that puts back two files at once. Families: index+bodies, checkpoint+bodies, index+checkpoint,
+    // tail+`.begun` (the markers of a takeover), and the whole tails/ folder. Each file is replaced by its copy from an earlier snapshot, or removed when the snapshot had none. A single fault never looked like this.
+    // Promise: nothing is served from the wrong history without a typed error or a flag (`damaged`, damagedFromLine, rolledBack, lostTakeovers); the ordinary oracle above checks exactly that.
+    let pairDone = false;
+    if (!legacy && !big && snaps.length && r() < 0.15) {
+      const sn = snaps[Math.floor(r() * snaps.length)];
+      const FAMS: Record<string, (n: string) => boolean> = {
+        'index+body': (n) => /^(index\.bin|body-[0-9a-f]{16}\.bin)$/.test(n),
+        'ck+body': (n) => /^(checkpoint\.bin|body-[0-9a-f]{16}\.bin)$/.test(n),
+        'index+ck': (n) => /^(index\.bin|checkpoint\.bin)$/.test(n),
+        'tail+begun': (n) => /^tails\/[0-9a-f]+\.(tail|begun)$/.test(n),
+        'tails-dir': (n) => n.startsWith('tails/'),
+      };
+      const famNames = Object.keys(FAMS); const fam = famNames[Math.floor(r() * famNames.length)];
+      const pre = `versions/${key}/`; const pred = FAMS[fam];
+      const here = walk(root).map((p) => path.relative(root, p)).filter((p) => p.startsWith(pre) && pred(p.slice(pre.length)));
+      const then = [...sn.keys()].filter((p) => p.startsWith(pre) && pred(p.slice(pre.length)));
+      const changed = [...new Set([...here, ...then])].filter((p) => { const cur = fs.existsSync(path.join(root, p)) ? fs.readFileSync(path.join(root, p)) : null; const old = sn.get(p) ?? null; return !(cur === null && old === null) && !(cur && old && cur.equals(old)); });
+      if (changed.length) {
+        for (const p of changed) { const old = sn.get(p); if (old === undefined) fs.unlinkSync(path.join(root, p)); else { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), old); } }
+        rotted = true; if (fam.includes('body') || fam.startsWith('tail')) lossy = true; if (fam.startsWith('tail')) lostTakeoverFault = true;
+        if (diverged && fam.startsWith('index')) staleIndexInjected = true;
+        if (fam === 'index+ck') { rollbackActive = true; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax); }   // an older index AND checkpoint is a rolled-back HEAD (the bodies stay): promised like a rollback, i.e. reported when the head is below what the high-water record saw at the last clean close
+        faultsSinceClean += 2; faultNote = `pair ${fam}`; pairDone = true; log.push(`PAIR FAULT ${fam} (${changed.length} files)`); ev('rot'); ev('pair-' + fam);
+      }
+    }
     // ONE FAULT in a random file of the whole folder
-    if (r() < 0.4) {
+    if (!pairDone && r() < 0.4) {
       const all = walk(root).filter((p) => fs.statSync(p).size > 0 || !legacy);
       const pool = legacy ? all.filter((p) => !p.endsWith('LOCK') && !/(^|\/)(FORMAT|meta\.json|evicted\.json)$/.test(p) && fs.statSync(p).size > 0) : all;
       if (pool.length) {
@@ -433,6 +472,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           const otherChat = !legacy && (rel.includes(`versions/${key2}/`) || rel.includes(`aside/${key2}-`));
           if (/^highwater\//.test(rel)) { hwFaulted = true; if (rollbackDone) exemptFrom = 0; }
           if (rollbackActive && !otherChat) exemptFrom = 0;   // a second fault in the folder that was just rolled back is two faults on top of a lost state: only the first report is promised
+          if (!otherChat && kind === 'older' && /index\.bin$/.test(rel) && diverged) staleIndexInjected = true;
           if (!otherChat) { rotted = true; if (destroys && SINGLE_COPY.test(rel)) lossy = true; faultsSinceClean++; faultNote = `${kind} ${rel}`; }
           else ev('fault-in-other-chat');
           const tm = /tails\/([0-9a-f]+)\.(tail|done|begun)$/.exec(rel); if (tm) tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1);
