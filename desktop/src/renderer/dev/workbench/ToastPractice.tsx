@@ -10,12 +10,16 @@ import { announcePluginTurnedOff } from '../../utils/plugin-off-notice';
 import { announceSettingsRepaired } from '../../utils/settings-repair-notice';
 import { announceSessionLost } from '../../utils/session-lost-notice';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { NOTICE_CATALOGUE } from './notice-catalogue';
 
 export default function ToastPractice() {
   const [shown, setShown] = useState(false);
   useScreenOpen('dev/toast', () => {
     const which = new URLSearchParams(location.search).get('toast');
-    if (which === 'turned-off') announcePluginTurnedOff(60_000);
+    // Waiting-notice review deck: any notice from the catalogue, by id (`?toast=n:<id>`), held on screen for the picture.
+    const listed = which?.startsWith('n:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(2)) : undefined;
+    if (listed) announce(listed.text, 60_000, listed.button ? { label: listed.button, onClick: () => {} } : undefined);
+    else if (which === 'turned-off') announcePluginTurnedOff(60_000);
     else if (which === 'none') { /* the same screen with no notice: the "Before" picture for card #216 */ }
     else if (which === 'settings-repaired') announceSettingsRepaired('/home/me/.claude/settings.json.corrupt-2026-11-12T04-30-00-000Z', 60_000); // card #11 a
     else if (which === 'action-failed') announceFailed('copy the path'); // card #134 round 4

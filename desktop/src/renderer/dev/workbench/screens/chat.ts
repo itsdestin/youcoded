@@ -216,6 +216,9 @@ export const CHAT: readonly ScreenEntry[] = [
   // and typed via explore rather than drawing a stand-in or changing the app.
   { ...chat('chat#questions-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-questions-native' } },
   { ...chat('chat#questions-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-questions-cc' } },
+  // Waiting-notice review deck (2026-11-23): the real refusal notice, raised the way a person raises it: a question waits, they type and press Enter.
+  { ...chat('chat#blocked-send', 'view'), session: 'wb-1', params: { seed: 'bubbles-questions-cc' }, newIn: 'after' as const,
+    open: [{ do: 'type', target: { role: 'textbox', label: 'Message your assistant...' }, text: 'also make the trim match the doors' }, { do: 'key', key: 'Enter' }] },
   { ...chat('chat#chatgpt', 'view'), session: 'wb-3' },
   { ...chat('chat#chatgpt-plan-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: '1' } },
   { ...chat('chat#chatgpt-app-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: 'official', chatgpt: 'official' } },

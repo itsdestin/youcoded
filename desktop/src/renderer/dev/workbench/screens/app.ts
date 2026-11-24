@@ -1,6 +1,7 @@
 // App-wide dialogs that belong to no one area: a quit (or the last window's close) refused for
 // unsaved text edits (Task 6 fix rounds 9–11; components/UnsavedBeforeQuit.tsx).
 import type { ScreenEntry } from './types';
+import { NOTICE_CATALOGUE } from '../notice-catalogue';
 
 const app = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['app', ...tags] });
 
@@ -48,5 +49,7 @@ export const APP: readonly ScreenEntry[] = [
   { name: 'dev/toast#settings-repaired', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, newIn: 'after' as const },
   // Review 2026-11-13: the same notice over the terminal view, whose message bar is inert and zero-size (the notice must not move off screen).
   { name: 'dev/toast#settings-repaired-terminal', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, open: ['Terminal'], newIn: 'after' as const },
+  // Waiting-notice review deck (2026-11-23): every floating notice in the app, one picture each (dev/workbench/notice-catalogue.ts).
+  ...NOTICE_CATALOGUE.map((n) => ({ name: `dev/toast#n-${n.id}`, tags: ['dev', 'notice'], session: 'wb-1', params: { toast: `n:${n.id}` }, newIn: 'after' as const })),
   { name: 'dev/toast#turned-off-phone', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
 ];
