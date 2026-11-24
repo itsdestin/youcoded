@@ -110,7 +110,7 @@ export class ChatStore {
     this.stamp = ((CLASSIFIER_VERSION << 1) | ((this.replyOpts.apiErrorsEndReplies ?? true) ? 1 : 0)) >>> 0;
     this.tools = new BodyTools(this.fs, this.replyOpts);
     this.parkedStore = new Parked(this.fs, this.tools, { maxFiles: this.maxParkedFiles, maxBytes: this.maxParked, maxRejectedBytes: this.maxRejectedBytes, bytesUnder: (p) => this.bytesUnder(p) }, (st, from, lines) => this.applyLines(st, from, lines));
-    this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); }, ensureIndex: (d) => this.ensureIndex(d), resetHw: (k) => this.resetHwFor(k), rejectParks: (d) => this.parkedStore.rejectAllOnDisk(d) });
+    this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); }, ensureIndex: async (d) => { await this.ensureIndex(d); await this.ensureEmptyCheckpoint(d); }, resetHw: (k) => this.resetHwFor(k), rejectParks: (d) => this.parkedStore.rejectAllOnDisk(d) });
     this.extras = new Extras(this.fs, this.tools, root, this.maxExtraBytes, this.maxExtrasBytes);
     this.control = new ControlStore(this.fs, nodePath.join(root, 'control'), { maxParked: o.maxParkedControl });
   }
@@ -227,6 +227,19 @@ export class ChatStore {
         await this.fs.fsyncDir(nodePath.join(this.root, 'versions'));
       }));
     });
+  }
+
+  /**
+   * WHY (round 7, F1, found by the fuzz): a set-aside moves the checkpoint away with the rest and nothing wrote a new one, so the emptied version had NO checkpoint until its first append, and older index
+   * and bodies put back into it had nothing to be compared with. The empty statement (count 0, the history count with the new aside folder in it) is written here, as at registration, so "no checkpoint" keeps meaning "a fault".
+   */
+  private async ensureEmptyCheckpoint(dir: string): Promise<void> {
+    let meta: Awaited<ReturnType<typeof readMeta>> = null;
+    try { meta = await readMeta(this.fs, dir); } catch (e) { if (!(e instanceof StoreError)) throw e; }
+    if (!meta || await readCheckpoint(this.fs, dir)) return;
+    const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(nodePath.basename(dir)), segment: 0 });
+    // DESTRUCTIVE-OK(verified-record): only when no checkpoint exists (the set-aside just moved it away)
+    await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, hist: await histCount(this.fs, dir), h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
   }
 
   private async ensureIndex(dir: string): Promise<void> {

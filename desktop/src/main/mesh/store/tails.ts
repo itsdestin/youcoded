@@ -73,10 +73,13 @@ export async function sharedPrefixBound(fs: Fs, dir: string, key: string): Promi
   return bound;
 }
 
-/** The takeover ids tails/ shows evidence of: any of `<id>.tail`, `<id>.begun`, `<id>.done`. */
+/**
+ * The takeover ids tails/ shows evidence of: ids with a `.begun` or `.done` marker (a takeover counts from the moment its intent is written). A tail file alone does NOT count: it is written before the
+ * marker (steps 1-2), and one whose takeover never began (a crash, then a quarantine or a different retry) has cut nothing, so losing it loses nothing (found by the fuzz: counting it made its loss look like a lost takeover).
+ */
 export async function takeoverIds(fs: Fs, dir: string): Promise<string[]> {
   const ids = new Set<string>();
-  for (const n of await fs.readdir(tailsDir(dir))) { const m = /^([0-9a-f]+)\.(tail|begun|done)$/.exec(n); if (m) ids.add(m[1]); }
+  for (const n of await fs.readdir(tailsDir(dir))) { const m = /^([0-9a-f]+)\.(begun|done)$/.exec(n); if (m) ids.add(m[1]); }
   return [...ids].sort();
 }
 

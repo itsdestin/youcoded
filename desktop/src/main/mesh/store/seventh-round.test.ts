@@ -345,3 +345,20 @@ describe('a load never restates old content under the current history count', ()
     fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
   });
 });
+
+describe('an emptied (set-aside) version has a checkpoint again', () => {
+  it('after setAsideDamaged the version states "0 lines" in a new checkpoint, so older files put back into it are compared with something and a finished takeover\'s tail is consulted', async () => {
+    const t = await tmpRoot('r7-empty-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 20)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });                                   // 20 lines of A
+    s = await open(t.dir);
+    await s.setAsideTail(TID, V(1), 10); await s.append(V(1), 0, 10, B.slice(10, 15));
+    await s.setAsideDamaged(V(1));
+    await s.close();
+    expect(fs.existsSync(path.join(vdir(t.dir), 'checkpoint.bin'))).toBe(true);
+    putBack(t.dir, snap, ['index', 'body']);                                       // the quarantined copy's older index and bodies come back (20 lines of A: the replaced history)
+    expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, A.slice(0, 20)));
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+});

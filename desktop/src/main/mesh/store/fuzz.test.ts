@@ -502,7 +502,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           if (!otherChat && kind === 'older' && /index\.bin$/.test(rel) && diverged) staleIndexInjected = true;
           if (!otherChat) { rotted = true; if (destroys && SINGLE_COPY.test(rel)) lossy = true; faultsSinceClean++; faultNote = `${kind} ${rel}`; }
           else ev('fault-in-other-chat');
-          const tm = /tails\/([0-9a-f]+)\.(tail|done|begun)$/.exec(rel); if (tm) tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1);
+          const tm = /tails\/([0-9a-f]+)\.(tail|done|begun)$/.exec(rel); if (tm) { tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1); if (tm[2] !== 'tail' || (tailFaults.get(tm[1]) ?? 0) >= 2) lostTakeoverFault = true; }   // round 7: losing a takeover's only marker (or two files of one takeover) is what head().lostTakeovers reports
           if (/versions\/[0-9a-f]+\/(index\.bin|replaced-index\/)/.test(rel) && evictedMax > 0) faultOnIndexAfterEviction = true;   // (an evict that crashed may still have recorded itself)
           if (/aside\/|torn\/|healed\/|replaced-index\//.test(rel)) ev('rot-in-kept-copy');
           log.push(`FAULT ${kind} ${rel}@${pos}`); ev('rot'); ev('rot-' + kind);
