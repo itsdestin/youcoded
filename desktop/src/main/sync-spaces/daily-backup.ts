@@ -63,6 +63,14 @@ export class DailyBackup {
   // Manual runs waiting or running, by destination set: a second tap on the same button joins the first.
   private manualRuns = new Map<string, Promise<BackupRunResult>>();
 
+  // Destinations being copied to right now (`<type>|<base>`), for the "a backup copy is running" signal. WHY here: this
+  // job runs outside the settings push's lock, so nothing else knows a conversations copy is under way (backup fixes
+  // 2026-11-18, B-1).
+  private copying = new Map<string, number>();
+
+  /** Destinations (`<type>|<base>`) a copy is running to at this moment. */
+  copyingTargets(): string[] { return [...this.copying.keys()]; }
+
   constructor(opts?: { markerPath?: string }) {
     this.markerPath = opts?.markerPath ?? path.join(os.homedir(), '.claude', '.spaces-backup-marker');
   }
@@ -136,30 +144,39 @@ export class DailyBackup {
     const failures: BackupRunResult['failures'] = [];
     for (const target of targets) {
       const where = `${target.type}|${target.base}`;
-      let landed = true;
-      for (const space of spaces) {
-        const key = `copy|${where}|${space.id}`;
-        if (!force && this.done.has(key)) continue;
-        // WHY (backup fixes 2026-11-18, D-7): one space whose folder is gone (a project deleted on this
-        // device) failed the copy every hour, so the destination never pruned and the day never closed.
-        // A folder that is not there has nothing to back up: say so in the log and carry on.
-        if (!(await rootExists(space.root))) { log(`spaces-backup: skipping ${space.id} — its folder is missing (${space.root})`); continue; }
-        try { await this.copySpace(space, target, dated); this.done.add(key); }
-        catch (e: any) {
-          landed = false;
-          failures.push({ target, message: extractStderr(e, RCLONE_TIMEOUT) || String(e) });
-          log(`spaces-backup failed for ${space.id} → ${target.type}: ${String(e?.message ?? e)}`);
-        }
-      }
-      if (!landed) continue;
-      // WHY: pruning used to run after FAILED copies too — a month of failures
-      // (an expired Drive sign-in) would delete every snapshot and add none.
-      // Prune a destination only once today's snapshot fully landed there.
-      if (force || !this.done.has(`prune|${where}`)) {
-        try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ }
+      this.copying.set(where, (this.copying.get(where) ?? 0) + 1);
+      try { await this.copyOne(target, where, spaces, dated, now, force, failures, log); } finally {
+        const n = (this.copying.get(where) ?? 1) - 1;
+        if (n <= 0) this.copying.delete(where); else this.copying.set(where, n);
       }
     }
     return { ok: failures.length === 0, failures };
+  }
+
+  /** One destination's share of copyAll: every space, then (only if all landed) the prune. */
+  private async copyOne(target: BackupTarget, where: string, spaces: SyncSpace[], dated: string, now: Date, force: boolean, failures: BackupRunResult['failures'], log: (msg: string) => void): Promise<void> {
+    let landed = true;
+    for (const space of spaces) {
+      const key = `copy|${where}|${space.id}`;
+      if (!force && this.done.has(key)) continue;
+      // WHY (backup fixes 2026-11-18, D-7): one space whose folder is gone (a project deleted on this
+      // device) failed the copy every hour, so the destination never pruned and the day never closed.
+      // A folder that is not there has nothing to back up: say so in the log and carry on.
+      if (!(await rootExists(space.root))) { log(`spaces-backup: skipping ${space.id} — its folder is missing (${space.root})`); continue; }
+      try { await this.copySpace(space, target, dated); this.done.add(key); }
+      catch (e: any) {
+        landed = false;
+        failures.push({ target, message: extractStderr(e, RCLONE_TIMEOUT) || String(e) });
+        log(`spaces-backup failed for ${space.id} → ${target.type}: ${String(e?.message ?? e)}`);
+      }
+    }
+    if (!landed) return;
+    // WHY: pruning used to run after FAILED copies too — a month of failures
+    // (an expired Drive sign-in) would delete every snapshot and add none.
+    // Prune a destination only once today's snapshot fully landed there.
+    if (force || !this.done.has(`prune|${where}`)) {
+      try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ }
+    }
   }
 
   private async copySpace(space: SyncSpace, target: BackupTarget, dated: string): Promise<void> {

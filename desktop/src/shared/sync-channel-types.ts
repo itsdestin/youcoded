@@ -28,6 +28,7 @@ export interface SyncChannelTypes {
   'sync:force': { request: void; response: Res<typeof SyncState.forceSync> };
   'sync:get-log': { request: { lines?: number } | undefined; response: string[] };
   'sync:dismiss-warning': { request: { warning: string }; response: void };
+  'sync:start-fresh': { request: void; response: boolean };
   'sync:add-backend': { request: Omit<BackendInstance, 'id'>; response: Res<typeof SyncState.addBackend> };
   'sync:remove-backend': { request: { id: string }; response: void };
   'sync:update-backend': { request: { id: string; updates: Parameters<typeof SyncState.updateBackend>[1] }; response: Res<typeof SyncState.updateBackend> };

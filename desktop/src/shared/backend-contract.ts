@@ -291,6 +291,7 @@ export const IPC = {
   SYNC_FORCE: 'sync:force',
   SYNC_GET_LOG: 'sync:get-log',
   SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
+  SYNC_START_FRESH: 'sync:start-fresh',
   // Cross-device sync spaces (spec 2026-07-03) — distinct from the legacy sync:* above
   SYNC_SPACES_STATUS: 'syncspaces:status',
   SYNC_SPACES_ENABLE: 'syncspaces:enable',

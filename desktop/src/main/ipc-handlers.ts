@@ -94,7 +94,7 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 // The KDE script that lets the buddy move itself on a Wayland desktop.
 import { helperStatus, installHelper, removeHelper, type HelperStatus } from './kwin-helper';
-import { setSyncHealthGate, type SyncWarning } from './sync-state';
+import { setSyncHealthGate, getCopyingBackendIds, type SyncWarning } from './sync-state';
 import { startStatusPushGate } from './status-push-gate';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
@@ -1194,7 +1194,9 @@ export function registerIpcHandlers(
     // machine that was (supposedly) syncing every 90 seconds (2026-07-30 spec §4).
     const lastSyncEpoch = deriveSelfLastSyncEpochSec(getSelfLastSyncEpochMs(), syncMarkerRaw);
     // Live spaces syncing OR the legacy lock dir (extra-backups pushes).
-    const syncInProgress = isSyncSpacesSyncing() || syncLockIsDir;
+    // A conversations/project-files copy runs outside the lock, so it is asked of the jobs themselves (B-1).
+    const copyingBackendIds = await getCopyingBackendIds();
+    const syncInProgress = isSyncSpacesSyncing() || syncLockIsDir || copyingBackendIds.length > 0;
     // Per-device sync recency (machineId → epoch-ms), carried over the SyncHub.
     // Rides the live push so the "Your devices" rows update in real-time without
     // waiting for a full getSyncStatus() refetch. Forwarded verbatim to remote
@@ -1241,7 +1243,7 @@ export function registerIpcHandlers(
     // null when signed out, never polled, or under the kill switch.
     const chatgptUsage = chatgptForUi?.usageForStatus() ?? null;
 
-    return { usage, announcement, updateStatus, syncWarnings, lastSyncEpoch, syncInProgress, lastSyncByDevice, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap, chatgptUsage };
+    return { usage, announcement, updateStatus, syncWarnings, lastSyncEpoch, syncInProgress, copyingBackendIds, lastSyncByDevice, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap, chatgptUsage };
   }
 
   // Single-flight: an attention change that lands while the 10 s build is in

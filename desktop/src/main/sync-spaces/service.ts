@@ -82,6 +82,12 @@ export function getSelfLastSyncEpochMs(): number | null {
   return max;
 }
 
+/** Destinations (`<type>|<base>`) the conversations-and-project-files backup is copying to right now (backup fixes
+ *  2026-11-18, B-1). Empty when nothing is running or the service has not started. */
+export function spacesBackupCopyingTargets(): string[] {
+  return backup?.copyingTargets() ?? [];
+}
+
 /** Live: any space's sync currently in flight. */
 export function isSyncSpacesSyncing(): boolean {
   return engine?.anySyncing() ?? false;

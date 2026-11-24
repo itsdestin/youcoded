@@ -196,6 +196,7 @@ const IPC = {
   SYNC_FORCE: 'sync:force',
   SYNC_GET_LOG: 'sync:get-log',
   SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
+  SYNC_START_FRESH: 'sync:start-fresh',
   SYNC_SPACES_STATUS: 'syncspaces:status',
   SYNC_SPACES_ENABLE: 'syncspaces:enable',
   SYNC_SPACES_SYNC_NOW: 'syncspaces:sync-now',
@@ -1684,6 +1685,8 @@ contextBridge.exposeInMainWorld('claude', {
     force: () => ipcRenderer.invoke(IPC.SYNC_FORCE),
     getLog: (lines?: number) => ipcRenderer.invoke(IPC.SYNC_GET_LOG, { lines }),
     dismissWarning: (warning: string) => ipcRenderer.invoke(IPC.SYNC_DISMISS_WARNING, { warning }),
+    // Sets an unreadable backup-settings file aside so backups can be set up again (backup fixes 2026-11-18).
+    startFresh: () => ipcRenderer.invoke(IPC.SYNC_START_FRESH),
     // V2: Per-instance backend management
     addBackend: (instance: any) => ipcRenderer.invoke('sync:add-backend', instance),
     removeBackend: (id: string) => ipcRenderer.invoke('sync:remove-backend', { id }),

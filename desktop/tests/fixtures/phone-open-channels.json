@@ -251,6 +251,7 @@
   "sync:setup:check-prereqs",
   "sync:setup:create-repo",
   "sync:setup:install-rclone",
+  "sync:start-fresh",
   "sync:update-backend",
   "syncspaces:create-project",
   "syncspaces:enable",

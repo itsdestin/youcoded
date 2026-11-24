@@ -308,6 +308,29 @@ describe('DailyBackup.runNow', () => {
     expect(fs.existsSync(old)).toBe(true);
   });
 
+  it('says which destination is being copied to while a copy runs, and nothing before or after (B-1)', async () => {
+    const { space, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    expect(job.copyingTargets()).toEqual([]);
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let seen: string[] = [];
+    vi.spyOn(job as any, 'copySpace').mockImplementation(async () => { seen = job.copyingTargets(); await gate; });
+    const run = job.runNow([space], [{ type: 'icloud', base }], () => {});
+    await vi.waitFor(() => expect(seen).toEqual([`icloud|${base}`]));
+    release();
+    await run;
+    expect(job.copyingTargets()).toEqual([]);
+  });
+
+  it('stops saying a copy is running when it failed too', async () => {
+    const { space, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    vi.spyOn(job as any, 'copySpace').mockRejectedValue(new Error('x'));
+    await job.runNow([space], [{ type: 'icloud', base }], () => {});
+    expect(job.copyingTargets()).toEqual([]);
+  });
+
   it('never overlaps itself or the hourly timer: a second run waits, a duplicate tap joins, the timer skips', async () => {
     const { space, base, markerPath } = setup();
     const job = new DailyBackup({ markerPath });

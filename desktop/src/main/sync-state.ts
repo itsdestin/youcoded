@@ -26,7 +26,7 @@ import type { SyncService } from './sync-service';
 // SyncPanel's OTHER read path (on-mount snapshot vs. the 10s status:data push),
 // and was still reading the legacy marker alone, so the self row showed the
 // stale value until the first push overwrote it (2026-07-30 spec §4 gap).
-import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing } from './sync-spaces/service';
+import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing, spacesBackupCopyingTargets } from './sync-spaces/service';
 // Same pure derivation buildStatusData() uses — reused, not duplicated, so the
 // two read paths can't drift on the ms→wire-seconds conversion or the
 // sync-spaces-vs-legacy-marker precedence rule.
@@ -114,6 +114,7 @@ export interface BackendInstanceStatus extends BackendInstance {
   connected: boolean;                  // Whether the backend was reachable on last attempt
   lastPushEpoch: number | null;        // Per-backend last push timestamp
   lastError: string | null;            // Last error message, null if healthy
+  syncing: boolean;                    // A backup copy to this destination is running right now (real state, not the panel's)
 }
 
 /** Full sync status returned to the UI. */
@@ -127,7 +128,8 @@ export interface SyncStatus {
   } | null;
   warnings: SyncWarning[];
   syncInProgress: boolean;
-  syncingBackendId: string | null;     // Which backend is currently syncing
+  syncingBackendId: string | null;     // Which backend is currently syncing (the first, when several)
+  copyingBackendIds: string[];         // Every backup a copy is running for right now
   syncedCategories: string[];
   // Per-device sync recency (machineId → epoch-ms of that device's most recent
   // successful sync), carried over the SyncHub. Keyed by the same machineId the
@@ -479,13 +481,14 @@ export async function clearWarningsByCode(code: string): Promise<void> {
  * This is the primary data source for the Sync Management UI.
  */
 export async function getSyncStatus(): Promise<SyncStatus> {
-  const [backends, markerText, meta, warnings, lockExists] =
+  const [backends, markerText, meta, warnings, lockExists, copyingBackendIds] =
     await Promise.all([
       readBackendInstances(),
       readText(syncMarkerPath),
       readJson(backupMetaPath),
       readWarnings(),
       dirExists(syncLockDir),
+      getCopyingBackendIds(),
     ]);
 
   const backendStatuses: BackendInstanceStatus[] = await Promise.all(
@@ -500,7 +503,7 @@ export async function getSyncStatus(): Promise<SyncStatus> {
       const lastError = pushFailure ? pushFailure.title : null;
       const connected = !lastError;
 
-      return { ...b, connected, lastPushEpoch, lastError };
+      return { ...b, connected, lastPushEpoch, lastError, syncing: copyingBackendIds.includes(b.id) };
     }),
   );
 
@@ -551,8 +554,9 @@ export async function getSyncStatus(): Promise<SyncStatus> {
     // OR, not assign: live sync-spaces activity and the legacy .sync-lock
     // directory (extra-backups pushes) are independent signals — either one
     // syncing means "in progress". Assigning would drop whichever ran second.
-    syncInProgress: isSyncSpacesSyncing() || lockExists,
-    syncingBackendId: null, // Set by SyncService at runtime via event
+    syncInProgress: isSyncSpacesSyncing() || lockExists || copyingBackendIds.length > 0,
+    syncingBackendId: copyingBackendIds[0] ?? null,
+    copyingBackendIds,
     syncedCategories: categoryChecks.filter(Boolean) as string[],
     // Snapshot the SyncHub-carried per-device recency map (see interface note).
     lastSyncByDevice: getLastSyncByDevice(),
@@ -692,6 +696,27 @@ export async function updateBackend(
     syncLegacyKeys(config);
     return existing;
   });
+}
+
+// --- "A backup copy is running" (backup fixes 2026-11-18, B-1) ---
+
+/**
+ * Ids of the backups a copy is running for RIGHT NOW: the settings-and-skills half (SyncService) or the conversations
+ * and project files half (the spaces backup job). Real state read from the two jobs, so it is the same answer however
+ * the copy was started (first upload, Back up now, the hourly timer) and survives closing and reopening the panel.
+ * Empty when nothing is copying. WHY not just `syncInProgress`: that is the settings lock plus live GitHub sync, and
+ * neither the conversations copy nor which backup it is for.
+ */
+export async function getCopyingBackendIds(): Promise<string[]> {
+  const ids = new Set<string>(syncServiceInstance?.copyingBackendIds() ?? []);
+  const targets = spacesBackupCopyingTargets();
+  if (targets.length > 0) {
+    for (const b of await readBackendInstances()) {
+      const t = targetForBackend(b);
+      if (t && targets.includes(`${t.type}|${t.base}`)) ids.add(b.id);
+    }
+  }
+  return [...ids];
 }
 
 // --- Force Sync & Per-Backend Sync ---

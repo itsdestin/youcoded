@@ -167,6 +167,11 @@ export class SyncService extends EventEmitter {
   private syncSpacesStatePath: string;
   private conversationIndexPath: string;
   private pushing = false;
+  // Backups this service is copying to right now (the settings-and-skills half), for the "a backup copy is running"
+  // signal (backup fixes 2026-11-18, B-1). The lock directory only says "some push is running", not which backup.
+  private copyingIds = new Set<string>();
+  /** Ids of the backups a settings-and-skills copy is running for right now. */
+  copyingBackendIds(): string[] { return [...this.copyingIds]; }
   // Hourly daily-snapshot poll (see SNAPSHOT_POLL_INTERVAL_MS). Cleared in stop().
   private snapshotTimer: NodeJS.Timeout | null = null;
   // Periodic health re-check (see HEALTH_POLL_INTERVAL_MS) — a self-rescheduling
@@ -1097,6 +1102,7 @@ export class SyncService extends EventEmitter {
           // Backup & sync read "Backed up 5m ago" for a backup that never ran. Its settings stay;
           // the panel says it is no longer supported and offers Remove.
           if (instance.type === 'github') continue;
+          this.copyingIds.add(instance.id);
           try {
             let backendErrors = 0;
             switch (instance.type) {
@@ -1125,6 +1131,8 @@ export class SyncService extends EventEmitter {
             await this.recordBackendFailure(instance, String(e));
             if (instance.type === 'drive' || instance.type === 'icloud') snapshotOutcomes.push(false);
             totalErrors++;
+          } finally {
+            this.copyingIds.delete(instance.id);
           }
         }
 

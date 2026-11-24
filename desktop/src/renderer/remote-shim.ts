@@ -2805,6 +2805,7 @@ export function installShim(): void {
       force: () => invoke('sync:force', undefined, { timeoutMs: 10 * 60_000 }),
       getLog: (lines?: number) => invoke('sync:get-log', { lines }),
       dismissWarning: (warning: string) => invoke('sync:dismiss-warning', { warning }),
+      startFresh: () => invoke('sync:start-fresh'),
       // V2: Per-instance backend management
       addBackend: (instance: any) => invoke('sync:add-backend', instance),
       removeBackend: (id: string) => invoke('sync:remove-backend', { id }),

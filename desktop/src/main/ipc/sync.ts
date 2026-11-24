@@ -15,7 +15,7 @@ import { execFile } from 'child_process';
 import { safeOpenExternal, openPathSafely } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
 import {
-  getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning,
+  getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, startFreshBackupSettings,
   addBackend, removeBackend, updateBackend, pushBackend,
 } from '../sync-state';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from '../sync-setup-handlers';
@@ -64,6 +64,9 @@ export const syncChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.SYNC_GET_LOG, kind: 'handle', handler: (p) => getSyncLog(p?.lines) }),
   // The warning code of the row being dismissed; a missing one dismisses nothing (as the phone's copy did).
   defineChannel({ name: IPC.SYNC_DISMISS_WARNING, kind: 'handle', handler: (p) => dismissWarning(p?.warning ?? '') }),
+
+  // "Start fresh" on the unreadable-settings notice: sets the damaged file aside (kept, dated). Answers whether it did.
+  defineChannel({ name: IPC.SYNC_START_FRESH, kind: 'handle', handler: () => startFreshBackupSettings() }),
 
   // Per-instance backend management (storage backends + multi-instance support).
   // sync:pull-backend ("Download now") was removed in sync-legacy-demolition.

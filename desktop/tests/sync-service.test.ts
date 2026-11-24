@@ -684,6 +684,27 @@ describe('SyncService Drive snapshot counts every copy (B-3)', () => {
       expect(fs.existsSync(path.join(claude(), 'toolkit-state', '.sync-marker-drive-1'))).toBe(false);
     });
 
+  it('says which backup it is copying to while the copy runs, and nothing after (B-1)', async () => {
+    const { svc } = service(null);
+    let during: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    vi.spyOn(svc, 'pushDrive').mockImplementation(async () => { during = svc.copyingBackendIds(); await gate; return 0; });
+    expect(svc.copyingBackendIds()).toEqual([]);
+    const run = svc.push({ force: true });
+    await vi.waitFor(() => expect(during).toEqual(['drive-1']));
+    release();
+    await run;
+    expect(svc.copyingBackendIds()).toEqual([]);
+  });
+
+  it('stops saying so when the copy throws', async () => {
+    const { svc } = service(null);
+    vi.spyOn(svc, 'pushDrive').mockRejectedValue(new Error('boom'));
+    await svc.push({ force: true });
+    expect(svc.copyingBackendIds()).toEqual([]);
+  });
+
   it('when every copy lands: the day is stamped, old snapshots are pruned, and the success time is written', async () => {
     const { svc, calls } = service(null);
     const res = await svc.push({ force: true });

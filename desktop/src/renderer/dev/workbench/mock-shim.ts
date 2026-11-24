@@ -211,7 +211,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'syncSpaces.listDevices', 'syncSpaces.renameDevice', 'syncSpaces.removeDevice',
   // Legacy rclone half of Backup & Sync. All real preload channels — hand-written
   // because the catch-all's `[]` is a truthy non-status that crashed the panel.
-  'sync.getStatus', 'sync.getLog', 'sync.force', 'sync.dismissWarning',
+  'sync.getStatus', 'sync.getLog', 'sync.force', 'sync.dismissWarning', 'sync.startFresh',
   'sync.pushBackend', 'sync.updateBackend', 'sync.removeBackend', 'sync.addBackend',
   // The add-a-backup wizard's steps (small-fixes-1), so its two failures can be photographed.
   'sync.setup.checkPrereqs', 'sync.setup.installRclone', 'sync.setup.authGdrive', 'sync.setup.createRepo',
@@ -2528,6 +2528,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // confirm" for a backup that worked — a fake that lies the other way.
     force: async () => ({ success: true, output: 'Google Drive', error: '' }),
     dismissWarning: async () => ({ ok: true }),
+    startFresh: async () => true,
     pushBackend: async () => ({ success: true, error: '' }),
     updateBackend: async () => ({ ok: true }),
     removeBackend: async () => ({ ok: true }),

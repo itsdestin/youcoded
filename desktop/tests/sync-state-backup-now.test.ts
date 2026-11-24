@@ -7,10 +7,12 @@ import path from 'path';
 
 // sync-state reads from the spaces service; replace it so no engine, timer or git is involved.
 const backupNow = vi.fn();
+const spacesCopying = vi.fn((): string[] => []);
 vi.mock('../src/main/sync-spaces/service', () => ({
   getLastSyncByDevice: () => ({}),
   getSelfLastSyncEpochMs: () => null,
   isSyncSpacesSyncing: () => false,
+  spacesBackupCopyingTargets: () => spacesCopying(),
   syncSpacesBackupNow: (...a: any[]) => backupNow(...a),
 }));
 
@@ -23,7 +25,7 @@ const github = { id: 'github-1', type: 'github', label: 'GitHub', syncEnabled: t
 
 let home: string;
 const push = vi.fn();
-const fakeService: any = { push: (...a: any[]) => push(...a), stop() {}, setHealthCheckGate() {} };
+const fakeService: any = { push: (...a: any[]) => push(...a), stop() {}, setHealthCheckGate() {}, copyingBackendIds: () => [] as string[] };
 
 function writeBackends(list: any[]) {
   fs.mkdirSync(path.join(home, '.claude', 'toolkit-state'), { recursive: true });
@@ -198,5 +200,36 @@ describe('warnings raised by the conversations half of "Back up now"', () => {
     await state.addOrReplaceWarning({ code: 'UNKNOWN', level: 'danger', backendId: 'drive-1', title: 'personal', body: '', dismissible: false, createdEpoch: 1 });
     await state.clearWarningsByBackend('drive-1', 'spaces');
     expect((await warnings()).map((w) => w.title)).toEqual(['personal']);
+  });
+});
+
+// "A backup copy is running" must be real state from both halves (backup fixes 2026-11-18, B-1).
+describe('which backups a copy is running for', () => {
+  it('is empty when nothing runs', async () => {
+    writeBackends([drive]);
+    expect(await state.getCopyingBackendIds()).toEqual([]);
+    const st = await state.getSyncStatus();
+    expect(st.syncInProgress).toBe(false);
+    expect(st.backends[0].syncing).toBe(false);
+  });
+
+  it('names a backup the settings-and-skills half is copying to', async () => {
+    writeBackends([drive]);
+    fakeService.copyingBackendIds = () => ['drive-1'];
+    expect(await state.getCopyingBackendIds()).toEqual(['drive-1']);
+    const st = await state.getSyncStatus();
+    expect(st.backends[0].syncing).toBe(true);
+    expect(st.syncInProgress).toBe(true);
+    fakeService.copyingBackendIds = () => [];
+  });
+
+  it('names a backup the conversations half is copying to, matched by destination', async () => {
+    writeBackends([drive, { ...pausedIcloud, syncEnabled: true }]);
+    spacesCopying.mockReturnValue(['drive|gdrive:Claude']);
+    const st = await state.getSyncStatus();
+    expect(st.backends.map((b) => [b.id, b.syncing])).toEqual([['drive-1', true], ['icloud-1', false]]);
+    expect(st.syncInProgress).toBe(true);
+    expect(st.copyingBackendIds).toEqual(['drive-1']);
+    spacesCopying.mockReturnValue([]);
   });
 });
