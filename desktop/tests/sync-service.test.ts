@@ -661,12 +661,12 @@ describe('SyncService Drive snapshot counts every copy (B-3)', () => {
     vi.spyOn(svc, 'getBackendInstances').mockResolvedValue([drive]);
     vi.spyOn(svc, 'getSyncEnabledBackends').mockResolvedValue([drive]);
     const calls: string[][] = [];
-    vi.spyOn(svc, 'rclone').mockImplementation(async (args: string[]) => {
+    vi.spyOn(svc, 'rclone').mockImplementation((async (args: string[]) => {
       calls.push(args);
       if (args[0] === 'lsf') return { code: 0, stdout: '2000-01-01/\n', stderr: '' };
       const failing = failOn !== null && args.some((a) => a.includes(failOn));
       return { code: failing ? 1 : 0, stdout: '', stderr: failing ? 'quota exceeded' : '' };
-    });
+    }) as any);
     return { svc, calls };
   }
 

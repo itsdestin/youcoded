@@ -3643,6 +3643,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // simply never invoked, matching this channel's unwired-before-Task-9
     // behavior exactly.
     statusData: (cb) => {
+      const backupCopyOn = typeof location !== 'undefined' && new URLSearchParams(location.search).get('backupCopy') === '1';
       const fixture = statusBarFixtureFor(activeScenario);
       if (fixture) {
         cb({
@@ -3652,8 +3653,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           updateStatus: updateStatusSwitch(),
           syncWarnings: [],
           // `?backupCopy=1`: a backup copy is running (the optional status-bar chip's picture).
-          copyingBackendIds: new URLSearchParams(location.search).get('backupCopy') === '1' ? ['drive-1'] : [],
-          syncInProgress: new URLSearchParams(location.search).get('backupCopy') === '1',
+          copyingBackendIds: backupCopyOn ? ['drive-1'] : [],
+          syncInProgress: backupCopyOn,
           contextMap: {},
           gitBranchMap: {},
           sessionStatsMap: fixture.sessionStatsMap,

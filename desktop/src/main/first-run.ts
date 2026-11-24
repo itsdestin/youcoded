@@ -108,7 +108,7 @@ const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 let firstRunWriteChain: Promise<void> = Promise.resolve();
 function queueFirstRunWrite(job: () => Promise<void>): Promise<void> {
   const next = firstRunWriteChain.then(job, job);
-  firstRunWriteChain = next.catch(() => {});
+  firstRunWriteChain = next.catch(() => {}); // benign: the caller awaits `next` and sees the failure; the chain only keeps the order
   return next;
 }
 /** Resolves once every write asked so far has finished (tests, and a clean quit). */
@@ -135,6 +135,7 @@ export function firstRunStateDir(): string {
  */
 /** Repair the settings file if it is damaged (see backup-config.ts). Called once at launch, before isFirstRun. */
 export async function healBackupConfig(): Promise<void> {
+  // benign: a failed repair leaves the file as it was, and the first-run check right after still answers from it
   try { await readBackupConfig(CONFIG_FILE); } catch { /* the first-run check below still answers */ }
 }
 

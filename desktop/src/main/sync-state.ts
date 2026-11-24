@@ -265,7 +265,7 @@ function generateBackendId(type: string, label: string): string {
  * Each previously-active backend becomes a sync-enabled instance;
  * inactive ones are omitted (they weren't configured before).
  */
-export function migrateConfigToV2(config: any): BackendInstance[] {
+function migrateConfigToV2(config: any): BackendInstance[] {
   const backends: BackendInstance[] = [];
   const backendStr: string = config?.PERSONAL_SYNC_BACKEND || 'none';
   const activeBackends = backendStr
@@ -327,7 +327,7 @@ export function migrateConfigToV2(config: any): BackendInstance[] {
  * storage_backends directly (simplification audit M3). Uses the first
  * instance of each type for the flat key values.
  */
-export function syncLegacyKeys(config: any): void {
+function syncLegacyKeys(config: any): void {
   const backends: BackendInstance[] = config.storage_backends || [];
 
   // PERSONAL_SYNC_BACKEND = comma-separated list of sync-enabled types
@@ -366,14 +366,14 @@ export async function readBackendInstances(file: string = configPath): Promise<B
     config.storage_backends = migrated;
     syncLegacyKeys(config);
     return migrated;
-  }).catch(() => []);
+  }).catch(() => []); // benign: unreadable settings already read as "no backups"; the notice about it comes from the settings-file check
 }
 
 // --- The settings file's own health, told to the person (backup fixes 2026-11-18, B-2) ---
 
-export const CONFIG_RESTORED_CODE = 'CONFIG_RESTORED';
-export const CONFIG_SALVAGED_CODE = 'CONFIG_SALVAGED';
-export const CONFIG_DAMAGED_CODE = 'CONFIG_DAMAGED';
+const CONFIG_RESTORED_CODE = 'CONFIG_RESTORED';
+const CONFIG_SALVAGED_CODE = 'CONFIG_SALVAGED';
+const CONFIG_DAMAGED_CODE = 'CONFIG_DAMAGED';
 export const CONFIG_HEALTH_CODES = [CONFIG_RESTORED_CODE, CONFIG_SALVAGED_CODE, CONFIG_DAMAGED_CODE];
 
 /**

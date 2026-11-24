@@ -378,7 +378,6 @@
     "clearSetupDownload": 1
   },
   "main/first-run.ts": {
-    "markSetupCompleted": 1,
     "stoppedForNoInternet": 1,
     "isFirstRun": 1,
     "handleConnectLocalApp": 2,
@@ -1089,9 +1088,6 @@
   },
   "main/sync-setup-handlers.ts": {
     "checkSyncPrereqs": 1
-  },
-  "main/sync-spaces/daily-backup.ts": {
-    "runIfDue": 2
   },
   "main/sync-spaces/device-registry.ts": {
     "readDevices": 1

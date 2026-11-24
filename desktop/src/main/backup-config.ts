@@ -90,6 +90,7 @@ async function moveAside(file: string): Promise<string> {
   for (let n = 0; ; n++) {
     const name = n === 0 ? base : `${base}-${n}`;
     const target = path.join(path.dirname(file), name);
+    // benign: access() failing means the dated name is free, which is the answer we want
     try { await fs.promises.access(target); continue; } catch { /* free */ }
     await fs.promises.rename(file, target);
     return name;
@@ -239,6 +240,7 @@ async function repair(file: string, judged: { text: string } | { unreadable: str
     await writeInner(file, replacement.config);
   } catch (e) {
     // Put the original back rather than leave no file at all.
+    // benign: this is the undo of a failed repair; the failure itself is returned to the caller just below
     try { await fs.promises.rename(path.join(path.dirname(file), aside), file); } catch { /* nothing more to do */ }
     return { ok: false, reason: `${reason}; could not write the repaired file: ${String((e as Error)?.message ?? e)}` };
   }
@@ -280,11 +282,6 @@ export function updateBackupConfig<T = void>(file: string, mutate: (config: Conf
   });
 }
 
-/** True when the file is damaged and could not be repaired (what the "Start fresh" button is for). */
-export async function isBackupConfigDamaged(file: string): Promise<boolean> {
-  return !(await readBackupConfig(file)).ok;
-}
-
 /**
  * "Start fresh": move a damaged file aside (kept, dated) so the person can set up again. Refuses when the file is
  * healthy or repairable — it never moves a usable file. Returns the new name, or null when there was nothing to do.
@@ -310,5 +307,6 @@ export async function readRecoveryNote(file: string): Promise<RecoveryNote | nul
 }
 
 export async function clearRecoveryNote(file: string): Promise<void> {
+  // benign: no note file means there is nothing to clear
   try { await fs.promises.unlink(notePath(file)); } catch { /* already gone */ }
 }

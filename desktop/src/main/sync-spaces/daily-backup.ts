@@ -120,7 +120,7 @@ export class DailyBackup {
 
   private async runIfDueInner(spaces: SyncSpace[], targets: BackupTarget[], log: (msg: string) => void): Promise<void> {
     let marker: string | null = null;
-    try { marker = (await fs.promises.readFile(this.markerPath, 'utf8')).trim(); } catch { /* first run */ }
+    try { marker = (await fs.promises.readFile(this.markerPath, 'utf8')).trim(); } catch { /* first run */ } // benign: no marker file just means the first day
     const now = new Date();
     if (!isBackupDue(marker, now) || targets.length === 0) return;
     const dated = datedFolderName(now);
@@ -175,7 +175,7 @@ export class DailyBackup {
     // (an expired Drive sign-in) would delete every snapshot and add none.
     // Prune a destination only once today's snapshot fully landed there.
     if (force || !this.done.has(`prune|${where}`)) {
-      try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ }
+      try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ } // benign: pruning old copies is housekeeping; the next run retries and the copy itself already succeeded
     }
   }
 
