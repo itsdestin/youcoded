@@ -88,7 +88,7 @@ describe('"Log in with Claude" installs Node.js first', () => {
     const order: string[] = [];
     m.ensureNode.mockImplementation(async () => { order.push('node'); return { success: true }; });
     m.installClaude.mockImplementation(async () => { order.push('claude'); return { success: true }; });
-    m.startOAuthLogin.mockReturnValue({ url: null, kill: vi.fn() } as never);
+    m.startOAuthLogin.mockReturnValue({ url: null, kill: vi.fn(), waitForUrl: async () => null } as never);
 
     const fr = new FirstRunManager();
     fr.forceStep('AUTHENTICATE');

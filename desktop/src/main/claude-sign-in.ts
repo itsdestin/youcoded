@@ -1,7 +1,7 @@
 // claude-sign-in.ts — "Sign in again" for Claude Code, from the chat card and Settings.
 //
 // WHY (card #236): when Claude's login runs out the person used to be told to run /login in a
-// terminal. This runs the SAME `claude auth login` first launch already uses (startOAuthLogin,
+// terminal. This runs the SAME `claude auth login` first launch already uses (openClaudeLogin, below,
 // which opens the browser itself — so nothing here opens a tab) and keeps it alive until the
 // browser round-trip is done, exactly like first-run.ts handleOAuthLogin.
 //
@@ -9,21 +9,34 @@
 // only answers "the browser is open" (true) and then finishes in the background.
 import { log } from './logger';
 import { returnToApp } from './headless/host-bridge';
-import { startOAuthLogin as realStart } from './prerequisite-installer';
+import { startOAuthLogin as realStart, type OAuthLogin } from './prerequisite-installer';
 import type { ClaudeAccount } from './providers/claude-account';
 
 /** How long the login process is kept waiting for the person. WHY 10 min: the cap the Settings
  *  card's own poll gives every provider (provider-sign-in-store.ts). */
 const CLAUDE_SIGN_IN_TIMEOUT_MS = 10 * 60_000;
 const POLL_MS = 2000;
-/** How long to wait for the login link to appear. Same 1.5 s first-run waits. */
-const URL_WAIT_MS = 1500;
+/** The longest wait for the login link. WHY 15 s, not the old fixed 1.5 s: the wait now ends the
+ *  moment the link is printed (usually well under a second), so the cap only matters on a slow start
+ *  — a cold boot or a just-updated CLI — where 1.5 s failed a login that would have worked. */
+export const LOGIN_LINK_WAIT_MS = 15_000;
 
-type Login = { url: string | null; kill: () => void; onExit?: (cb: (code: number | null) => void) => void };
+type Login = Pick<OAuthLogin, 'url' | 'kill' | 'waitForUrl'> & Partial<Pick<OAuthLogin, 'onExit'>>;
+
+/** The ONE way the app opens Claude Code's login: start `claude auth login`, wait for its link,
+ *  and end the process when no link came. WHY shared (1.3.4 bug): first launch (first-run.ts) and
+ *  "Sign in again" (below) each had their own copy of these steps; the copies drifted and only the
+ *  newer one broke in the installed app. Both screens now go through here. Resolves the running
+ *  login (its `url` is set) or null when no link appeared. */
+export async function openClaudeLogin(start: () => Login = realStart): Promise<Login | null> {
+  const login = start();
+  const url = await login.waitForUrl(LOGIN_LINK_WAIT_MS);
+  if (!url) { login.kill(); return null; }
+  return login;
+}
 
 export interface ClaudeSignInDeps {
-  start?: (isPackaged: boolean) => Login;
-  isPackaged?: boolean;
+  start?: () => Login;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   /** WHY injectable: Android brings YouCoded back from the browser (a no-op on desktop). */
@@ -36,12 +49,11 @@ export const NO_LOGIN_LINK_MESSAGE = 'Could not get login URL from Claude Code.'
 export class ClaudeSignIn {
   private login: Login | null = null;
   private round = 0;
-  private readonly d: Required<Omit<ClaudeSignInDeps, 'start'>> & { start: (p: boolean) => Login };
+  private readonly d: Required<Omit<ClaudeSignInDeps, 'start'>> & { start: () => Login };
 
   constructor(deps: ClaudeSignInDeps = {}) {
     this.d = {
       start: deps.start ?? realStart,
-      isPackaged: deps.isPackaged ?? false,
       sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
       now: deps.now ?? Date.now,
       returnToApp: deps.returnToApp ?? returnToApp,
@@ -56,18 +68,23 @@ export class ClaudeSignIn {
     // alone cannot say the person finished. A different end time can.
     account.invalidate();
     const before = await account.status().catch(() => ({ state: 'unknown' as const }));
-    const login = this.d.start(this.d.isPackaged);
     const round = ++this.round;
-    this.login = login;
     let exitedOk = false;
-    login.onExit?.((code) => { if (code === 0) exitedOk = true; });
-
-    await this.d.sleep(URL_WAIT_MS);
-    if (!login.url) {
-      login.kill();
+    // WHY a placeholder while the link is awaited: a second click in that window joins this login
+    // (the `if (this.login)` above) instead of starting a second `claude auth login`.
+    const pending: Login = { url: null, kill: () => {}, waitForUrl: async () => null };
+    this.login = pending;
+    const login = await openClaudeLogin(() => {
+      const l = this.d.start();
+      l.onExit?.((code) => { if (code === 0) exitedOk = true; });
+      return l;
+    });
+    if (round !== this.round) { login?.kill(); return true; } // cancelled while the link was coming
+    if (!login) {
       this.login = null;
       throw new Error(NO_LOGIN_LINK_MESSAGE);
     }
+    this.login = login;
     void this.finish(account, before, login, round, () => exitedOk);
     return true;
   }

@@ -9,7 +9,8 @@ const END_NEW = '2026-12-17T08:29:49.037Z';
 
 function rig(opts: { url?: string | null; statuses: Array<any> }) {
   let exit: (c: number | null) => void = () => {};
-  const login = { url: opts.url === undefined ? 'https://claude.ai/login?x=1' : opts.url, kill: vi.fn(), onExit: (cb: (c: number | null) => void) => { exit = cb; } };
+  const url = opts.url === undefined ? 'https://claude.ai/login?x=1' : opts.url;
+  const login = { url, kill: vi.fn(), waitForUrl: vi.fn(async () => url), onExit: (cb: (c: number | null) => void) => { exit = cb; } };
   const queue = [...opts.statuses];
   let last = queue[queue.length - 1];
   const account = {
