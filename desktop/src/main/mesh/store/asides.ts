@@ -17,7 +17,7 @@ import { MARKS_FILE } from './marks';
 import { nextAsideName } from './versionfiles';
 
 const ASIDE_RE = /^[0-9a-f]+-q?\d+$/;
-export const RETIRED_FILE = 'retired.json';
+const RETIRED_FILE = 'retired.json';
 
 export class Asides {
   constructor(
