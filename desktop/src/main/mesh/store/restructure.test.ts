@@ -404,3 +404,19 @@ describe('the high-water record (unchanged by the restructure)', () => {
     await s.close(); fs.rmSync(snap, { recursive: true }); await t.cleanup();
   });
 });
+
+describe('a stopped fork leaves only an invisible work folder, cleared at the next open', () => {
+  it('leftover files in forks/<child> are never listed or served, are removed at open, and a retry still builds the child', async () => {
+    const t = await tmpRoot('fork-left-');
+    let s = await open(t.dir); await s.append(P, 0, 0, A.slice(0, 12)); await s.close();
+    const work = path.join(t.dir, 'forks', keyOf(C)); fs.mkdirSync(work, { recursive: true });
+    fs.writeFileSync(path.join(work, 'index.bin'), Buffer.from('half built')); fs.writeFileSync(path.join(work, 'body-0000000000000000.bin'), Buffer.from('junk'));
+    s = await open(t.dir);
+    expect(fs.readdirSync(work)).toEqual([]);                                                       // swept at open
+    expect((await s.listVersions()).some((v) => v.version.equals(C))).toBe(false);                   // never shown
+    await expect(s.head(C)).rejects.toMatchObject({ code: 'unknown-version' });
+    expect(await s.forkVersion(P, 12, C)).toEqual({ lines: 12, created: true });
+    expect(await s.read(C, 0, 0, 12)).toEqual(A.slice(0, 12));
+    await s.close(); await t.cleanup();
+  });
+});
