@@ -411,7 +411,7 @@ export class ChatStore {
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv, marks, hw, rolledBack: null,
-      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), hist: await histCount(this.fs, dir), tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
+      parked: new Map(), parkedBytes: 0, epoch: await readEpoch(this.fs, dir), hist: ck ? ck.hist : await histCount(this.fs, dir), tailsShown: (await takeoverIds(this.fs, dir)).length, rejected: 0,
     };
     await this.restoreRedundancy(st);
     await this.checkRollback(st);
@@ -1126,7 +1126,7 @@ export class ChatStore {
     });
   }
   private tailEnv(): TailEnv {
-    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n), recordTakeovers: (st) => recordTakeovers(this.hwEnv(), st, st.tailsShown), stampHistory: (st) => appendCheckpoint(this.fs, st.dir, st.ck, this.ckOf(st)) };
+    return { fs: this.fs, parked: this.parkedStore, readRange: (st, a, b, v) => this.readRange(st, a, b, v), stateAtLine: (st, n) => this.stateAtLine(st, n), confirmedBetween: (st, a, b) => this.confirmedBetween(st, a, b), cutTo: (st, n) => this.cutTo(st, n), recordTakeovers: (st) => recordTakeovers(this.hwEnv(), st, st.tailsShown), stampHistory: async (st) => { const live = this.versions.get(st.key) ?? st; live.hist = await histCount(this.fs, live.dir); await appendCheckpoint(this.fs, live.dir, live.ck, this.ckOf(live)); } };   // the live state: cutTo replaced it
   }
 
   /** A previously set-aside tail, with the chain values around it, or null. Pass `version` to look in one version only. */

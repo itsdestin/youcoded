@@ -260,3 +260,74 @@ describe('the checkpoint carries the history it was written in, and an index ahe
     fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
   });
 });
+
+describe('each layer of the F1 defence is pinned by a case only it catches', () => {
+  it('an older checkpoint (written before the LAST takeover) that disagrees with an older index and bodies (from before the FIRST): the index and bodies are on a replaced branch, so it stays loud', async () => {
+    const t = await tmpRoot('r7-two-'); const snapS0 = t.dir + '-s0'; const snapS1 = t.dir + '-s1';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 20)); await s.close();
+    fs.cpSync(t.dir, snapS0, { recursive: true });                                 // S0: 20 lines of A
+    s = await open(t.dir);
+    await s.setAsideTail(TID, V(1), 10); await s.append(V(1), 0, 10, B.slice(10, 16)); await s.close();
+    fs.cpSync(t.dir, snapS1, { recursive: true });                                 // S1: checkpoint says 16 lines, history count 1
+    s = await open(t.dir);
+    await s.append(V(1), 0, 16, B.slice(16, 30)); await s.setAsideTail('bbccddee0011', V(1), 25); await s.close();   // a second takeover: history count 2
+    putBack(t.dir, snapS0, ['index', 'body']);                                     // index and bodies from before the first takeover
+    putBack(t.dir, snapS1, ['ck']);                                                // a checkpoint from between the two takeovers
+    expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, truth(10, 25)));
+    for (const x of [snapS0, snapS1]) fs.rmSync(x, { recursive: true, force: true }); await t.cleanup();
+  });
+  it('after a quarantine and a recopy (no tail to consult), an older index and bodies from BEFORE the quarantine that disagree with the current checkpoint are refused', async () => {
+    const t = await tmpRoot('r7-q-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 20)); await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });
+    s = await open(t.dir);
+    await s.setAsideDamaged(V(1)); await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }).catch(() => undefined);
+    await s.append(V(1), 0, 0, B.slice(0, 16)); await s.close();                   // another history was recopied
+    putBack(t.dir, snap, ['index', 'body']);                                       // the quarantined copy's index and bodies come back
+    expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, B.slice(0, 16)));
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+  it('an older checkpoint and older bodies with an index that holds only the lines up to the cut (nothing for the index to disagree with): the lines past the cut are never served as vouched', async () => {
+    const t = await tmpRoot('r7-prefix-'); const snap = t.dir + '-snap';
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 40));
+    const eh = (await s.hashAt(V(1), 0, 5))!;                                       // five lines evicted, as in the fuzz run that found this: the checkpoint then carries a boundary
+    await s.evictBody(V(1), { kind: 'holders-confirmed', version: keyOf(V(1)), through: 5, hash: eh, acks: [{ holder: 'p', version: keyOf(V(1)), lines: 5, hash: eh, signature: 's' }] } as any);
+    await s.close();
+    fs.cpSync(t.dir, snap, { recursive: true });
+    s = await open(t.dir);
+    await s.setAsideTail(TID, V(1), 10);
+    const eh2 = (await s.hashAt(V(1), 0, 8))!;                                      // a later eviction (through 8, below the cut): the CURRENT checkpoint states it, the older one does not
+    await s.evictBody(V(1), { kind: 'holders-confirmed', version: keyOf(V(1)), through: 8, hash: eh2, acks: [{ holder: 'p', version: keyOf(V(1)), lines: 8, hash: eh2, signature: 's' }] } as any);
+    await s.close();                                                                // the index now holds 10 records
+    putBack(t.dir, snap, ['ck', 'body']);                                          // checkpoint says 40 (history count 0), bodies hold 40 lines of A
+    let s2: ChatStore | null = null; let lines = -1; let flagged = false; let verdict = 'ok';
+    try { s2 = await open(t.dir); const h = await s2.head(V(1)); lines = h.lines; flagged = h.damagedFromLine !== null; } catch (e: any) { verdict = e?.code === 'damaged' || e?.code === 'corrupt' ? 'quarantined' : 'WRONG-' + e?.code; }
+    finally { if (s2) await s2.close().catch(() => undefined); }
+    expect(verdict === 'quarantined' || (lines <= 10 && flagged)).toBe(true);     // never 40 lines of A with no flag
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+  it('a quarantine while rejected/ is full leaves the park in parked/, and the history count in the epoch still refuses it on a recopy of another history', async () => {
+    const t = await tmpRoot('r7-qcap-');
+    const s = await open(t.dir, { ...opts, maxRejectedBytes: 1 });
+    await s.append(V(1), 0, 0, A.slice(0, 10)); await s.append(V(1), 0, 12, A.slice(12, 14));
+    await s.setAsideDamaged(V(1));
+    expect(fs.readdirSync(path.join(vdir(t.dir), 'parked')).length).toBe(1);        // could not be moved: the cap
+    await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }).catch(() => undefined);
+    expect(await s.append(V(1), 0, 0, B.slice(0, 12))).toBe('ok');
+    expect((await s.head(V(1))).lines).toBe(12);                                    // the park of history A did not join
+    for (let i = 0; i < 12; i++) expect(((await s.read(V(1), 0, i, i + 1)) as Buffer[])[0].equals(B[i])).toBe(true);
+    await s.close(); await t.cleanup();
+  });
+  it('the checkpoint is restated under the new history count at a takeover that cuts nothing', async () => {
+    const t = await tmpRoot('r7-stamp-');
+    const s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 20)); await s.setAsideTail(TID, V(1), 20); await s.close();
+    const b = fs.readFileSync(path.join(vdir(t.dir), 'checkpoint.bin'));
+    const hist = [0, 1].map((i) => ({ seq: Number(b.readBigUInt64BE(i * 236 + 8)), hist: b.readUInt32BE(i * 236 + 228) >>> 8 })).sort((x, y) => y.seq - x.seq)[0].hist;
+    expect(hist).toBe(1);
+    await t.cleanup();
+  });
+});

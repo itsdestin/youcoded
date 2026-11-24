@@ -98,6 +98,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
   let sameRewriteTakeover = false;                                         // round 7: a takeover with lines to cut finished and the new host continues with byte-identical lines (see the excuse in check())
   let staleIndexInjected = false;                                          // round 7: an OLDER index.bin (single fault, or in a pair) was put back AFTER a divergent takeover, so it may describe the replaced history; cleared when the version is emptied (setAsideDamaged) or the head is canonical again. The excuse below names this cause and is checked against it
+  let pairInjected = false;                                                // round 7: a PAIR of older files (index/checkpoint/bodies) was put back after a divergent takeover or a quarantine; cleared like staleIndexInjected
   let lostReported = false;                                                // round 7: head().lostTakeovers was above 0 at some check: the loss of takeover evidence HAS been reported (a later check on a version that is `damaged` cannot read it again)
   let lostTakeoverFault = false;                                           // round 7: a fault or a rollback that can remove takeover evidence (tails/ or a rolled-back folder) was dealt: head().lostTakeovers may then be above 0
   let closedAckedMax = 0; let rollbackDone = false; let hwFaulted = false; let rollbackActive = false;   // a fault hit the high-water record: a rollback on top of it is two faults, and the record can only under-report
@@ -167,11 +168,13 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       // (`Math.max(firstDiverge, evictedLines)`: lines below the evicted boundary have no body to be flagged, so the first line the store CAN flag is the boundary; the older index's evicted-prefix chain values
       // are the documented limit 2 of inventory.ts, the head hash differs from every peer's, and the flag is raised.)
       const staleIndexCause = diverged && staleIndexInjected;
+      // a pair of older files can leave the head on the other history, FLAGGED (the store keeps the version and says from which line it cannot vouch): reported, so not a quiet answer; the read oracle below stays strict
+      const pairCause = pairInjected && head.damagedFromLine !== null;
       if (head.lostTakeovers > 0) lostReported = true;
       // Round 7 (F3): a rollback or loss of tails/ across a takeover is REPORTED by head().lostTakeovers (the count outside the folder), which is the promise for that case; the lines served are then not trusted.
       const reportedLostTakeover = head.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault);
-      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= Math.max(firstDiverge, head.evictedLines) && staleIndexCause) ev('stale-history-head-reported'); else if (reportedLostTakeover) ev('head-of-another-history-lost-takeover-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine, faultNote, lostTakeovers: head.lostTakeovers }); }
-      if (head.hash === ref.raw[head.lines]) staleIndexInjected = false;   // the version shows the canonical history again: the cause is spent
+      if (head.hash !== ref.raw[head.lines]) { if (diverged && head.damagedFromLine !== null && head.damagedFromLine <= Math.max(firstDiverge, head.evictedLines) && staleIndexCause) ev('stale-history-head-reported'); else if (pairCause) ev('pair-head-flagged'); else if (reportedLostTakeover) ev('head-of-another-history-lost-takeover-reported'); else bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine, faultNote, lostTakeovers: head.lostTakeovers }); }
+      if (head.hash === ref.raw[head.lines]) { staleIndexInjected = false; pairInjected = false; }   // the version shows the canonical history again: the cause is spent
       if (head.lostTakeovers > 0 && !rotted && !lossy) bad('false-alarm-lost-takeovers-without-any-fault', { tag, lost: head.lostTakeovers });
       if (head.lostTakeovers > 0 && !reportedLostTakeover) bad('lost-takeovers-reported-for-no-reason-we-dealt', { tag, lost: head.lostTakeovers, fault: faultNote });
       const flagged: number | null = head.damagedFromLine;
@@ -211,7 +214,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       try { undecidableIdentical = sameRewriteTakeover && state === 'damaged' && fs.readFileSync(path.join(root, 'versions', key, 'marks.bin')).includes('older files put back'); } catch { /* no marks file: not this case */ }
       if (undecidableIdentical) ev('undecidable-identical-rewrite-quarantined');
       if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok' && !undecidableIdentical) bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
-      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
+      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; staleIndexInjected = false; pairInjected = false; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
@@ -274,9 +277,12 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // WHY (round 7): the store lowers the high-water record to the cut point on purpose (highwater.ts lowerHw), so lines past a takeover's cut are no longer covered by what the last clean close recorded
     closedAckedMax = Math.min(closedAckedMax, p.from);
     pending = null; tailsAcked.push({ id: p.id, from: p.from, lines: p.lines });
+    // a takeover whose continuation is byte-for-byte the lines it cut (a same-history takeover, or a `diverge` onto `alt` when the chat already followed `alt` there) is the documented identical-rewrite case
+    const nextCanon = p.diverge ? [...canon.slice(0, p.from), ...alt.slice(p.from)] : canon;
+    if (p.lines.length > 0 && p.lines.every((l, i) => nextCanon[p.from + i] !== undefined && nextCanon[p.from + i].equals(l))) sameRewriteTakeover = true;
     if (p.diverge) {
       canon = [...canon.slice(0, p.from), ...alt.slice(p.from)]; ref = refChains(canon); diverged = true; firstDiverge = Math.min(firstDiverge, p.from); ackedMax = Math.min(ackedMax, p.from); ev('takeover-diverged');
-    } else { if (p.lines.length > 0) sameRewriteTakeover = true; ev('takeover-same-history'); }
+    } else ev('takeover-same-history');
   }
 
   async function episode(n: number): Promise<void> {
@@ -309,7 +315,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} append ${from}+${cnt}`);
             const res = await s.append(V(1), 0, from, canon.slice(from, from + cnt));
-            if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); if (diverged && staleIndexInjected && hd && hd.damagedFromLine !== null) ev('not-a-prefix-on-a-flagged-stale-index'); else if (hd && hd.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault)) ev('not-a-prefix-on-a-folder-with-lost-takeovers'); else bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
+            if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); if ((staleIndexInjected || pairInjected) && hd && hd.damagedFromLine !== null) ev('not-a-prefix-on-a-flagged-stale-index'); else if (hd && hd.lostTakeovers > 0 && (rollbackDone || lostTakeoverFault)) ev('not-a-prefix-on-a-folder-with-lost-takeovers'); else bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
           } else if (op < 0.62 && op >= 0.54) {
             const from = head + 2 + Math.floor(r() * 8); const cnt = 1 + Math.floor(r() * 5);
             if (from + cnt > canon.length) continue;
@@ -350,7 +356,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} extra`);
             await s.putExtra(sha(b), b); extraAcked.push(b);
           } else if (op < 0.985 || legacy) { log.push(`ep${n} scrub`); await s.scrubStep(V(1), { maxBytes: 1 << 20 }); }
-          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; }
+          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; staleIndexInjected = false; pairInjected = false; }
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
           if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
@@ -402,7 +408,8 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     // Promise: nothing is served from the wrong history without a typed error or a flag (`damaged`, damagedFromLine, rolledBack, lostTakeovers); the ordinary oracle above checks exactly that.
     // (not in an episode that already dealt a whole-folder rollback: a rollback plus a pair plus the single fault is three faults on one folder, beyond what any promise here covers)
     let pairDone = false;
-    if (!legacy && !big && snaps.length && !rolledThisEpisode && r() < 0.15) {
+    // (and not once a tail has already been damaged by a fault: the takeover evidence the store uses to tell old files from new is then itself gone, which makes a pair three faults)
+    if (!legacy && !big && snaps.length && !rolledThisEpisode && tailFaults.size === 0 && r() < 0.15) {
       const sn = snaps[Math.floor(r() * snaps.length)];
       const FAMS: Record<string, (n: string) => boolean> = {
         'index+body': (n) => /^(index\.bin|body-[0-9a-f]{16}\.bin)$/.test(n),
@@ -420,8 +427,9 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         for (const p of changed) { const old = sn.get(p); if (old === undefined) fs.unlinkSync(path.join(root, p)); else { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), old); } }
         rotted = true; if (fam.includes('body') || fam.startsWith('tail')) lossy = true; if (fam.startsWith('tail')) lostTakeoverFault = true;
         if (diverged && fam.startsWith('index')) staleIndexInjected = true;
+        if (fam === 'index+body' || fam === 'ck+body' || fam === 'index+ck') pairInjected = true;
         if (!fam.startsWith('tail')) pending = null;   // WHY: like a rollback, a takeover still waiting for its retry is moot when the head is put back to before it (its `from` would be clamped to the shorter head and write a legitimately shorter tail)
-        if (fam === 'index+ck') { rollbackActive = true; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax); }   // an older index AND checkpoint is a rolled-back HEAD (the bodies stay): promised like a rollback, i.e. reported when the head is below what the high-water record saw at the last clean close
+        if (fam === 'index+ck' || fam === 'ck+body') { rollbackActive = true; exemptFrom = hwFaulted ? 0 : Math.min(exemptFrom, closedAckedMax); }   // an older index AND checkpoint (the bodies stay), or an older checkpoint AND bodies (the index stays ahead and is cut back to them), is a rolled-back HEAD: promised like a rollback, i.e. reported when the head is below what the high-water record saw at the last clean close
         faultsSinceClean += 2; faultNote = `pair ${fam}`; pairDone = true; log.push(`PAIR FAULT ${fam} (${changed.length} files)`); ev('rot'); ev('pair-' + fam);
       }
     }

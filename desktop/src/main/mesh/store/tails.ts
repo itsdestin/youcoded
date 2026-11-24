@@ -68,7 +68,9 @@ export async function sharedPrefixBound(fs: Fs, dir: string, key: string): Promi
   for (const name of await historyNames(fs, dir)) if (name.startsWith('aside:') && await fs.exists(nodePath.join(asideRoot, name.slice(6), 'COMPLETE'))) return 0;
   let bound = Infinity;
   for (const id of await takeoverIds(fs, dir)) {
-    if (!(await fs.exists(marker(dir, id, 'begun'))) && !(await fs.exists(marker(dir, id, 'done')))) continue;
+    // only FINISHED cuts (`.done`): a takeover that has begun but not finished leaves the version as it was, so a checkpoint written before it is still true of what the folder holds (found by the fuzz: a
+    // takeover that stopped on a full disk right after `.begun` made every older checkpoint look stale)
+    if (!(await fs.exists(marker(dir, id, 'done')))) continue;
     let tail: TailFile | null = null;
     try { tail = await readTailFile(fs, nodePath.join(tailsDir(dir), `${id}.tail`), key, id); } catch { tail = null; }
     if (!tail) return 'unproven';
@@ -157,6 +159,8 @@ export interface TailEnv {
 //  5  cut (cutTo): high-water lowered, checkpoint lowered,  anything from "nothing cut" to "index cut, body not   open re-adopts lines the index lost (the tail still holds them) or sees
 //     index truncated, body trimmed                        trimmed"                                            the cut; the retry cuts again when the version still holds exactly
 //                                                                                                             the tail, otherwise the cut is complete
+//  5b checkpoint restated under the new history count          the cut, then the checkpoint in the new history      a crash before it leaves a checkpoint OLDER than the takeover, which is read as "older" only for
+//     (after the cut, same statement; in place)                 (F1)                                                 FINISHED cuts (sharedPrefixBound); the retry writes it again
 //  6  `.done` marker written                               everything finished                                 retry returns the original answer and changes nothing
 //
 //  Why this order is the simplest that works: the only thing that must never be absent when the cut happens is the evidence, so the tail comes first and `.begun` (the intent) second, before
@@ -212,9 +216,6 @@ export async function setAsideTailLocked(e: TailEnv, st: VState, takeoverId: str
     await e.recordTakeovers(st);
     st.epoch = await readEpoch(fs, dir);
     st.hist = await histCount(fs, dir);
-    // step 3c (round 7, F1): the checkpoint is restated under the new history count NOW, before the cut, with the same count and chain value. WHY: afterwards a checkpoint older than this takeover means
-    // "put back from before it" and nothing else, so the window in which an older checkpoint is a normal state is only the crash between steps 3 and 3c. (An in-place write of a small slot.)
-    await e.stampHistory(st);
     // step 4: parks of the old history are kept in rejected/ (never deleted, never applied)
     await e.parked.rejectOutsideEpoch(st);
     // step 5: cut only when the version still holds exactly the saved tail (a first run always does; a retry after a finished cut does not)
@@ -223,6 +224,10 @@ export async function setAsideTailLocked(e: TailEnv, st: VState, takeoverId: str
     // used to call the cut done (writing `.done`) and leave those lines in place, mixing the two histories. Proof that the lines past the cut are the tail's: the chain value at the head, which covers
     // every line, equals the chain value along the tail's own lines at that count. Before `.done` the new host has not been answered, so lines past the cut cannot be its own.
     if (L > 0 && await holdsTailPrefix(st, tail)) await e.cutTo(st, tail.fromLine);
+    // step 5b (round 7, F1): the checkpoint is restated under the new history count AFTER the cut, with the statement the cut left (or the same one when nothing was cut). WHY after and not before: a statement
+    // stamped with the new count BEFORE the cut would describe the lines about to be cut under the NEW history, and an older copy of it put back later would then look current. After the cut, "older than this
+    // takeover" can only mean "put back from before it". (An in-place write of a small slot.)
+    await e.stampHistory(st);
     // step 6 (N15): without this marker, lines the new host appended that happen to be byte-identical to the saved tail would be cut a second time by a replay
     await writeFileAtomic(fs, marker(dir, takeoverId, 'done'), Buffer.from('cut done\n')); // DESTRUCTIVE-OK(hint): an existence-only marker
   }

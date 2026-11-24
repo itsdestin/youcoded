@@ -59,7 +59,11 @@ export interface VState {
   /** Parked append files: name -> size, kept in memory so a park never rescans the folder (M4). */
   /** The history identity (tails.ts readEpoch), read from disk at load and after a takeover begins: parks are sealed with it and applied only while it is unchanged. */
   epoch: string;
-  /** The history COUNT (tails.ts histCount) read at load and after a takeover begins: every checkpoint statement written from this state carries it (round 7, F1). */
+  /**
+   * The history COUNT every checkpoint statement written from this state carries (round 7, F1). It is the count of the checkpoint that was LOADED, and moves to the folder's count only where the store has just
+   * made the content current: after a takeover's cut, at a rebuild that passed its checks, and at registration. WHY not simply the folder's count: a load that catches an older checkpoint up to an older
+   * index would otherwise restate OLD content under the CURRENT count, and that lie could never be told from a true statement again.
+   */
   hist: number;
   /** How many takeovers tails/ shows evidence of (tails.ts takeoverIds); compared with the high-water record's count to see a lost tails/ (round 7, F3). */
   tailsShown: number;

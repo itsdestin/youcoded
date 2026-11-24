@@ -348,7 +348,7 @@ export class BodyTools {
       // old host's line of history. A crash between index and checkpoint also leaves records beyond the checkpoint, but then the record AT the checkpoint's count agrees with the checkpoint (the
       // checkpoint is written after the index). So records beyond the checkpoint whose own record at the checkpoint's count DISAGREES with it are not "a crash that was ahead": they are another
       // history, and when the bodies reach the checkpoint's chain value exactly, the bodies are right and none of those records is used.
-      if (ckpt && ckpt.count > evLines && ckpt.count <= usable) {   // an older checkpoint arbitrates only over lines every history shares (round 7, F1)
+      if (ckpt && ckpt.count > evLines && ckpt.count <= usable) {   // an older checkpoint arbitrates only over lines every history shares (round 7, F1: found by the fuzz, an older checkpoint and bodies behind a cut-down index)
         const pc = new BodyCursor(this.fs, dir, layout, handles);
         let hh: Buffer = Buffer.from(start.h); let at = start.off; let ok = true;
         const atCk = lastValid + 1 > ckpt.count ? await refRec(ckpt.count - 1) : null;
