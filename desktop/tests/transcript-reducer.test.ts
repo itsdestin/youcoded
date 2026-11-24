@@ -4,6 +4,7 @@ import { ChatState, ChatAction, createSessionChatState } from '../src/renderer/s
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import type { TranscriptEvent, DataOf } from '../src/shared/types';
 import { ev as mkEv } from './helpers/transcript-events';
+import { parseTranscriptLine } from '../src/main/transcript-watcher';
 
 const SESSION = 'test-session';
 
@@ -410,6 +411,36 @@ describe('TRANSCRIPT_* reducer actions', () => {
     if (userEntries[0].kind === 'user') {
       expect(userEntries[0].message.content).toBe('hello from remote');
     }
+  });
+});
+
+describe("Claude Code's resume placeholder after a crash", () => {
+  // WHY (Destin, 2026-11-23): a reply cut off by a PC restart, then a new message on resume.
+  // Claude Code writes "No response requested." between them; the chat must show no bubble
+  // for it and mark the cut-off reply "Interrupted." instead.
+  const lines = [
+    { type: 'user', promptId: 'p1', uuid: 'u1', timestamp: '2026-11-23T19:00:00.000Z', message: { role: 'user', content: 'check the deck' } },
+    { type: 'assistant', uuid: 'a1', timestamp: '2026-11-23T19:00:01.000Z', message: { model: 'claude-opus-5-5', role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'text', text: 'Looking now.' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'assistant', uuid: 'ph', timestamp: '2026-11-23T19:44:00.000Z', message: { model: '<synthetic>', role: 'assistant', stop_reason: 'stop_sequence', usage: { input_tokens: 0, output_tokens: 0 }, content: [{ type: 'text', text: 'No response requested.' }] } },
+    { type: 'user', promptId: 'p2', uuid: 'u2', timestamp: '2026-11-23T19:44:01.000Z', message: { role: 'user', content: 'pc crashed. please continue as you were' } },
+  ];
+
+  it('hides the placeholder, marks the cut-off reply Interrupted, and keeps the new message thinking', () => {
+    let state = initState();
+    for (const line of lines) {
+      for (const event of parseTranscriptLine(JSON.stringify(line), SESSION)) {
+        for (const action of eventToAction(event, { live: false })) state = dispatch(state, action);
+      }
+    }
+    const session = state.get(SESSION)!;
+    const turns = session.timeline.filter((e) => e.kind === 'assistant-turn');
+    expect(turns).toHaveLength(1);
+    const turn = turns[0].kind === 'assistant-turn' ? session.assistantTurns.get(turns[0].turnId)! : null;
+    expect(turn!.stopReason).toBe('interrupted');
+    const texts = turn!.segments.flatMap((s) => (s.type === 'text' ? [s.content] : []));
+    expect(texts).not.toContain('No response requested.');
+    expect(session.timeline.filter((e) => e.kind === 'user')).toHaveLength(2);
+    expect(session.isThinking).toBe(true);
   });
 });
 

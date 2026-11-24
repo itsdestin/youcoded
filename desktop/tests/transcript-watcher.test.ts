@@ -1430,6 +1430,47 @@ describe('parseTranscriptLine — control messages written as user lines', () =>
       ]);
     });
 
+    // WHY (Destin, 2026-11-23): resuming after a PC restart showed Claude Code's own
+    // "No response requested." placeholder as a reply bubble. It means the last turn
+    // was cut off, so it reads as an interrupt: no bubble, no stop-sequence footer.
+    function makeResumePlaceholderLine(overrides: Record<string, unknown> = {}, text = 'No response requested.'): string {
+      return JSON.stringify({
+        type: 'assistant',
+        uuid: 'ph-1',
+        timestamp: '2026-11-23T19:44:00.000Z',
+        message: {
+          model: '<synthetic>', role: 'assistant', stop_reason: 'stop_sequence', stop_sequence: '',
+          usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          content: [{ type: 'text', text }],
+        },
+        ...overrides,
+      });
+    }
+
+    it("reads Claude Code's resume placeholder as an interrupt, not a reply", () => {
+      const events = parseTranscriptLine(makeResumePlaceholderLine(), 'sess-1');
+      expect(events).toEqual([
+        expect.objectContaining({ type: 'user-interrupt', sessionId: 'sess-1', uuid: 'ph-1', data: { kind: 'plain' } }),
+      ]);
+    });
+
+    it('keeps other <synthetic> replies visible (only the exact placeholder is hidden)', () => {
+      const events = parseTranscriptLine(makeResumePlaceholderLine({}, 'Rebooting now — this session will drop.'), 'sess-1');
+      expect(events.map((e) => e.type)).toEqual(['assistant-text', 'turn-complete']);
+    });
+
+    it('keeps a Claude Code error reply with the same words visible', () => {
+      const events = parseTranscriptLine(makeResumePlaceholderLine({ isApiErrorMessage: true, error: 'server_error' }), 'sess-1');
+      expect(events[0]).toEqual(expect.objectContaining({ type: 'assistant-text' }));
+    });
+
+    it('keeps a real model reply with the same words visible', () => {
+      const line = JSON.parse(makeResumePlaceholderLine());
+      line.message.model = 'claude-opus-5-5';
+      const events = parseTranscriptLine(JSON.stringify(line), 'sess-1');
+      expect(events[0]).toEqual(expect.objectContaining({ type: 'assistant-text' }));
+    });
+
     it('treats interrupt text embedded in longer content as a normal user-message', () => {
       const events = parseTranscriptLine(
         makeUserLine('hey, [Request interrupted by user] btw'),
