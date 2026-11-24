@@ -331,3 +331,17 @@ describe('each layer of the F1 defence is pinned by a case only it catches', () 
     await t.cleanup();
   });
 });
+
+describe('a load never restates old content under the current history count', () => {
+  it('older index + checkpoint first (flagged, the checkpoint is caught up to the index), then the older bodies too: now nothing disagrees, and it is STILL refused', async () => {
+    const t = await tmpRoot('r7-bless-'); const snap = t.dir + '-snap';
+    await build(t.dir, snap, 0);                                                   // head 16: A0..9 + B10..15 (the bodies are SHORTER than the older index, so step 1 cannot be refused outright)
+    putBack(t.dir, snap, ['index', 'ck']);                                         // step 1: older index and checkpoint, new bodies
+    const cp = path.join(vdir(t.dir), 'checkpoint.bin'); const cb = fs.readFileSync(cp); cb[236 + 50] ^= 1; fs.writeFileSync(cp, cb);   // and one checkpoint slot is damaged, so the load rewrites the checkpoint level with the index
+    const first = await outcome(t.dir, truth(10, 16));
+    expect(['quarantined', 'flagged']).toContain(first);
+    putBack(t.dir, snap, ['body']);                                                // step 2: the older bodies as well, so index, checkpoint and bodies agree with each other
+    expect(['quarantined', 'flagged']).toContain(await outcome(t.dir, truth(10, 16)));
+    fs.rmSync(snap, { recursive: true, force: true }); await t.cleanup();
+  });
+});

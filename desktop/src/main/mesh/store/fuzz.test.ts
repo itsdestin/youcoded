@@ -42,7 +42,10 @@ const key = V(1).toString('hex');
 /** Seeds review 3 listed: F3 (crash plus rot in one batch) and F4 (partial.json flip). */
 const REVIEW3_SEEDS = [1408, 2127, 2749, 2915, 3397, 3704, 4457, 5814, 7077, 10269, 11063, 13832, 15680, 15746, 17362, 18179, 19890, 20933, 3791, 6895, 13684, 17011];
 /** Seeds the long run flagged while this fuzz was being built (2525: a checkpoint fault found at open but not repaired; the others: a read on a full disk after an interrupted set-aside). Fixed, kept as regressions. */
-const REGRESSION_SEEDS = [2525, 9314, 9705, 58575, 58636];
+const REGRESSION_SEEDS = [2525, 9314, 9705, 58575, 58636,
+  // round 7 (found once pair faults, rollbacks after a divergence and the evict branch ran): 705/1169/428/700/382 a pending takeover or older bodies; 1317/3119 an older checkpoint behind a cut-down index;
+  // 974/1647/10334 an older index or bodies behind a lowered checkpoint; 2882 a catch-up blessing old content; 9330/3803 a stopped takeover and a bare aside folder; 5380/7893 an identical rewrite
+  705, 1169, 428, 700, 382, 1317, 3119, 974, 1647, 10334, 2882, 9330, 3803, 5380, 7893, 1400, 986, 9679];
 const FAST_SEEDS = [...REVIEW3_SEEDS, ...REGRESSION_SEEDS, ...Array.from({ length: 70 }, (_, i) => 100 + i)];
 
 function walk(d: string, out: string[] = []): string[] {

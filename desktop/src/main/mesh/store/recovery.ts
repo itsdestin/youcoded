@@ -335,7 +335,8 @@ export class BodyTools {
       // every line is derived from its body, confirmed by that same value. (Only when no valid record lies beyond the checkpoint: those would be a crash between index and checkpoint.)
       // WHY the checkpoint is graded by its history count (round 7, F1): a checkpoint written in the CURRENT history (count equal) is the newest statement there is, and an index or bodies that disagree with
       // it are the old ones; a checkpoint written BEFORE a later takeover or quarantine (count lower) is the old one, and may only be believed for lines every history shares (the prefix bound,
-      // tails.ts); a count above the folder's means takeover evidence was lost, so nothing is believed. `usable` is how many lines the checkpoint may vouch for.
+      // tails.ts); a count above the folder's means takeover evidence was lost, so nothing is believed. `usable` is how many lines the checkpoint may vouch for AS THE ONLY WITNESS of lines derived from the bodies (the
+      // derived-stretch check below); the pure path needs no such gate because the cut-away-branch check covers it (mutation check, round 7: removing the gate there changed no test and no fuzz seed).
       const histNow = await histCount(this.fs, dir);
       let usable = Infinity; let ckptOlder = false;
       if (ckpt && ckpt.hist < histNow) {
@@ -348,7 +349,7 @@ export class BodyTools {
       // old host's line of history. A crash between index and checkpoint also leaves records beyond the checkpoint, but then the record AT the checkpoint's count agrees with the checkpoint (the
       // checkpoint is written after the index). So records beyond the checkpoint whose own record at the checkpoint's count DISAGREES with it are not "a crash that was ahead": they are another
       // history, and when the bodies reach the checkpoint's chain value exactly, the bodies are right and none of those records is used.
-      if (ckpt && ckpt.count > evLines && ckpt.count <= usable) {   // an older checkpoint arbitrates only over lines every history shares (round 7, F1: found by the fuzz, an older checkpoint and bodies behind a cut-down index)
+      if (ckpt && ckpt.count > evLines) {
         const pc = new BodyCursor(this.fs, dir, layout, handles);
         let hh: Buffer = Buffer.from(start.h); let at = start.off; let ok = true;
         const atCk = lastValid + 1 > ckpt.count ? await refRec(ckpt.count - 1) : null;

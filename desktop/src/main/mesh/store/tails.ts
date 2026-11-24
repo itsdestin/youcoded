@@ -45,17 +45,11 @@ async function historyNames(fs: Fs, dir: string): Promise<string[]> {
   return [...begun, ...asides];
 }
 /**
- * The history COUNT: how many history changes have FINISHED in this folder: takeovers begun, plus quarantines / set-asides whose aside folder carries its COMPLETE mark. It only rises (markers and aside
- * folders are never deleted); the checkpoint records it (checkpoint.ts Checkpoint.hist). WHY COMPLETE and not the folder alone (found by the fuzz): a set-aside that crashed before it moved anything leaves an
- * empty aside folder and an intact version; counting it would make every checkpoint look "older than a history change" that never happened. (The epoch counts the bare folder on purpose: for parks, refusing too much is the safe direction.)
+ * The history COUNT: how many history changes the folder shows (takeovers begun, plus the version's aside folders). It only rises (markers and aside folders are never deleted); the checkpoint records it
+ * (checkpoint.ts Checkpoint.hist). A bare aside folder (a set-aside that crashed before it moved anything) counts too: that only makes a checkpoint read as "older", which is the cautious direction, and
+ * what an "older" checkpoint may still vouch for is bounded by FINISHED history changes only (sharedPrefixBound).
  */
-export async function histCount(fs: Fs, dir: string): Promise<number> {
-  const names = await historyNames(fs, dir);
-  const asideRoot = nodePath.join(nodePath.dirname(nodePath.dirname(dir)), 'aside');
-  let n = 0;
-  for (const name of names) { if (!name.startsWith('aside:')) n++; else if (await fs.exists(nodePath.join(asideRoot, name.slice(6), 'COMPLETE'))) n++; }
-  return n;
-}
+export async function histCount(fs: Fs, dir: string): Promise<number> { return (await historyNames(fs, dir)).length; }
 
 /**
  * How many leading lines a checkpoint written BEFORE the latest history change can still vouch for (round 7, F1): a prefix shorter than every cut point is shared by every history, so a statement
