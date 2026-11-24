@@ -133,7 +133,8 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   /** Everything the caller does to a version that was found damaged (or that it set aside): a replacement id, refilled from the acknowledged lines. */
   function planRecopy(v: Ver): void {
     if (vers.some((x) => x.recopyOf === v)) return;
-    const nv = mkVer(V(idc++), v.chat, [...v.lines], null); nv.recopyOf = v;   // (a COPY of the lines: a conflict park that wins in one version must not rewrite the truth of another) vers.push(nv); ev('recopy-planned');
+    // (a COPY of the lines: a conflict park that wins in one version must not rewrite the truth of another)
+    const nv = mkVer(V(idc++), v.chat, [...v.lines], null); nv.recopyOf = v; vers.push(nv); ev('recopy-planned');
   }
   async function runRecopies(s: ChatStore): Promise<void> {
     for (const nv of vers.filter((x) => x.recopyOf && !x.retired)) {
