@@ -1345,6 +1345,10 @@ export function startOAuthLogin(): OAuthLogin {
 
   worker.on('error', (err) => {
     log('ERROR', 'prereq', 'OAuth worker spawn failed', { error: String(err) });
+    // WHY: a worker that could not start will never print a link — end the link wait now rather
+    // than leaving the person on "waiting" for the full 15 s cap.
+    exited = true;
+    wakeUrlWaiters();
   });
   // The worker itself died (e.g. it could not be loaded): no link will ever come, stop waiting.
   worker.on('exit', () => { exited = true; wakeUrlWaiters(); });

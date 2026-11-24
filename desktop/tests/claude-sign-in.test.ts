@@ -59,3 +59,59 @@ describe('Claude sign-in again', () => {
     expect(t.account.clearAuthFailure).not.toHaveBeenCalled();
   });
 });
+
+// Reviewer round (sign-in fix): the link wait can now last up to 15 s, so what happens DURING it matters.
+function slowRig() {
+  let deliver: (u: string | null) => void = () => {};
+  const login = {
+    url: null as string | null, kill: vi.fn(() => deliver(null)), onExit: vi.fn(),
+    waitForUrl: vi.fn(() => new Promise<string | null>((r) => { deliver = (u) => { login.url = u; r(u); }; })),
+  };
+  const account = { status: vi.fn(async () => ({ state: 'signed-out' })), invalidate: vi.fn(), clearAuthFailure: vi.fn() };
+  const start = vi.fn(() => login as any);
+  const flow = new ClaudeSignIn({ start, sleep: () => new Promise(() => {}), now: () => 0, returnToApp: vi.fn() });
+  return { flow, login, account, start, link: (u: string) => deliver(u) };
+}
+
+describe('Claude sign-in again — while the link is still coming', () => {
+  it('a slow link (seconds, not 1.5 s) still succeeds', async () => {
+    const t = slowRig();
+    const p = t.flow.signIn(t.account as any);
+    await vi.waitFor(() => expect(t.start).toHaveBeenCalled());
+    t.link('https://claude.ai/login?slow=1');
+    await expect(p).resolves.toBe(true);
+    expect(t.login.kill).not.toHaveBeenCalled();
+  });
+
+  it('Cancel during the wait ends the login process at once', async () => {
+    const t = slowRig();
+    const p = t.flow.signIn(t.account as any);
+    await vi.waitFor(() => expect(t.start).toHaveBeenCalled());
+    t.flow.cancel();
+    expect(t.login.kill).toHaveBeenCalled(); // before any link arrived
+    await expect(p).resolves.toBe(true);
+  });
+
+  it('a second press — even before the account was read — joins instead of starting a second login', async () => {
+    const t = slowRig();
+    const p1 = t.flow.signIn(t.account as any);
+    const p2 = t.flow.signIn(t.account as any); // same tick: the account read has not finished yet
+    await expect(p2).resolves.toBe(true);
+    await vi.waitFor(() => expect(t.start).toHaveBeenCalled());
+    const p3 = t.flow.signIn(t.account as any); // during the link wait
+    await expect(p3).resolves.toBe(true);
+    t.link('https://claude.ai/login?x=2');
+    await p1;
+    expect(t.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('a start() that throws does not leave sign-in stuck: the next press tries again', async () => {
+    const t = slowRig();
+    t.start.mockImplementationOnce(() => { throw new Error('spawn exploded'); });
+    await expect(t.flow.signIn(t.account as any)).rejects.toThrow(NO_LOGIN_LINK_MESSAGE);
+    const p = t.flow.signIn(t.account as any);
+    await vi.waitFor(() => expect(t.start).toHaveBeenCalledTimes(2));
+    t.link('https://claude.ai/login?again=1');
+    await expect(p).resolves.toBe(true);
+  });
+});

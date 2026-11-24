@@ -511,16 +511,18 @@ export class FirstRunManager extends EventEmitter {
 
     // Spawn the login process — it prints the auth URL then waits for the browser callback.
     // openClaudeLogin waits until the link appears (or gives up) and ends the process when none came.
-    const oauth = await openClaudeLogin();
+    // WHY onStart sets stopOAuth: the wait screen's Cancel must end the process during the link wait
+    // too, not only after it (a lingering login holds the browser-callback port a retry needs).
+    const oauth = await openClaudeLogin(undefined, (l) => { this.stopOAuth = () => l.kill(); });
     if (round !== this.authRound) { oauth?.kill(); return { url: null }; } // cancelled while waiting
     const url = oauth?.url ?? null;
 
     if (!oauth || !url) {
+      this.stopOAuth = null; // openClaudeLogin already ended the process
       this.updateState({ lastError: NO_LOGIN_LINK_MESSAGE });
       this.updatePrereq('auth', { status: 'failed', error: 'No login URL' });
       return { url: null };
     }
-    this.stopOAuth = () => oauth.kill();
 
     log('INFO', 'first-run', 'OAuth URL captured, polling for auth completion');
 

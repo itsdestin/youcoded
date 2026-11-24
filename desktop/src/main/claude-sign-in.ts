@@ -28,8 +28,15 @@ type Login = Pick<OAuthLogin, 'url' | 'kill' | 'waitForUrl'> & Partial<Pick<OAut
  *  "Sign in again" (below) each had their own copy of these steps; the copies drifted and only the
  *  newer one broke in the installed app. Both screens now go through here. Resolves the running
  *  login (its `url` is set) or null when no link appeared. */
-export async function openClaudeLogin(start: () => Login = realStart): Promise<Login | null> {
+export async function openClaudeLogin(
+  start: () => Login = realStart,
+  // WHY onStart: the caller needs the running process BEFORE the link wait ends, so a Cancel during
+  // that wait (up to 15 s) can end it at once. Otherwise the cancelled login lingers holding Claude's
+  // browser-callback port, and an immediate retry collides with it.
+  onStart?: (login: Login) => void,
+): Promise<Login | null> {
   const login = start();
+  onStart?.(login);
   const url = await login.waitForUrl(LOGIN_LINK_WAIT_MS);
   if (!url) { login.kill(); return null; }
   return login;
@@ -64,29 +71,40 @@ export class ClaudeSignIn {
    *  sentence when none appeared. A second call while one is open joins it. */
   async signIn(account: Pick<ClaudeAccount, 'status' | 'invalidate' | 'clearAuthFailure'>): Promise<boolean> {
     if (this.login) return true;
-    // What the login looked like BEFORE: an EXPIRED login still reads "signed in", so "signed in"
-    // alone cannot say the person finished. A different end time can.
-    account.invalidate();
-    const before = await account.status().catch(() => ({ state: 'unknown' as const }));
     const round = ++this.round;
-    let exitedOk = false;
-    // WHY a placeholder while the link is awaited: a second click in that window joins this login
-    // (the `if (this.login)` above) instead of starting a second `claude auth login`.
-    const pending: Login = { url: null, kill: () => {}, waitForUrl: async () => null };
-    this.login = pending;
-    const login = await openClaudeLogin(() => {
-      const l = this.d.start();
-      l.onExit?.((code) => { if (code === 0) exitedOk = true; });
-      return l;
-    });
-    if (round !== this.round) { login?.kill(); return true; } // cancelled while the link was coming
-    if (!login) {
-      this.login = null;
+    // WHY a placeholder taken BEFORE any await: a second click while this one is still reading the
+    // account or waiting for the link joins it (the `if (this.login)` above) instead of starting a
+    // second `claude auth login`. Its kill reaches the real process as soon as one exists, so Cancel
+    // during the wait ends it immediately.
+    let started = null as Login | null; // `as`: set inside the onStart callback, which TS cannot see
+    this.login = { url: null, kill: () => started?.kill(), waitForUrl: async () => null };
+    try {
+      // What the login looked like BEFORE: an EXPIRED login still reads "signed in", so "signed in"
+      // alone cannot say the person finished. A different end time can.
+      account.invalidate();
+      const before = await account.status().catch(() => ({ state: 'unknown' as const }));
+      if (round !== this.round) return true; // cancelled before the login started
+      let exitedOk = false;
+      const login = await openClaudeLogin(() => {
+        const l = this.d.start();
+        l.onExit?.((code) => { if (code === 0) exitedOk = true; });
+        return l;
+      }, (l) => { started = l; });
+      if (round !== this.round) { login?.kill(); return true; } // cancelled while the link was coming
+      if (!login) throw new Error(NO_LOGIN_LINK_MESSAGE);
+      this.login = login;
+      void this.finish(account, before, login, round, () => exitedOk);
+      return true;
+    } catch (err) {
+      // WHY: whatever failed (no link, or start() itself threw), never leave the placeholder behind —
+      // it would make every later signIn() a silent no-op until the app restarts.
+      if (round === this.round) { started?.kill(); this.login = null; }
+      if (err instanceof Error && err.message === NO_LOGIN_LINK_MESSAGE) throw err;
+      // A crash while starting is not something the person can act on in detail; the card shows the
+      // same accurate sentence (no login link came) and the log keeps the real cause.
+      log('ERROR', 'claude-sign-in', 'Claude sign-in could not start', { error: String(err) });
       throw new Error(NO_LOGIN_LINK_MESSAGE);
     }
-    this.login = login;
-    void this.finish(account, before, login, round, () => exitedOk);
-    return true;
   }
 
   /** Stops an open login. Always true (nothing open is fine). */

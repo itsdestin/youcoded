@@ -83,3 +83,16 @@ describe('openClaudeLogin (shared by first launch and Sign in again)', () => {
     expect(login.kill).toHaveBeenCalled();
   });
 });
+
+describe('a helper that cannot even start', () => {
+  beforeEach(() => { spawned.length = 0; vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  it('ends the link wait at once on a spawn error', async () => {
+    const login = startOAuthLogin();
+    let settled: string | null | undefined;
+    void login.waitForUrl(LOGIN_LINK_WAIT_MS).then((u) => { settled = u; });
+    spawned[0].emit('error', new Error('spawn node ENOENT'));
+    await vi.advanceTimersByTimeAsync(0); // no clock time passes: only an immediate end counts
+    expect(settled).toBeNull();
+  });
+});
