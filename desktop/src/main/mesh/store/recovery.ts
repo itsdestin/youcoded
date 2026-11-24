@@ -353,6 +353,7 @@ export class BodyTools {
       let pos = start.off;
       let stopAt = include;              // slots [evLines, stopAt) end up in the new index
       let ambiguous = false;
+      let derivedAny = false;            // some slot had no valid record and was derived from its body alone (review 6: then nothing but the checkpoint vouches for it)
       const out: Buffer[] = []; let outFrom = evLines;
       const flush = async (to: number) => { if (out.length) { await nf.write(Buffer.concat(out), recPos(outFrom)); out.length = 0; } outFrom = to; };
       for (let i = evLines; i < include; i++) {
@@ -410,7 +411,7 @@ export class BodyTools {
             gapStart = -1;
             if (trust) { s.c = Buffer.from(o.rec.c); s.convCount = o.rec.convCount; s.rs = { cand: o.rec.candN === NONE ? null : { n: o.rec.candN, id: o.rec.candId } }; d = o.rec; }
           }
-        } else if (gapStart < 0) gapStart = i;
+        } else { derivedAny = true; if (gapStart < 0) gapStart = i; }
         const ob = Buffer.alloc(REC); encodeRecord(d, ob, 0); out.push(ob);
         pos += line.length;
         if (out.length >= 1024) await flush(i + 1);
@@ -424,7 +425,10 @@ export class BodyTools {
       }
       if (!ambiguous && ckpt && ckpt.count > 0 && ckpt.count <= include) {
         const lr = await this.recFromFile(nf, ckpt.count - 1);
-        if (!lr || !lr.h.equals(ckpt.h)) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
+        // WHY not Damaged when EVERY line has a valid record that its own body confirms (review 6, found by the fuzz with divergent histories): the index and the bodies agree with each other
+        // all the way, so the checkpoint is the odd one out. Time only runs one way (a takeover replaces a history, never the reverse), so a checkpoint of another history is an OLDER copy
+        // from before a takeover; it is not evidence and is rewritten from the index below. Rot cannot look like this: a rotted body breaks its record's chain value (that is `firstBad`). Only when the index is strictly AHEAD of the checkpoint: a checkpoint that states the head itself and disagrees is still quarantined (second-round N1 test).
+        if ((!lr || !lr.h.equals(ckpt.h)) && (pure || firstBad !== null || derivedAny || ckpt.count >= include)) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
       }
       if (ckpt && ckpt.count > include) throw new Damaged(`the checkpoint vouches for ${ckpt.count} lines but the body holds ${include}`);
       // nothing at all is verified (no valid record, and the one stretch the checkpoint covers does not match): refused as damaged, the whole version is kept intact in aside/

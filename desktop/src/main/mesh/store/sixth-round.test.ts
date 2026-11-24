@@ -247,4 +247,20 @@ describe('an older index.bin from BEFORE a takeover (found by the fuzz when it s
     expect(await s.append(V(1), 0, 30, B.slice(30, 40))).toBe('ok');
     await s.close(); await t.cleanup();
   });
+
+  it('an older checkpoint.bin from before the takeover (its count is below the head, its chain is the old history\'s): the version loads from the index and bodies that agree with each other', async () => {
+    const t = await tmpRoot('r6-ck-');
+    let s = await open(t.dir);
+    await s.append(V(1), 0, 0, A.slice(0, 28)); await s.close();
+    const old = fs.readFileSync(path.join(vdir(t.dir), 'checkpoint.bin'));    // the backup: count 28, old history
+    s = await open(t.dir);
+    await s.append(V(1), 0, 28, A.slice(28, 40)); await s.setAsideTail(TID, V(1), 20); await s.append(V(1), 0, 20, B.slice(20, 35)); await s.close();
+    fs.writeFileSync(path.join(vdir(t.dir), 'checkpoint.bin'), old);          // ONE fault: the older checkpoint put back
+    s = await open(t.dir);
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(35); expect(h.damagedFromLine).toBeNull();
+    expect(await view(s, truth(20, 35))).toBe('.'.repeat(35));
+    expect(await s.append(V(1), 0, 35, B.slice(35, 45))).toBe('ok');
+    await s.close(); await t.cleanup();
+  });
 });

@@ -191,7 +191,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       for (let i = evictedMax; i < ackedMax; i++) if (!present(canon[i], files)) { if (lossy) { ev('destroyed-version-unreadable'); break; } bad('line-absent-everywhere(version-unreadable)', { tag, line: i, state, rotted }); break; }
       // review 4: ONE fault must never make a whole version unreadable, except in the documented limits of inventory.ts (the evicted lines' chain values live only in the index)
       if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok') bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
-      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
+      if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; pending = null; /* WHY: a takeover still waiting for its retry is moot on a version that was restarted empty (its lines are in aside/) */ } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
@@ -279,7 +279,11 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             if (n2 + c2 <= canon2.length) { log.push(`ep${n} append2 ${n2}+${c2}`); try { const res2 = await s.append(V(2), 0, n2, canon2.slice(n2, n2 + c2)); if (res2 === 'ok') ack2Max = Math.max(ack2Max, n2 + c2); } catch (e2: any) { if (e2 instanceof InjectedCrash || !['unknown-version', 'damaged', 'corrupt', 'disk-full', 'limit', 'parked-full'].includes(e2?.code)) throw e2; ev('other-chat-append-' + e2?.code); } }
           } else if (op < 0.5) {
             const back = r() < 0.2 ? Math.min(head, Math.floor(r() * 5)) : 0;
-            const from = head - back; const cnt = 1 + Math.floor(r() * (big ? 1500 : 40));
+            // WHY aimed (review 6): a stale park can only leak into the next history when the head lands EXACTLY on its position; at random that is about 1 in 40, too rare to see in a few thousand
+            // seeds. Half the time, when a park sits ahead of the head, the append is sized to end exactly at it.
+            const ahead = parkedAcked.filter((x) => x.from > head && x.from - head <= 40);
+            const aim = !big && !back && ahead.length && r() < 0.5 ? ahead[Math.floor(r() * ahead.length)].from - head : 0;
+            const from = head - back; const cnt = aim || 1 + Math.floor(r() * (big ? 1500 : 40));
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} append ${from}+${cnt}`);
             const res = await s.append(V(1), 0, from, canon.slice(from, from + cnt));
@@ -324,7 +328,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} extra`);
             await s.putExtra(sha(b), b); extraAcked.push(b);
           } else if (op < 0.985 || legacy) { log.push(`ep${n} scrub`); await s.scrubStep(V(1), { maxBytes: 1 << 20 }); }
-          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); }
+          else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); pending = null; }
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
           if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
