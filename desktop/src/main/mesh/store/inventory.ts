@@ -38,19 +38,34 @@
 //              eviction that an older checkpoint forgot. It only ever raises (a version never shortens), is written after the lines are durable, and a stale, missing or foreign one can only UNDER-report;
 //   retirement the aside/<vhex>-<n>/ folder outside the version folder plus retired.json inside it say "this id is retired" (asides.ts); putting old files back changes neither.
 //
-// FILE KINDS (restructure: 35 kinds, down from 38; gone: tails/*.tail, *.begun, *.done, aside.intent, aside.intent.bad-N and the quarantine half of marks.bin; new: retired.json and forks/<childhex>/):
+// FILE KINDS (restructure: 36 kinds, down from 38; gone: tails/*.tail, *.begun, *.done, aside.intent, aside.intent.bad-N and the quarantine half of marks.bin; new: retired.json and forks/<childhex>/):
 //   per version folder  meta.json meta.copy | index.bin | body-<offset>.bin | checkpoint.bin | summary.json scrub.json | marks.bin (the partial marker only) | retired.json (only once retired) |
 //                       parked/ rejected/ (parks, kept) | torn/ healed/ replaced-index/ (kept raw bytes) | *.bad-N *.tmp-* (kept / scratch)
-//   per store           FORMAT LOCK | highwater/<vhex>.hw | aside/<vhex>-<n>/ (+COMPLETE) | forks/<childhex>/ (an INVISIBLE half-built fork, cleared at open) | extras/ extras-bad/ | control/<chathash>/
+//   per store           FORMAT LOCK | highwater/<vhex>.hw | retired/<vhex>.ret (a retired id) | aside/<vhex>-<n>/ (+COMPLETE) | forks/<childhex>/ (an INVISIBLE half-built fork, cleared at open) | extras/ extras-bad/ | control/<chathash>/
 //
 // HONEST LIMITS (the only places where a single fault costs something, and what is guaranteed anyway):
 //   (1) a fault that destroys the ONLY copy of some bytes (a body chunk, a rejected park, a control log, an extra) destroys them; it is always REPORTED and never served wrong;
 //   (2) after an eviction AND the loss of the whole index (every kept copy too) the chain values of the evicted lines are gone for good: the checkpoint kept the state AT the boundary, so the kept lines
 //       are re-derived from their bodies and served, hashAt(n) for an evicted n before the boundary answers `evicted`, and a restoreBody brings everything back and re-derives the index;
 //   (3) parked appends are provisional by definition (the caller keeps ownership until the head passes them); a lost parked file is not reported;
-//   (4) WHAT REMAINS UNDETECTABLE: a rollback of the WHOLE STORE ROOT (the high-water record and the aside folders go back with it), a rollback to a head the record never saw (it is raised at the END of an append call
-//       once the head is HW_EVERY = 256 lines past the mark, at close and at every eviction and restore: after any ACKNOWLEDGED call the record is at most 255 lines behind; sixth-round.test.ts pins the 255/256 boundary),
-//       and ALL of a version's files put back older TOGETHER with its high-water record lost or older: that is a whole-folder rollback and reads as a shorter, healthy chat. (Fewer lines, never different lines.)
+//   (4) WHAT REMAINS UNDETECTABLE: a rollback of the WHOLE STORE ROOT (the high-water record, the retired/ records and the aside folders go back with it), a rollback past the head the record last stated (the record is raised
+//       at the end of EVERY acknowledged append call, once its lines are durable, at close, and at every eviction and restore: so the only lines a rollback can take without any report are those of the call that was IN
+//       FLIGHT when the folder was put back, which was never acknowledged; measured cost of this on btrfs/NVMe: +0.6 ms per call, about +30%), and ALL of a version's files put back older TOGETHER with its high-water
+//       record lost or older: that is a whole-folder rollback and reads as a shorter, healthy chat. (Fewer lines, never different lines.)
+//       While a rollback IS reported (head below the record, or lines a rebuild set aside) the store enforces the rule below: nothing but a real append or resend of the same lines may refill the range, no park drains into it,
+//       every line from where the report starts is refused by read(), and the refill is checked against the recorded chain value when it reaches the recorded head (else the version is retired).
+//
+// THE POSITION RULE (review 9 F1): a position that was ever acknowledged is supplied only by a real append or resend of the SAME lines; a park can only extend a version past its head, and while the head is below a head the
+//   version once had (rolledBack, or the partial marker) no park is applied at all. Positions below the head are overlap-checked against the chain; evicted lines are checked against their kept chain values.
+//
+// RULES THE CALLER (REPLICATOR) MUST OBEY (what the store cannot enforce, from reviews 8 and 9):
+//   (i)   Only the host named by a takeover entry ever appends to the child version of that takeover. Any other continuation uses a NEW takeover token, hence a new child id (deriveForkId). The store accepts any
+//         lines at a child's head; two devices appending different continuations under one id would make one id with two histories (review 9 F2).
+//   (ii)  Retention may delete an aside folder, or reap a retired version folder, as it likes: the store keeps a third witness (retired/<vhex>.ret) at the store root, so a retired id stays retired even when both are gone
+//         (review 9 F3). It must never delete retired/ or touch the high-water records (highwater/): they are the store's own evidence.
+//   (iii) After ANY restore of files or any rollback report (head().rolledBack, head().damagedFromLine, a `damaged` version) compare heads with peers and refill from them; the store only reports, it never fetches.
+//   (iv)  Parks are provisional and the caller's: rejectedList() names the lines the store refused (conflict, damaged, released); the caller resends them to the version they belong to. A park never fills a position that was
+//         ever acknowledged, so a conflicting park can only be rejected, never win over an acknowledged line.
 //   (5) a retired id whose aside folder AND retired.json are both deleted is two faults.
 // The two ways a version can be wrong are therefore: SHORTER (a prefix-state: reported through the high-water record, a hole, a partial marker, or not at all within limit 4) or DAMAGED (quarantined). The
 // store never serves a different line at an index it once acknowledged, and `read()` refuses any line that `head().damagedFromLine` covers.

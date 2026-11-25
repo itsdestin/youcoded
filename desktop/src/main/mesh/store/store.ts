@@ -152,6 +152,7 @@ export class ChatStore {
       // WHY safe now: with the lock held no other process has temp files in flight (review C2: this sweep
       // used to delete a second process's in-flight temp files).
       await sweepTemps(fs, root);
+      await sweepTemps(fs, nodePath.join(root, 'retired'));   // the store-root retirement records are written like any small file
       // WHY (fork crash table, step 1-2): a fork that stopped leaves an invisible work folder; its files are copies of lines the parent still holds, so they are cleared here (the empty folder stays)
       for (const n of await fs.readdir(nodePath.join(root, 'forks'))) await clearForkFiles(fs, nodePath.join(root, 'forks', n));
     } catch (e) { await s.lock.release().catch(() => undefined); s.lock = null; throw isDiskFull(e) ? new StoreError('disk-full', String((e as Error).message)) : e; }   // WHY (restructure fuzz): a full disk at open is one typed refusal like everywhere else

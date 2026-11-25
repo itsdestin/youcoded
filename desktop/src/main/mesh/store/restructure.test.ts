@@ -498,3 +498,23 @@ describe('review 9 F1: a park never supplies a line at a position that was ever 
     await s.close(); await t.cleanup();
   });
 });
+
+describe('review 9 F5: lines whose bodies are on disk are not reported evicted because an older checkpoint remembers an eviction a restore had undone', () => {
+  const ev = async (s: ChatStore, through: number): Promise<void> => { const h = (await s.hashAt(P, 0, through))!; await s.evictBody(P, { kind: 'holders-confirmed', version: keyOf(P), through, hash: h, acks: [{ holder: 'p', version: keyOf(P), lines: through, hash: h, signature: 's' }] } as any); };
+  for (const lose of ['nothing']) {
+    // (with the high-water record ALSO lost nothing says the restore happened, and a chat in one chunk file looks exactly like a genuine eviction: two faults, not promised)
+    it(`older checkpoint after evict then restore (${lose} lost as well): the present lines are served`, async () => {
+      const t = await tmpRoot('f5-');
+      let s = await open(t.dir, { ...opts, chunkBytes: 700 }); await s.append(P, 0, 0, A.slice(0, 40)); await ev(s, 25);
+      const ck = path.join(vdir(t.dir), 'checkpoint.bin'); const old = fs.readFileSync(ck);
+      await s.restoreBody(P, A.slice(0, 25)); expect((await s.head(P)).evictedLines).toBe(0); await s.close();
+      fs.writeFileSync(ck, old);                                                                     // the older statement: 25 lines evicted
+      if (lose === 'the high-water record') fs.rmSync(path.join(t.dir, 'highwater'), { recursive: true, force: true });
+      s = await ChatStore.open(t.dir, { ...opts, chunkBytes: 700 }); await s.registerVersion(P, { chatId: CHAT, runtime: 'claude-code' });
+      const h = await s.head(P);
+      expect(h.evictedLines).toBe(0);                                                                // the bodies are here: nothing is evicted
+      expect(await s.read(P, 0, 0, 40)).toEqual(A.slice(0, 40));
+      await s.close(); await t.cleanup();
+    });
+  }
+});

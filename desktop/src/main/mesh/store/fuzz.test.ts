@@ -14,7 +14,7 @@
 // The only excuses kept (each is a documented limit, named in the inventory.ts header, and counted in the events):
 //   limit-1  `destroyed-single-copy`: a fault destroyed the only copy of some bytes and the store reported it (that IS the promise: reported, never served wrong)
 //   limit-2  `evict-exempt`: a line below an eviction has no body here (it is held by a peer); it is served as `evicted`
-//   limit-3  `conflict-park-won`: a park is provisional and the caller's: with other lines than the true ones it can win only where the true lines were never acknowledged (a crash lost them) or a fault took them away
+//   limit-3  `conflict-park-won`: a park is provisional and the caller's: with other lines than the true ones it can win ONLY where the true lines were never acknowledged (a crash lost them first); it never wins over an acknowledged line, whatever fault was dealt (review 9 F1)
 //   limit-4  `rollback-with-record-lost`: a family of older files put back AND the high-water record (outside the folder) lost or changed too: two faults, a shorter chat cannot be told from a short chat
 //
 //   fast slice (normal suite): fixed seeds
@@ -35,7 +35,6 @@ import { realFs } from './fsio';
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const CHAT2 = 'synthetic:chat-2';
 const FAST_SEEDS = Array.from({ length: 300 }, (_, i) => 100 + i);
-const OP_KINDS = ['append', 'resend', 'park', 'park-conflict', 'fork-same', 'fork-diff', 'evict', 'restore', 'scrub', 'retire-recopy', 'control', 'extra', 'reopen'];
 const FAULT_KINDS = ['flip', 'overwrite', 'truncate', 'truncrec', 'zero', 'zerorange', 'delete', 'older', 'foreign', 'sibling', 'dup'];
 
 function walk(d: string, out: string[] = []): string[] {
@@ -59,6 +58,7 @@ interface Ver {
   lines: Buffer[];                 // the intended content: what the version is supposed to hold (acknowledged or not)
   acked: number;                   // lines acknowledged by an `ok` answer
   evicted: number;                 // the highest eviction ever asked for
+  evictedPossible: number;         // the most lines that can be evicted NOW: raised by an evict call (it may have happened), reset to 0 by a restore that answered
   retireMaybe: boolean;            // retired by an operation that was killed before it answered: it may or may not have happened
   retired: boolean;                // set aside by the caller or quarantined by the store: its id is never served again
   faulted: boolean;                // a file fault was dealt to this version's files (or its high-water record)
@@ -86,7 +86,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   const bad = (kind: string, detail: unknown) => { viol.push({ kind, detail: { seed, ...(detail as object), O }, log: log.slice(-(Number(process.env.MESH_STORE_FUZZ_LOG) || 16)) }); };
   const canonLen = big ? 10_600 : 260;
   let idc = 10; let tagc = 0;
-  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, retireMaybe: false, retired: false, faulted: false, rollback: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
+  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, retireMaybe: false, retired: false, faulted: false, rollback: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
   const root1 = mkVer(V(1), CHAT, makeCanon(r, `s${seed}`, canonLen, big), null);
   const other = mkVer(V(2), CHAT2, makeCanon(rng(seed * 31 + 5), `o${seed}`, 80, true), null);
   const vers: Ver[] = [root1, other];
@@ -196,6 +196,9 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (head.lines < v.acked) bad('acknowledged-lines-missing-without-any-fault', { tag, v: v.hex.slice(0, 4), lines: head.lines, acked: v.acked });
       }
       if (head.evictedLines > v.evicted) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, asked: v.evicted });
+      // review 9 F5: lines whose bodies are on disk and verify are never reported evicted because an older checkpoint remembers an eviction a restore had undone
+      // (a version put back to an older state really can have lines evicted that were evicted THEN: that is only wrong when the bodies are on disk, i.e. the first chunk file is there)
+      if (head.evictedLines > v.evictedPossible && !v.recordFaulted && (!v.rollback || fs.existsSync(path.join(root, 'versions', v.hex, 'body-0000000000000000.bin')))) bad('evicted-more-than-in-force', { tag, v: v.hex.slice(0, 4), evictedLines: head.evictedLines, inForce: v.evictedPossible, faulted: v.faulted });
       const flagged: number | null = head.damagedFromLine;
       // 1. nothing served is wrong, 2. every acknowledged line is served or its loss is reported
       let all: Buffer[] | 'evicted' | null = null;
@@ -210,7 +213,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         const g = await lineAt(i);
         if (g === 'evicted') { ev('evict-exempt'); continue; }
         if (g === null) continue;     // typed corrupt: a report
-        const won = v.conflicts.find((c) => i >= c.from && i < c.from + c.lines.length && (i >= c.ackedAt || v.faulted) && g.equals(c.lines[i - c.from]));
+        const won = v.conflicts.find((c) => i >= c.from && i < c.from + c.lines.length && i >= c.ackedAt && g.equals(c.lines[i - c.from]));
         if (won) { ev('conflict-park-won'); v.lines[i] = g; continue; }   // the winner IS the version's line from now on: a fork of it copies it
         if (i >= v.lines.length || !g.equals(v.lines[i])) { bad('WRONG-BYTES-SERVED', { tag, v: v.hex.slice(0, 4), line: i, headLines: head.lines, rollback: v.rollback }); break; }
       }
@@ -290,12 +293,12 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (head < 3 || v === other) return;
         const through = 1 + Math.floor(r() * head);
         ev('evict'); log.push(`ep${n} evict ${v.hex.slice(0, 4)} ${through}`);
-        const h = await s.hashAt(v.id, 0, through); v.evicted = Math.max(v.evicted, through);
+        const h = await s.hashAt(v.id, 0, through); v.evicted = Math.max(v.evicted, through); v.evictedPossible = Math.max(v.evictedPossible, through);
         await s.evictBody(v.id, { kind: 'holders-confirmed', version: v.hex, through, hash: h!, acks: [{ holder: 'p', version: v.hex, lines: through, hash: h!, signature: 's' }] } as any);
       } else if (op < 0.80) {
         const ee = hd?.evictedLines ?? 0; if (!ee) return;
         ev('restore'); log.push(`ep${n} restore ${v.hex.slice(0, 4)}`);
-        await s.restoreBody(v.id, v.lines.slice(0, ee));
+        await s.restoreBody(v.id, v.lines.slice(0, ee)); v.evictedPossible = 0;
       } else if (op < 0.85) {
         ev('scrub'); await s.scrubStep(v.id, { maxBytes: 1 << 20 });
       } else if (op < 0.89) {
@@ -444,11 +447,20 @@ const explicit = process.env.MESH_STORE_FUZZ_SEEDS ? process.env.MESH_STORE_FUZZ
 const bigEvery = Number(process.env.MESH_STORE_FUZZ_BIG ?? 0);
 const crashOnly = !!process.env.MESH_STORE_FUZZ_CRASHONLY;
 
-/** A dead branch went unnoticed for a whole round once (an empty `else if`): every operation kind must really have run, or the run fails. */
-function assertCoverage(ev: Record<string, number>, what: string): void {
-  const need = crashOnly ? OP_KINDS.filter((k) => !['control'].includes(k)) : [...OP_KINDS, 'crash', 'fault', 'fork-found-complete', ...FAULT_KINDS.map((k) => 'fault-' + k), 'fault-family-index+ck+body', 'fault-family-whole-folder', 'recopied', 'quarantined-by-store'];
-  const missing = need.filter((k) => !(ev[k] > 0));
-  expect(missing, `${what}: operation or fault kinds that never ran (a dead branch): ${missing.join(', ')}`).toEqual([]);
+/**
+ * A dead branch went unnoticed for a whole round once (an empty `else if`), and a nearly dead one would pass "at least once". So each kind must have run a number of times PROPORTIONAL to the number of seeds:
+ * common operations at least 10% of the seeds, the less common (restore, forks found complete after a crash, fault families, recopies, every fault kind) at least 1%, the rare outcomes (the store quarantining
+ * a faulted version) at least 0.05%. (Measured rates are several times these; a run below them has lost a branch.)
+ */
+function assertCoverage(ev: Record<string, number>, what: string, seeds: number): void {
+  const common = ['append', 'resend', 'park', 'fork-same', 'fork-diff', 'evict', 'scrub', 'retire-recopy', 'extra', 'reopen'];
+  const moderate = ['restore', 'park-conflict', 'recopied', 'fork-found-complete', 'fault-family-index+ck+body', 'fault-family-whole-folder', ...FAULT_KINDS.map((k) => 'fault-' + k)];
+  const rare = ['quarantined-by-store'];
+  const need: [string, number][] = crashOnly
+    ? [...[...common, 'control', 'crash'].map((k) => [k, 0.1] as [string, number]), ['restore', 0.01], ['recopied', 0.01], ['fork-found-complete', 0.01]]
+    : [...[...common, 'control', 'crash', 'fault'].map((k) => [k, 0.1] as [string, number]), ...moderate.map((k) => [k, 0.01] as [string, number]), ...rare.map((k) => [k, 0.0005] as [string, number])];
+  const short = need.filter(([k, f]) => !((ev[k] ?? 0) >= Math.max(1, Math.floor(seeds * f)))).map(([k, f]) => `${k} ${ev[k] ?? 0} < ${Math.max(1, Math.floor(seeds * f))}`);
+  expect(short, `${what}: operation or fault kinds that ran too rarely for ${seeds} seeds (a dead or nearly dead branch): ${short.join(', ')}`).toEqual([]);
 }
 
 describe('fuzz: crash points x one fault (or a family of older files) in any file x reopen, the invariant checked every time', () => {
@@ -459,7 +471,7 @@ describe('fuzz: crash points x one fault (or a family of older files) in any fil
     const all = out.flatMap((x) => x.violations);
     expect(all.slice(0, 5), JSON.stringify(all.slice(0, 3))).toEqual([]);
     const ev: Record<string, number> = {}; for (const x of out) for (const [k, v] of Object.entries(x.events)) ev[k] = (ev[k] ?? 0) + v;
-    assertCoverage(ev, 'fast slice');
+    assertCoverage(ev, 'fast slice', out.length);
   }, 900_000);
 
   it.skipIf(!env && !explicit)('LONG RUN (opt-in, MESH_STORE_FUZZ=from-to): no sequence violates the invariant, and every operation kind ran', async () => {
@@ -474,6 +486,6 @@ describe('fuzz: crash points x one fault (or a family of older files) in any fil
     }
     if (outFile) fs.writeFileSync(outFile + '.events.json', JSON.stringify(total, null, 1));
     expect(badN).toBe(0);
-    if (seeds.length >= 500) assertCoverage(total, 'long run');
+    if (seeds.length >= 500) assertCoverage(total, 'long run', seeds.length);
   }, 7 * 24 * 3600 * 1000);
 });
