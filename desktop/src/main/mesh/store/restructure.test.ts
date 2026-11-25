@@ -388,6 +388,11 @@ describe('the high-water record (unchanged by the restructure)', () => {
     for (let i = 0; i < 30; i++) { await s.append(P, 0, i, [L[i]]); expect((await readHw(realFs, t.dir, keyOf(P))).st.value?.count, `after call ${i}`).toBe(i + 1); }
     await s.append(P, 0, 30, L.slice(30, 37));                                                      // one call of several lines: recorded at its END
     expect((await readHw(realFs, t.dir, keyOf(P))).st.value?.count).toBe(37);
+    // the points the record keeps stay SPREAD over the history (not just the last few), so a head far behind is compared with a point near it
+    for (let i = 37; i < 70; i++) await s.append(P, 0, i, [A[i]]);
+    const ladder = (await readHw(realFs, t.dir, keyOf(P))).st.value!.ladder.map((x) => x[0]);
+    expect(ladder.length).toBeLessThanOrEqual(12); expect(ladder[0]).toBe(0); expect(ladder[ladder.length - 1]).toBe(70);
+    expect(ladder.filter((n) => n > 0 && n < 35).length, `points ${ladder}`).toBeGreaterThan(0);
     await s.close(); await t.cleanup();
     // so an older folder put back is REPORTED even when it is only ONE acknowledged call behind
     const t2 = await tmpRoot('hw-b3b-'); let s2 = await open(t2.dir);
