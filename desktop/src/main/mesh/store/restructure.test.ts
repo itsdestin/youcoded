@@ -570,3 +570,40 @@ describe('the store-root retirement folder', () => {
     await s.close(); await t.cleanup();
   });
 });
+
+describe('review 10 F-A: the store-root retirement record exists however the retirement was finished', () => {
+  it('a crash at EVERY disk operation of setAsideDamaged, a retry, then a retention job deleting the aside folder AND the whole version folder (directories too): the id still cannot be registered or served', async () => {
+    const setup = async (root: string) => { const s = await open(root, { ...opts, chunkBytes: 500 }); await s.append(P, 0, 0, A.slice(0, 20)); await s.close(); };
+    const probe = await tmpRoot('retire3-count-'); await setup(probe.dir);
+    const pf = new FaultFs(0); const ps = await open(probe.dir, { ...opts, chunkBytes: 500 }, pf); const openOps = pf.ops; await ps.setAsideDamaged(P); const total = pf.ops; await ps.close(); await probe.cleanup();
+    let lateFinished = 0;
+    for (const variant of [{ tear: false, powerLoss: false }, { tear: true, powerLoss: true }]) {
+      for (let k = openOps; k <= total + 2; k++) {
+        const t = await tmpRoot('retire3-'); await setup(t.dir);
+        const shadow = fs.mkdtempSync(path.join(path.dirname(t.dir), 'shadow-')); const f2 = new FaultFs(k, { ...variant, shadowDir: shadow });
+        try { const s = await open(t.dir, { ...opts, chunkBytes: 500 }, f2); await s.setAsideDamaged(P); } catch (e) { if (!(e instanceof InjectedCrash)) throw e; }
+        await f2.applyPowerLoss(); unlock(t.dir);
+        let s2 = await ChatStore.open(t.dir, opts); await s2.setAsideDamaged(P); await s2.close();                      // the caller retries
+        if (fs.existsSync(path.join(vdir(t.dir), 'retired.json'))) lateFinished++;
+        const where = `op ${k} ${JSON.stringify(variant)}`;
+        expect(fs.existsSync(path.join(t.dir, 'retired', `${keyOf(P)}.ret`)), `${where}: the store-root record`).toBe(true);
+        fs.rmSync(path.join(t.dir, 'aside'), { recursive: true, force: true }); fs.rmSync(vdir(t.dir), { recursive: true, force: true });   // directories too
+        s2 = await ChatStore.open(t.dir, opts);
+        await expect(s2.registerVersion(P, { chatId: CHAT, runtime: 'claude-code' }), where).rejects.toMatchObject({ code: 'damaged' });
+        await expect(s2.head(P), where).rejects.toMatchObject({ code: 'damaged' });
+        await s2.close(); fs.rmSync(shadow, { recursive: true, force: true }); await t.cleanup();
+      }
+    }
+    expect(lateFinished).toBeGreaterThan(0);
+  }, 300_000);
+  it('a version quarantined by the store itself keeps its store-root record when the move is finished at a later load', async () => {
+    const t = await tmpRoot('retire-q-');
+    let s = await open(t.dir); await s.append(P, 0, 0, A.slice(0, 20)); await s.close();
+    fs.truncateSync(path.join(vdir(t.dir), 'index.bin'), 5); fs.unlinkSync(path.join(vdir(t.dir), 'checkpoint.bin'));
+    s = await ChatStore.open(t.dir, opts); await expect(s.head(P)).rejects.toMatchObject({ code: 'damaged' }); await s.close();
+    fs.rmSync(path.join(t.dir, 'retired'), { recursive: true });                                    // the record is lost (one fault)
+    s = await ChatStore.open(t.dir, opts); await expect(s.head(P)).rejects.toMatchObject({ code: 'damaged' }); await s.close();
+    expect(fs.existsSync(path.join(t.dir, 'retired', `${keyOf(P)}.ret`))).toBe(true);                // a load puts it back
+    await t.cleanup();
+  });
+});

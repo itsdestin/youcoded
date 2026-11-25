@@ -61,15 +61,24 @@ export class Asides {
     return { asideName: (await this.retiredName(key)) ?? 'unknown' };
   }
 
+  /**
+   * WHY a third witness at the store root (review 9 F3): a retention job that deletes aside folders and also reaps leftover retired version folders would otherwise bring the id back (registerVersion would make a fresh
+   * empty version under it). retired/<vhex>.ret is the store's own record, in a folder no retention job owns; only its existence counts. WHY it is written from EVERY path that finds an id retired (review 10 F-A): a
+   * retirement finished after a crash (a retry, or the next load) never went through retire(), and kept two witnesses for good. A full disk only postpones it.
+   */
+  private async ensureRootRecord(key: string, asideName: string, reason: string): Promise<void> {
+    const p = nodePath.join(this.root, 'retired', `${key}.ret`);
+    if (await this.fs.exists(p)) return;
+    try { await mkdirDurable(this.fs, nodePath.join(this.root, 'retired')); await writeSideFor(this.fs, p, { role: 'retired-root', key }, { asideName, reason: reason.slice(0, 200) }); } // DESTRUCTIVE-OK(hint): a NEW existence-only statement
+    catch (e) { if (!isDiskFull(e)) throw e; }
+  }
+
   /** Retire the id: aside folder first (the step that needs space), then retired.json, then the move. Always ends in `damaged` for the quarantine path. */
   private async retire(key: string, quarantined: boolean, reason: string): Promise<never> {
     const dir = this.vdir(key);
     const asideName = await nextAsideName(this.fs, this.root, key, quarantined);
     await mkdirDurable(this.fs, nodePath.join(this.root, 'aside', asideName));
-    // WHY a third witness at the store root (review 9 F3): a retention job that deletes aside folders and also reaps leftover retired version folders would otherwise bring the id back (registerVersion would make a fresh,
-    // empty version under it). retired/<vhex>.ret is the store's own record, in a folder no retention job owns; only its existence counts.
-    await mkdirDurable(this.fs, nodePath.join(this.root, 'retired'));
-    await writeSideFor(this.fs, nodePath.join(this.root, 'retired', `${key}.ret`), { role: 'retired-root', key }, { asideName, reason }); // DESTRUCTIVE-OK(hint): a NEW existence-only statement; an id is never retired twice
+    await this.ensureRootRecord(key, asideName, reason);
     this.host.forget(key);
     await this.finishAside(key, dir, reason);   // finds the bare aside folder just made, writes retired.json for it, and moves the files
     throw new StoreError('damaged', asideName);
@@ -77,6 +86,8 @@ export class Asides {
 
   /** Finish a move that retired.json names (idempotent; a no-op for a version that was never retired and for one whose aside folder says COMPLETE). */
   async finishAside(key: string, dir: string, why = 'the retirement was interrupted before its note was written'): Promise<void> {
+    const known = await this.retiredName(key);
+    if (known) await this.ensureRootRecord(key, known, why);   // backfill (review 10 F-A): every load and every setAside passes here
     const note = nodePath.join(dir, RETIRED_FILE);
     if (!(await this.fs.exists(note))) {
       // a bare, unfinished aside folder (just made by retire(), or left by a crash before the note) has no note yet: write it now and finish the move, so the files never stay behind in a retired folder
