@@ -37,5 +37,6 @@ export function announceFailed(what: string, cause?: unknown): void {
   // An "unsupported here" answer is not a failure: the remote shim has already said so in its own notice (card #134 round 4).
   if (isUnsupportedHere(cause)) { console.warn(`[app] ${what}: not available on this client`); return; }
   console.warn(`[app] couldn't ${what}:`, cause instanceof Error ? cause.message : cause);
-  announce(`Couldn't ${what}.`);
+  // 5 s, not the 3 s default: Destin, K-5 "button failed" = floating, 5 seconds (independent review B7).
+  announce(`Couldn't ${what}.`, 5000);
 }

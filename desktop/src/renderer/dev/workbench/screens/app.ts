@@ -38,7 +38,7 @@ export const APP: readonly ScreenEntry[] = [
     name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
   })),
   // Plugin off-switch heads-up: the app's own toast with its "Show" button, at desktop and phone width.
-  { name: 'dev/toast#turned-off', tags: ['dev'], session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
+  { name: 'dev/toast#turned-off', tags: ['dev'], session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const, sameAs: { name: 'dev/toast#n-plugin-turned-off', why: 'The same notice raised by its catalogue name for the review deck.' } },
   // Card #216: the "signed out of your YouCoded account" heads-up with its "Sign in again" button.
   // The same screen with nothing shown: what the app looked like before the notice existed (the deck's Before picture).
   // Waiting-notice deck round 4: the chosen styles drawn by the real components (strip above the box; K-7 floating with Dismiss).
@@ -46,10 +46,10 @@ export const APP: readonly ScreenEntry[] = [
   ...['plugin-turned-off', 'settings-repaired', 'saved-password-expired'].map((id) => ({ name: `dev/toast#k7-${id}`, tags: ['dev', 'notice'], session: 'wb-1', params: { toast: `k7:${id}` }, newIn: 'after' as const })),
   { name: 'dev/toast#none', tags: ['dev'], session: 'wb-1', params: { toast: 'none' }, newIn: 'after' as const, sameAs: { name: 'chat#queue-idle-after', why: 'The same chat with no notice raised (the Before picture for the signed-out notice).' } },
   // Card #134 round 4: a button's action failed (Copy path here): the plain sentence in the toast, no invented cause (the Before is dev/toast#none).
-  { name: 'dev/toast#action-failed', tags: ['dev'], session: 'wb-1', params: { toast: 'action-failed' }, newIn: 'after' as const },
-  { name: 'dev/toast#signed-out', tags: ['dev'], session: 'wb-1', params: { toast: 'signed-out' }, newIn: 'after' as const },
+  { name: 'dev/toast#action-failed', tags: ['dev'], session: 'wb-1', params: { toast: 'action-failed' }, newIn: 'after' as const, sameAs: { name: 'dev/toast#n-copy-path', why: 'The same notice raised by its catalogue name for the review deck.' } },
+  { name: 'dev/toast#signed-out', tags: ['dev'], session: 'wb-1', params: { toast: 'signed-out' }, newIn: 'after' as const, sameAs: { name: 'dev/toast#n-session-lost', why: 'The same notice raised by its catalogue name for the review deck.' } },
   // Card #11 a: the one-time "damaged Claude Code settings file replaced" heads-up with its "Show file" button (the Before is dev/toast#none).
-  { name: 'dev/toast#settings-repaired', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, newIn: 'after' as const },
+  { name: 'dev/toast#settings-repaired', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, newIn: 'after' as const, sameAs: { name: 'dev/toast#n-settings-repaired', why: 'The same notice raised by its catalogue name for the review deck.' } },
   // Review 2026-11-13: the same notice over the terminal view, whose message bar is inert and zero-size (the notice must not move off screen).
   { name: 'dev/toast#settings-repaired-terminal', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, open: ['Terminal'], newIn: 'after' as const },
   // Waiting-notice review deck (2026-11-23): every floating notice in the app, one picture each (dev/workbench/notice-catalogue.ts).

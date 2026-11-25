@@ -8,6 +8,7 @@ import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { applyCloseChoices } from './state/close-prompt-writes';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
+import { clearChatNotice } from './state/chat-notice-store';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
 import { SessionTerminal } from './components/SessionTerminal';
@@ -1375,6 +1376,7 @@ function AppInner() {
       // WHY (R-4): a closed chat's "viewed" mark and a still-pending model switch used to outlive it.
       setViewedSessions((prev) => withoutSession(prev, id));
       setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
+      clearChatNotice(id); // WHY: a reused id (resume) must not bring back an old strip notice (review C2)
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
       // WHY: free a closed session's file-pane entries. A resumed native chat reuses
       // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
@@ -2706,6 +2708,7 @@ function AppInner() {
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
     setViewedSessions((prev) => withoutSession(prev, id)); // WHY (R-4): same two tidy-ups as the session:destroyed handler
     setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
+    clearChatNotice(id); // WHY: a reused id (resume) must not bring back an old strip notice (review C2)
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
     // WHY: drop the gone session's file-pane entries too (they were never freed).
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });

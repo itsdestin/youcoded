@@ -974,6 +974,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // Read directly from the DOM element to avoid stale-closure races
     // where paste + immediate Enter outrun React's render cycle
     const currentText = inputRef.current?.value ?? text;
+    // WHY here and not in handleSubmit: Enter, global keys, the comments path and "Send anyway"
+    // all call send() directly, so only this spot sees every send (independent review A1).
+    // A send puts this chat's strip notice away; a refused send raises a fresh one.
+    if (sessionId) clearChatNotice(sessionId);
     // A refused send (pending prompt gate, disabled session) keeps the draft
     // in the input bar so the user's text isn't lost. `force` is the "Send
     // anyway" override, which re-enters here past the gate (see sendMessage).
@@ -1003,11 +1007,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // (which can't depend on send without thrashing the listener) stays current
   useEffect(() => { sendRef.current = send; }, [send]);
 
+  // Leaving a chat counts as your next action there: its "can't do that now" notice is gone when you
+  // come back (Destin, K-3: "auto-dismiss ... on next command"). Held-back notices stay (independent review A2).
+  useEffect(() => () => { if (sessionId) chatNoticeUserActed(sessionId); }, [sessionId]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (sendBlocked) return;
-    // A send puts this chat's strip notice away (Destin, K-1: "leaves once the question is answered or you send");
-    // if this send is refused again, the refusal raises a fresh one.
+    // A send puts this chat's strip notice away (Destin, K-1: "leaves once the question is answered or you send").
+    // The terminal-touch branch below never reaches send(), so it clears here too.
     if (sessionId) clearChatNotice(sessionId);
     if (minimal && sessionId) {
       const val = inputRef.current?.value ?? text;
