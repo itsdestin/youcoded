@@ -51,12 +51,22 @@
 //   (4) WHAT REMAINS UNDETECTABLE: a rollback of the WHOLE STORE ROOT (the high-water record, the retired/ records and the aside folders go back with it), a rollback past the head the record last stated (the record is raised
 //       at the end of EVERY acknowledged append call, once its lines are durable, at close, and at every eviction and restore: so the only lines a rollback can take without any report are those of the call that was IN
 //       FLIGHT when the folder was put back, which was never acknowledged; measured cost of this on btrfs/NVMe: +0.6 ms per call, about +30%), and ALL of a version's files put back older TOGETHER with its high-water
-//       record lost or older: that is a whole-folder rollback and reads as a shorter, healthy chat. (Fewer lines, never different lines.)
+//       record lost or older: that is a whole-folder rollback and reads as a shorter, healthy chat. THIS LAST SHAPE IS TWO FAULTS and it is NOT "fewer lines, never different lines" when the old folder also holds a stale
+//       parked batch whose lines differ from lines acknowledged later (review 10 F-B): once the replicator resends the true earlier lines the batch drains onto positions that were acknowledged with other bytes, and the
+//       resend of the true lines is then answered `not-a-prefix`. The store cannot see this alone (every file in the folder and the record agree with each other, only the caller knows what it acknowledged); the caller
+//       rule (v) below closes it.
 //       While a rollback IS reported (head below the record, or lines a rebuild set aside) the store enforces the rule below: nothing but a real append or resend of the same lines may refill the range, no park drains into it,
 //       every line from where the report starts is refused by read(), and the refill is checked against the recorded chain value when it reaches the recorded head (else the version is retired).
 //
 // THE POSITION RULE (review 9 F1): a position that was ever acknowledged is supplied only by a real append or resend of the SAME lines; a park can only extend a version past its head, and while the head is below a head the
 //   version once had (rolledBack, or the partial marker) no park is applied at all. Positions below the head are overlap-checked against the chain; evicted lines are checked against their kept chain values.
+//
+//   (5) a retired id is kept retired by THREE witnesses (the store-root record retired/<vhex>.ret, the aside folder, retired.json); the store writes the record from every path that finds an id retired (retire, retry,
+//       load). Only deleting ALL THREE (a whole-store-root rollback or a deliberate wipe) brings the id back.
+//   (6) an older checkpoint that records an eviction a restore had undone makes bodies that ARE on disk read as typed `evicted` when the high-water record is lost or older as well (no chunk fault is needed; a chat in one
+//       chunk file looks exactly like a genuine eviction). The answer is typed and loud and nothing wrong is served; a restoreBody of the lines brings them back. With the record intact the store vetoes the stale statement.
+//   (7) the chain comparison against the high-water record (review 9 and 10): a folder whose chain value at the newest recorded point at or below its head differs from the record is retired at load, whatever the head. A
+//       different history that is SHORTER than the record and has no recorded point at or below its head (the points kept are spread over the history, at most 12) is only reported as a rollback, not retired.
 //
 // RULES THE CALLER (REPLICATOR) MUST OBEY (what the store cannot enforce, from reviews 8 and 9):
 //   (i)   Only the host named by a takeover entry ever appends to the child version of that takeover. Any other continuation uses a NEW takeover token, hence a new child id (deriveForkId). The store accepts any
@@ -64,11 +74,14 @@
 //   (ii)  Retention may delete an aside folder, or reap a retired version folder, as it likes: the store keeps a third witness (retired/<vhex>.ret) at the store root, so a retired id stays retired even when both are gone
 //         (review 9 F3). It must never delete retired/ or touch the high-water records (highwater/): they are the store's own evidence.
 //   (iii) After ANY restore of files or any rollback report (head().rolledBack, head().damagedFromLine, a `damaged` version) compare heads with peers and refill from them; the store only reports, it never fetches.
+//   (v)   After ANY restore of files or any rollback report for a version (head().rolledBack, head().damagedFromLine, head().partial, a `damaged` version): call releaseParked for every parked file of that version, then
+//         resend from rolledBack.from / damagedFromLine through the SOURCE's head (head().partial.end tells how far a set-aside range reaches), including lines the caller never saw acknowledged (a call can finish durably
+//         and crash before it answers; the store and its record count those lines). Reads reopen only when the recorded head is reached again with the recorded chain value. Treat `not-a-prefix` on lines the caller itself
+//         holds as acknowledged as a DIVERGED HISTORY on this device and retire the version (setAsideDamaged), then recopy under a new id.
 //   (iv)  Parks are provisional and the caller's: rejectedList() names the lines the store refused (conflict, damaged, released); the caller resends them to the version they belong to. A park never fills a position that was
 //         ever acknowledged, so a conflicting park can only be rejected, never win over an acknowledged line.
-//   (5) a retired id whose aside folder AND retired.json are both deleted is two faults.
 // The two ways a version can be wrong are therefore: SHORTER (a prefix-state: reported through the high-water record, a hole, a partial marker, or not at all within limit 4) or DAMAGED (quarantined). The
-// store never serves a different line at an index it once acknowledged, and `read()` refuses any line that `head().damagedFromLine` covers.
+// store never serves a different line at an index it once acknowledged EXCEPT in the two-fault shape of limit 4, and `read()` refuses any line from where a rollback or set-aside report starts (and the flagged line itself).
 //
 // RESUME NOTES (for a successor): restructure branch work is in commits "Mesh store restructure: ..." on session/64-mesh-sync-build; tests listed in the commit messages; fuzz oracle rewrite is the last step.
 //

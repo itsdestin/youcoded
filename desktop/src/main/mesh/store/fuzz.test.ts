@@ -198,8 +198,9 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
       }
       if (head.evictedLines > v.evicted) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, asked: v.evicted });
       // review 9 F5: lines whose bodies are on disk and verify are never reported evicted because an older checkpoint remembers an eviction a restore had undone
+      // (seed 7106667, review 10 F-E: a body chunk that a fault zeroed or cut is NOT "bodies present and verifying": its first lines read as evicted with an older checkpoint, which is a typed answer for lines whose bodies are damaged either way (`destroyed`, limit 1))
       // (a version put back to an older state really can have lines evicted that were evicted THEN: that is only wrong when the bodies are on disk, i.e. the first chunk file is there)
-      if (head.evictedLines > v.evictedPossible && !v.recordFaulted && !v.bodiesRolledBack && (!v.rollback || fs.existsSync(path.join(root, 'versions', v.hex, 'body-0000000000000000.bin')))) bad('evicted-more-than-in-force', { tag, v: v.hex.slice(0, 4), evictedLines: head.evictedLines, inForce: v.evictedPossible, faulted: v.faulted });
+      if (head.evictedLines > v.evictedPossible && !v.recordFaulted && !v.bodiesRolledBack && !v.destroyed && (!v.rollback || fs.existsSync(path.join(root, 'versions', v.hex, 'body-0000000000000000.bin')))) bad('evicted-more-than-in-force', { tag, v: v.hex.slice(0, 4), evictedLines: head.evictedLines, inForce: v.evictedPossible, faulted: v.faulted });
       const flagged: number | null = head.damagedFromLine;
       // 1. nothing served is wrong, 2. every acknowledged line is served or its loss is reported
       let all: Buffer[] | 'evicted' | null = null;
