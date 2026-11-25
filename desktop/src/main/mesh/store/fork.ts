@@ -1,6 +1,7 @@
 // Building the child folder of a fork (split out of store.ts to keep it inside its line budget). The meaning, the caller's duties and the CRASH TABLE are written above ChatStore.forkVersion.
 // Everything here happens in forks/<childhex>/ (a folder nothing lists, loads or reads) until ONE directory rename makes the child exist.
 import * as nodePath from 'node:path';
+import { createHash } from 'node:crypto';
 import { mkdirDurable, type Fs } from './fsio';
 import { writeSideFor } from './sidefile';
 import { writeCheckpoint } from './checkpoint';
@@ -66,4 +67,13 @@ export async function buildFork(e: ForkEnv, st: VState, ck: string, fromLine: nu
   // DESTRUCTIVE-OK(kept-copy-first): the target does not exist (checked by the caller, and nothing else writes under the store lock)
   await fs.rename(work, nodePath.join(e.root, 'versions', ck));
   await fs.fsyncDir(nodePath.join(e.root, 'versions')); await fs.fsyncDir(forks);
+}
+
+/**
+ * The rule every device uses to name the child of a takeover (see forkVersion): SHA-256 over a label, the parent id, the fork line, the chain value at that line and `takeoverToken`, a string all
+ * devices already agree on for THIS takeover (the id of the control-log entry that records it). Same inputs give the same 32-byte id on every device, so two devices never create two siblings
+ * for one takeover; a different takeover (another token) of the same parent and line gets another id.
+ */
+export function deriveForkId(parent: Uint8Array, fromLine: number, chainHashAtFromLine: string, takeoverToken: string): Buffer {
+  return createHash('sha256').update('youcoded-mesh/v1/fork-id\0').update(Buffer.from(parent)).update(`\0${fromLine}\0${chainHashAtFromLine}\0${takeoverToken}`).digest();
 }

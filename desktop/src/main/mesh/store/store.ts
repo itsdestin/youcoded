@@ -28,7 +28,6 @@
 // only an unresolvable disagreement quarantines the whole version (aside/<vhex>-q<n>/, typed `damaged`, the id is retired). A full disk is one typed `disk-full` refusal; reads never write anything that can fail.
 // No file handles are kept open between calls. One in-process lock serialises all calls and lock.ts keeps other processes out.
 import * as nodePath from 'node:path';
-import { createHash } from 'node:crypto';
 import { realFs, writeFileAtomic, sweepTemps, mkdirDurable, type Fs } from './fsio';
 import { StoreError } from './errors';
 import { acquireLock, type StoreLock } from './lock';
@@ -68,14 +67,7 @@ const DEFAULT_MAX_EXTRAS = 4 * 1024 * MIB;
 const LOAD_SCRUB_RECORDS = 8192;
 const STEP_SCRUB_RECORDS = 65536;
 
-/**
- * The rule every device uses to name the child of a takeover (see forkVersion): SHA-256 over a label, the parent id, the fork line, the chain value at that line and `takeoverToken`, a string all
- * devices already agree on for THIS takeover (the id of the control-log entry that records it). Same inputs give the same 32-byte id on every device, so two devices never create two siblings
- * for one takeover; a different takeover (another token) of the same parent and line gets another id.
- */
-export function deriveForkId(parent: Uint8Array, fromLine: number, chainHashAtFromLine: string, takeoverToken: string): Buffer {
-  return createHash('sha256').update('youcoded-mesh/v1/fork-id\0').update(Buffer.from(parent)).update(`\0${fromLine}\0${chainHashAtFromLine}\0${takeoverToken}`).digest();
-}
+export { deriveForkId } from './fork';
 
 export class ChatStore {
   private readonly fs: Fs;
