@@ -452,7 +452,7 @@ export class ChatStore {
   // ---- high-water record (highwater.ts: ChatStore only forwards, the record is advisory) ------------
   private hwEnv(): HwEnv { return { fs: this.fs, root: this.root, readRecordHash: async (st, n) => { const r = decodeRecord(await this.readAt(this.ixPath(st.dir), recPos(n - 1), REC), 0); return r ? hex(r.h) : null; } }; }
   private checkRollback(st: VState): Promise<void> { return checkRollback(this.hwEnv(), st); }
-  private noteHw(st: VState, force = false): Promise<void> { return noteHw(this.hwEnv(), st, force); }
+  private noteHw(st: VState, force = false, restored = false): Promise<void> { return noteHw(this.hwEnv(), st, force, restored); }
 
   // ---- index and body recovery (recovery.ts: settleIndex, rebuildIndex) --------------------------------
   private async rebuildIndex(key: string, reason: string): Promise<RebuildResult> {
@@ -1378,7 +1378,7 @@ export class ChatStore {
           // DESTRUCTIVE-OK(verified-record): every evicted line was just verified against the chain and read back from disk
           await writeCheckpoint(this.fs, st.dir, this.ckOf(st, { evLines: 0, evBytes: 0, boundary: null, lostRecs: 0 }), st.ck);
           st.evictedLines = 0; st.evictedBytes = 0; st.evB = null; st.lostRecs = 0;
-          await this.noteHw(st, true);
+          await this.noteHw(st, true, true);   // WHY `restored` (review 9 F5, found by the fuzz): on a rolled-back head the record kept saying "evicted", so an older checkpoint put back later made present bodies read as evicted
           // the index still holds the stand-in for the lost prefix: drop the cached state, the next load re-derives the index from the bodies (confirmed by the checkpoint's head)
           if (L > 0) { this.versions.delete(key); return { restoredLines: N }; }
         }

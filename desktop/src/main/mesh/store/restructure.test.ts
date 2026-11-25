@@ -524,6 +524,41 @@ describe('review 9 F5: lines whose bodies are on disk are not reported evicted b
   }
 });
 
+describe('review 9 F5, as the fuzz finds it: older index+checkpoint put back after a restore', () => {
+  it('the older pair says 11 lines evicted, the restored bodies are on disk and the record outside the folder says none: nothing is reported evicted', async () => {
+    const t = await tmpRoot('f5b-');
+    let s = await open(t.dir, { ...opts, chunkBytes: 700 }); await s.append(P, 0, 0, A.slice(0, 40));
+    const h = (await s.hashAt(P, 0, 11))!; await s.evictBody(P, { kind: 'holders-confirmed', version: keyOf(P), through: 11, hash: h, acks: [{ holder: 'p', version: keyOf(P), lines: 11, hash: h, signature: 's' }] } as any);
+    await s.close();
+    const v = vdir(t.dir); const old = { ix: fs.readFileSync(path.join(v, 'index.bin')), ck: fs.readFileSync(path.join(v, 'checkpoint.bin')) };
+    s = await ChatStore.open(t.dir, { ...opts, chunkBytes: 700 }); await s.restoreBody(P, A.slice(0, 11)); await s.append(P, 0, 40, A.slice(40, 60)); await s.close();
+    fs.writeFileSync(path.join(v, 'index.bin'), old.ix); fs.writeFileSync(path.join(v, 'checkpoint.bin'), old.ck);
+    s = await ChatStore.open(t.dir, { ...opts, chunkBytes: 700 }); await s.registerVersion(P, { chatId: CHAT, runtime: 'claude-code' });
+    const hd = await s.head(P);
+    expect(hd.evictedLines).toBe(0);
+    await s.close(); await t.cleanup();
+  });
+});
+
+describe('review 9 F5, the cause the fuzz found: a restore on a rolled-back head states "nothing evicted" in the record too', () => {
+  it('older index+checkpoint (eviction in force) put back, restore while the rollback is reported, the same older pair put back again: the lines are served, not evicted', async () => {
+    const t = await tmpRoot('f5c-');
+    const v = vdir(t.dir); const o = { ...opts, chunkBytes: 700 };
+    let s = await open(t.dir, o); await s.append(P, 0, 0, A.slice(0, 20));
+    const h = (await s.hashAt(P, 0, 11))!; await s.evictBody(P, { kind: 'holders-confirmed', version: keyOf(P), through: 11, hash: h, acks: [{ holder: 'p', version: keyOf(P), lines: 11, hash: h, signature: 's' }] } as any); await s.close();
+    const old = { ix: fs.readFileSync(path.join(v, 'index.bin')), ck: fs.readFileSync(path.join(v, 'checkpoint.bin')) };     // 20 lines, 11 evicted
+    s = await ChatStore.open(t.dir, o); await s.append(P, 0, 20, A.slice(20, 40)); await s.close();                        // the record now says 40 lines, 11 evicted
+    fs.writeFileSync(path.join(v, 'index.bin'), old.ix); fs.writeFileSync(path.join(v, 'checkpoint.bin'), old.ck);        // the older pair: the head is behind the record
+    s = await ChatStore.open(t.dir, o); expect((await s.head(P)).rolledBack).not.toBeNull(); expect((await s.head(P)).evictedLines).toBe(11);
+    await s.restoreBody(P, A.slice(0, 11)); expect((await s.head(P)).evictedLines).toBe(0); await s.close();            // restored while the rollback is reported
+    expect((await readHw(realFs, t.dir, keyOf(P))).st.value).toMatchObject({ count: 40, evLines: 0 });                    // and the record outside the folder says so too
+    fs.writeFileSync(path.join(v, 'index.bin'), old.ix); fs.writeFileSync(path.join(v, 'checkpoint.bin'), old.ck);        // the older statement again: it still records the eviction
+    s = await ChatStore.open(t.dir, o);
+    expect((await s.head(P)).evictedLines).toBe(0);
+    await s.close(); await t.cleanup();
+  });
+});
+
 describe('the store-root retirement folder', () => {
   it('a half-written record (a temp file) in retired/ is swept at open, and the id keeps its answer', async () => {
     const t = await tmpRoot('retired-tmp-');

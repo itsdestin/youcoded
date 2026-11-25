@@ -102,8 +102,9 @@ export async function checkRollback(e: HwEnv, st: VState): Promise<void> {
   st.rolledBack = r;
 }
 /** Raise the record to the head (advisory). Never lowers it. */
-export async function noteHw(e: HwEnv, st: VState, force = false): Promise<void> {
+/** `restored`: a restoreBody just brought the evicted bodies back, so the record's eviction state must say none even on a rolled-back head (the head count it states is still never lowered). */
+export async function noteHw(e: HwEnv, st: VState, force = false, restored = false): Promise<void> {
   if (!force && st.count - st.hw.noted < HW_EVERY) return;
-  if (st.rolledBack && st.count < st.rolledBack.had) return;   // a rolled-back head must not lower the mark it was compared with
+  if (!restored && st.rolledBack && st.count < st.rolledBack.had) return;   // a rolled-back head must not lower the mark it was compared with
   try { const h = await chainAt(e, st, st.count); if (h) await raiseHw(e.fs, e.root, st.key, st.hw, st.count, h.slice(0, 16), hex(st.seeds.raw).slice(0, 16), { lines: st.evictedLines, bytes: st.evictedBytes }); } catch (err) { advisoryFailed(err); }
 }
