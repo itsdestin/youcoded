@@ -518,3 +518,15 @@ describe('review 9 F5: lines whose bodies are on disk are not reported evicted b
     });
   }
 });
+
+describe('the store-root retirement folder', () => {
+  it('a half-written record (a temp file) in retired/ is swept at open, and the id keeps its answer', async () => {
+    const t = await tmpRoot('retired-tmp-');
+    let s = await open(t.dir); await s.append(P, 0, 0, A.slice(0, 5)); await s.setAsideDamaged(P); await s.close();
+    const tmp = path.join(t.dir, 'retired', `${keyOf(P)}.ret.tmp-1-1`); fs.writeFileSync(tmp, Buffer.from('half'));
+    s = await ChatStore.open(t.dir, opts);
+    expect(fs.existsSync(tmp)).toBe(false);
+    await expect(s.head(P)).rejects.toMatchObject({ code: 'damaged' });
+    await s.close(); await t.cleanup();
+  });
+});
