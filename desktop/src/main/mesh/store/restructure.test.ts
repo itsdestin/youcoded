@@ -607,3 +607,33 @@ describe('review 10 F-A: the store-root retirement record exists however the ret
     await t.cleanup();
   });
 });
+
+describe('review 10 F-C: a chain value that contradicts the high-water record retires the version whatever the head is', () => {
+  for (const [label, n] of [['equal to the record', 30], ['beyond the record', 40]] as [string, number][]) {
+    it(`another history under the same id (a folder from another store put in), head ${label}: retired at load`, async () => {
+      const t = await tmpRoot('contra-'); const t2 = await tmpRoot('contra-other-');
+      const o = { ...opts, chunkBytes: 100000 };
+      let s = await open(t.dir, o); await s.append(P, 0, 0, A.slice(0, 29)); await s.append(P, 0, 29, A.slice(29, 30)); await s.close();      // the record says 30, with a point at 30
+      s = await open(t2.dir, o); await s.append(P, 0, 0, B.slice(0, n)); await s.close();                                                    // another store holds another history of the same id
+      fs.rmSync(vdir(t.dir), { recursive: true }); fs.cpSync(vdir(t2.dir), vdir(t.dir), { recursive: true });
+      s = await ChatStore.open(t.dir, o);
+      await expect(s.head(P)).rejects.toMatchObject({ code: 'damaged' });
+      await s.close(); await t.cleanup(); await t2.cleanup();
+    });
+  }
+  it('below the record the comparison needs a recorded point at or below the head; with none but the seed it is reported as a rollback, not retired (stated limit of the rule)', async () => {
+    const t = await tmpRoot('contra-low-'); const t2 = await tmpRoot('contra-low2-'); const o = { ...opts, chunkBytes: 100000 };
+    let s = await open(t.dir, o); await s.append(P, 0, 0, A.slice(0, 30)); await s.close();
+    s = await open(t2.dir, o); await s.append(P, 0, 0, B.slice(0, 20)); await s.close();
+    fs.rmSync(vdir(t.dir), { recursive: true }); fs.cpSync(vdir(t2.dir), vdir(t.dir), { recursive: true });
+    s = await ChatStore.open(t.dir, o); expect((await s.head(P)).rolledBack).toEqual({ from: 20, had: 30 }); await s.close();
+    await t.cleanup(); await t2.cleanup();
+  });
+  it('no false alarm: the same history longer than the record, an evict/restore, a fork and a plain close all load clean', async () => {
+    const t = await tmpRoot('contra-ok-'); const o = { ...opts, chunkBytes: 700 };
+    let s = await open(t.dir, o); await s.append(P, 0, 0, A.slice(0, 30)); await s.close();
+    s = await ChatStore.open(t.dir, o); await s.append(P, 0, 30, A.slice(30, 50)); await s.forkVersion(P, 40, C); await s.close();
+    s = await ChatStore.open(t.dir, o); expect((await s.head(P)).lines).toBe(50); expect((await s.head(C)).lines).toBe(40); await s.close();
+    await t.cleanup();
+  });
+});

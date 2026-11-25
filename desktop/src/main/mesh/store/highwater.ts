@@ -61,12 +61,12 @@ async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, count: 
 }
 
 /**
- * Was this version rolled back? `chainAt(n)` gives the chain value the folder holds at n lines (n <= head). Reported only when the head is behind the record AND the record's nearest point at
- * or below the head matches the folder's own chain (the same history, just shorter): a head that merely differs is not called a rollback.
+ * Was this version rolled back? `chainAt(n)` gives the chain value the folder holds at n lines (n <= head). Reported (as a rollback) only when the head is behind the record AND the record's nearest point at
+ * or below the head matches the folder's own chain (the same history, just shorter). A point that DIFFERS from the folder's chain is a contradiction, whatever the head, and retires the version.
  */
 async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: number) => Promise<string | null>): Promise<{ from: number; had: number } | 'contradiction' | null> {
   const v = hw.st.value;
-  if (!v || v.count <= headCount) return null;
+  if (!v) return null;
   let pick: [number, string] | null = null;
   for (const p of v.ladder) if (p[0] <= headCount) pick = p;
   if (!pick) return null;
@@ -74,7 +74,10 @@ async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: number)
   if (mine === null) return null;
   // WHY a contradiction is its own answer (restructure, review 9): a version never changes history, so the folder holding another chain value than the record at the same line count is not "an older copy of this
   // version": it is lines that differ from acknowledged ones. It used to be "no claim" (a takeover could replace a history in place); now it is loud: the version is retired.
-  return mine.slice(0, 16) === pick[1] ? { from: headCount, had: v.count } : 'contradiction';
+  if (mine.slice(0, 16) !== pick[1]) return 'contradiction';
+  // WHY the comparison also runs when the head is AT or BEYOND the record (review 10 F-C): the newest ladder point is the record's own count, and the folder's chain value there must be the recorded one whatever the
+  // head is now; a different history under the same id is caught at 20 lines of a recorded 20, not only when it is shorter. Only a head BELOW the record is a rollback.
+  return v.count > headCount ? { from: headCount, had: v.count } : null;
 }
 
 // ---- what the store does with the record (ChatStore forwards to these) -------------------------------
