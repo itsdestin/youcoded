@@ -59,6 +59,7 @@ interface Ver {
   acked: number;                   // lines acknowledged by an `ok` answer
   evicted: number;                 // the highest eviction ever asked for
   evictedPossible: number;         // the most lines that can be evicted NOW: raised by an evict call (it may have happened), reset to 0 by a restore that answered
+  retentionDone: boolean;          // a retention job removed its aside folder and version folder: the store-root record is the ONLY witness left
   storeRetired: boolean;           // the store answered that this id is retired (set aside by the caller or quarantined by the store): it must refuse registration and service for good
   retireMaybe: boolean;            // retired by an operation that was killed before it answered: it may or may not have happened
   retired: boolean;                // set aside by the caller or quarantined by the store: its id is never served again
@@ -88,7 +89,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   const bad = (kind: string, detail: unknown) => { viol.push({ kind, detail: { seed, ...(detail as object), O }, log: log.slice(-(Number(process.env.MESH_STORE_FUZZ_LOG) || 16)) }); };
   const canonLen = big ? 10_600 : 260;
   let idc = 10; let tagc = 0;
-  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, storeRetired: false, retireMaybe: false, retired: false, faulted: false, rollback: false, bodiesRolledBack: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
+  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, storeRetired: false, retentionDone: false, retireMaybe: false, retired: false, faulted: false, rollback: false, bodiesRolledBack: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
   const root1 = mkVer(V(1), CHAT, makeCanon(r, `s${seed}`, canonLen, big), null);
   const other = mkVer(V(2), CHAT2, makeCanon(rng(seed * 31 + 5), `o${seed}`, 80, true), null);
   const vers: Ver[] = [root1, other];
@@ -377,6 +378,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
       const v = gone[Math.floor(r() * gone.length)];
       for (const nm of fs.existsSync(path.join(root, 'aside')) ? fs.readdirSync(path.join(root, 'aside')) : []) if (nm.startsWith(v.hex + '-')) fs.rmSync(path.join(root, 'aside', nm), { recursive: true, force: true });
       fs.rmSync(path.join(root, 'versions', v.hex), { recursive: true, force: true });
+      v.retentionDone = true;
       log.push(`RETENTION removed aside and folder of ${v.hex.slice(0, 4)}`); ev('retention-job');
     }
     // A FAMILY of older files of ONE version put back together (index / checkpoint / bodies, in pairs and triples), or the whole version folder: a restore tool at work
@@ -404,7 +406,9 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
       }
     }
     if (r() >= 0.4) return;
-    const pool = walk(root).filter((p) => !p.endsWith('LOCK'));
+    // (the last witness of an id whose other two were removed is never faulted: deleting ALL THREE is the stated limit 5, not a fault the store promises anything about)
+    const lastWitness = vers.filter((v) => v.retentionDone).map((v) => path.join(root, 'retired', `${v.hex}.ret`));
+    const pool = walk(root).filter((p) => !p.endsWith('LOCK') && !lastWitness.includes(p));
     if (!pool.length) return;
     const crit = pool.filter((p) => /index\.bin$|body-|checkpoint\.bin|log\.bin|anchor\.json|manifest\.bin|extras\/|retired\.json|marks\.bin|parked\/|highwater\//.test(p));
     const from = r() < 0.7 && crit.length ? crit : pool;
