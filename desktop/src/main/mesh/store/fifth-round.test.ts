@@ -329,14 +329,16 @@ describe('the high-water record names its own points', () => {
     expect(h.lines).toBe(HW_EVERY + 10); expect(h.rolledBack).toEqual({ from: HW_EVERY + 10, had: L.length });
     await s.close(); fs.rmSync(snap, { recursive: true }); await t.cleanup();
   });
-  it('a head behind the record whose nearest recorded point does NOT match the folder (another history) is not called a rollback', async () => {
+  it('a DIFFERENT history written under the same version id (the folder gone) contradicts the high-water record and retires the id (review 9 F1)', async () => {
     const t = await tmpRoot('r5-hw2-');
-    let s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 }); await s.append(V(1), 0, 0, mk('p', HW_EVERY)); await s.append(V(1), 0, HW_EVERY, mk('p2', 44)); await s.close();   // points at 0, 256 and 300
+    let s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 }); await s.append(V(1), 0, 0, mk('p', 256)); await s.append(V(1), 0, 256, mk('p2', 44)); await s.close();   // the record says 300 lines
     fs.rmSync(vdir(t.dir), { recursive: true });                                                  // the folder is gone, a DIFFERENT 280-line history of the same version is written
-    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 }); await s.append(V(1), 0, 0, mk('other', 280)); await s.close();
-    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 });                                      // (the check runs at open)
-    const h = await s.head(V(1));
-    expect(h.lines).toBe(280); expect(h.rolledBack).toBeNull();                                  // the point at 256 does not match: not the same history, so no claim
+    s = await open(t.dir, { ...opts, chunkBytes: 1 << 20 });
+    expect(await s.append(V(1), 0, 0, mk('other', 280))).toBe('ok');                              // below the recorded 300: nothing to compare with yet
+    await s.close();
+    s = await ChatStore.open(t.dir, { ...opts, chunkBytes: 1 << 20 });
+    await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });                       // another chain value than the record at the same line: not this version's lines, retired and kept in aside/
+    expect(fs.readdirSync(path.join(t.dir, 'aside')).length).toBe(1);
     await s.close(); await t.cleanup();
   });
 });

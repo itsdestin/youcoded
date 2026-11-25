@@ -148,7 +148,7 @@ export class ChatStore {
         if (p.kind === 'ok' && p.n !== 1) throw new StoreError('corrupt', 'unknown store format');
         if (p.kind === 'bad') { await keepBadSideFile(fs, fmt); await writeSide0(fs, fmt, formatLine(1)); }
       }
-      for (const d of ['versions', 'aside', 'extras', 'control']) await mkdirDurable(fs, nodePath.join(root, d));
+      for (const d of ['versions', 'aside', 'retired', 'extras', 'control']) await mkdirDurable(fs, nodePath.join(root, d));
       // WHY safe now: with the lock held no other process has temp files in flight (review C2: this sweep
       // used to delete a second process's in-flight temp files).
       await sweepTemps(fs, root);

@@ -214,6 +214,14 @@ describe('a damaged version is RETIRED: its id is never refilled, and files put 
       expect(await outcome(b.t.dir, P, A.slice(0, 20))).toBe('typed');
       fs.rmSync(b.pre, { recursive: true }); await b.t.cleanup();
     });
+    it(`after a set-aside ${how}: a retention job that removes the aside folder AND the retired version folder cannot bring the id back (store-root record, review 9 F3)`, async () => {
+      const { t, pre } = await retiredFixture(how);
+      fs.rmSync(path.join(t.dir, 'aside'), { recursive: true }); fs.rmSync(vdir(t.dir), { recursive: true });
+      const s = await ChatStore.open(t.dir, opts);
+      await expect(s.registerVersion(P, { chatId: CHAT, runtime: 'claude-code' })).rejects.toMatchObject({ code: 'damaged' });   // not a fresh empty version under the old id
+      await expect(s.append(P, 0, 0, A.slice(0, 3))).rejects.toMatchObject({ code: 'damaged' });
+      await s.close(); fs.rmSync(pre, { recursive: true }); await t.cleanup();
+    });
     it(`after a set-aside ${how}: a park that waited for the old id never reaches the recopy under the NEW id (review 7 F2)`, async () => {
       const { t, pre } = await retiredFixture(how);
       const s = await ChatStore.open(t.dir, opts);
@@ -372,19 +380,25 @@ describe('read() never serves a line the store reports as suspect (review 8 F3)'
 });
 
 describe('the high-water record (unchanged by the restructure)', () => {
-  it('B3: raised at HW_EVERY lines; line 255 is not recorded, line 256 is; one big call is recorded at its end', async () => {
+  it('review 9 window: the record is raised at the end of EVERY acknowledged append call (the unreported rollback window is only the call in flight)', async () => {
     const t = await tmpRoot('hw-b3-');
     const s = await open(t.dir);
-    const L = mk('h', HW_EVERY + 1);
-    for (let i = 0; i < HW_EVERY - 1; i++) await s.append(P, 0, i, [L[i]]);
-    expect((await readHw(realFs, t.dir, keyOf(P))).st.value).toBeNull();
-    await s.append(P, 0, HW_EVERY - 1, [L[HW_EVERY - 1]]);
-    expect((await readHw(realFs, t.dir, keyOf(P))).st.value?.count).toBe(HW_EVERY);
+    const L = mk('h', 40);
+    expect(HW_EVERY).toBe(1);
+    for (let i = 0; i < 30; i++) { await s.append(P, 0, i, [L[i]]); expect((await readHw(realFs, t.dir, keyOf(P))).st.value?.count, `after call ${i}`).toBe(i + 1); }
+    await s.append(P, 0, 30, L.slice(30, 37));                                                      // one call of several lines: recorded at its END
+    expect((await readHw(realFs, t.dir, keyOf(P))).st.value?.count).toBe(37);
     await s.close(); await t.cleanup();
-    const t2 = await tmpRoot('hw-b3b-'); const s2 = await open(t2.dir);
-    await s2.append(P, 0, 0, mk('g', 3 * HW_EVERY + 7));
-    expect((await readHw(realFs, t2.dir, keyOf(P))).st.value?.count).toBe(3 * HW_EVERY + 7);
-    await s2.close(); await t2.cleanup();
+    // so an older folder put back is REPORTED even when it is only ONE acknowledged call behind
+    const t2 = await tmpRoot('hw-b3b-'); let s2 = await open(t2.dir);
+    await s2.append(P, 0, 0, A.slice(0, 10)); await s2.close();
+    const snap = path.join(path.dirname(t2.dir), path.basename(t2.dir) + '-snap'); fs.cpSync(vdir(t2.dir), snap, { recursive: true });
+    s2 = await ChatStore.open(t2.dir, opts); await s2.append(P, 0, 10, A.slice(10, 11));             // ONE more line, never closed cleanly
+    fs.rmSync(path.join(t2.dir, 'LOCK'), { force: true });
+    fs.rmSync(vdir(t2.dir), { recursive: true }); fs.cpSync(snap, vdir(t2.dir), { recursive: true }); fs.rmSync(snap, { recursive: true });
+    const s3 = await ChatStore.open(t2.dir, opts);
+    expect((await s3.head(P)).rolledBack).toEqual({ from: 10, had: 11 }); await s3.close();
+    await t2.cleanup();
   });
   it('M7: a rolled-back head does not overwrite the record it was compared with; the report stays across a reopen', async () => {
     const t = await tmpRoot('hw-m7-');

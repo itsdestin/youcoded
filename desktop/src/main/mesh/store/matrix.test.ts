@@ -136,7 +136,7 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
     const files = walk(golden).map((p) => path.relative(golden, p)).filter((r) => !/^LOCK/.test(r));
     // every file the scenario wrote is in the inventory (and the scenario reached the interesting ones)
     for (const f of files) expect(inventoryRow(f), f).not.toBeNull();
-    for (const must of ['checkpoint.bin', 'index.bin', 'meta.json', 'meta.copy', 'summary.json', 'control/', 'anchor.json', 'anchor.copy', 'extras/manifest.bin', 'retired.json', 'healed/', 'replaced-index/', 'aside/', 'COMPLETE', 'parked/']) expect(files.some((f) => f.includes(must)), `scenario lacks ${must}`).toBe(true);
+    for (const must of ['checkpoint.bin', 'index.bin', 'meta.json', 'meta.copy', 'summary.json', 'control/', 'anchor.json', 'anchor.copy', 'extras/manifest.bin', 'retired.json', 'retired/', 'healed/', 'replaced-index/', 'aside/', 'COMPLETE', 'parked/']) expect(files.some((f) => f.includes(must)), `scenario lacks ${must}`).toBe(true);
     let runs = 0; const problems: string[] = [];
     let n = 0;
     for (const rel of files) {
@@ -203,6 +203,7 @@ describe.each([['without eviction', false], ['after an eviction', true]] as cons
       'meta.copy': 'identical bytes to meta.json by design (one registration), so no distinct sibling exists; meta.json/meta.copy swaps across versions are the otherbuild/foreign cases',
       'extras-manifest': 'one manifest per root: its sibling is the other root\'s manifest (otherbuild) which is applied; kept for completeness',
       FORMAT: 'a constant, identical in every root',
+      'retired-root': 'one retired version per root, written with the same text in every root, so no distinct sibling exists',
       retired: 'one retired version per root, written with the same text in every root, so no distinct sibling exists',
     };
     const NOT_WRITTEN_BY_SCENARIO: Record<string, string> = {

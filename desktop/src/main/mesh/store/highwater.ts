@@ -8,9 +8,9 @@
 //   - it is written AFTER the lines it states are durable (checkpoint first), so a power cut cannot leave it ahead of the disk;
 //   - a stale, missing, damaged or foreign record is simply no evidence (two slots, enveloped like everything else, so another version's record is `foreign`, never believed).
 // WHAT REMAINS UNDETECTABLE (inventory.ts says it too): the whole store root restored as one (this record goes back with it), and a rollback to a head the record never saw (it is written
-// every HW_EVERY lines, at close, and at every eviction and restore, so up to HW_EVERY-1 lines of the newest growth can be rolled back without a report).
+// at the end of every acknowledged append call, at close, and at every eviction and restore, so only the call that was in flight can be rolled back without a report).
 //
-// COST of HW_EVERY = 256: one in-place 1 KiB write plus one fsync per 256 lines, i.e. about 0.004 fsync per appended line against the three an append already makes (body, index, checkpoint).
+// COST of HW_EVERY = 1: one in-place 1 KiB write plus one fsync per append call, on top of the three an append already makes (body, index, checkpoint): about +0.6 ms per call measured (see HW_EVERY).
 import * as nodePath from 'node:path';
 import type { Fs } from './fsio';
 import { mkdirDurable } from './fsio';
@@ -19,8 +19,10 @@ import { isDiskFull } from './storeutil';
 import { StoreError } from './errors';
 import { hex } from './chain';
 import type { VState } from './vstate';
+import { Damaged } from './recovery';
 
-export const HW_EVERY = 256;
+/** WHY 1 (review 9, item 4): the record is raised at the END of every acknowledged append call, once the lines are durable. Measured on this machine's btrfs/NVMe (300 calls, 1 and 10 lines per call): about 1.7 ms per call with the record raised every 256 lines, about 2.5 ms raised every call, i.e. about +0.6 ms (+30%) for one more small fsync. So the window of a rollback nothing reports is now only the call that was in flight when the folder was put back. */
+export const HW_EVERY = 1;
 const LADDER_MAX = 12;
 const ROLE = 'highwater';
 
@@ -45,7 +47,13 @@ async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, count: 
   const base: HwValue = cur ?? { count: 0, ladder: [[0, seed16]], evLines: 0, evBytes: 0 };
   const next: HwValue = { count: Math.max(base.count, count), ladder: base.ladder.slice(), evLines: ev.lines, evBytes: ev.bytes };
   if (count > (next.ladder[next.ladder.length - 1]?.[0] ?? -1)) next.ladder.push([count, h16]);
-  while (next.ladder.length > LADDER_MAX) next.ladder.splice(1, 1);   // keep the seed point and the newest
+  // WHY not "drop the oldest" any more (the record is now raised at every call): that would keep only the last 12 points, and a head far behind the record would be compared with the seed alone. The point whose
+  // neighbours are closest together is dropped instead, so the kept points stay spread over the whole history; the seed and the newest point are always kept.
+  while (next.ladder.length > LADDER_MAX) {
+    let best = 1;
+    for (let i = 2; i < next.ladder.length - 1; i++) if (next.ladder[i + 1][0] - next.ladder[i - 1][0] < next.ladder[best + 1][0] - next.ladder[best - 1][0]) best = i;
+    next.ladder.splice(best, 1);
+  }
   await mkdirDurable(fs, nodePath.dirname(hwPath(root, key)));
   // DESTRUCTIVE-OK(verified-record): a high-water statement; slotfile.ts overwrites only the safe slot, and a lower or missing record can only under-report
   await writeSlot(fs, hwPath(root, key), ROLE, key, hw.st, next);
@@ -56,14 +64,17 @@ async function raiseHw(fs: Fs, root: string, key: string, hw: HighWater, count: 
  * Was this version rolled back? `chainAt(n)` gives the chain value the folder holds at n lines (n <= head). Reported only when the head is behind the record AND the record's nearest point at
  * or below the head matches the folder's own chain (the same history, just shorter): a head that merely differs is not called a rollback.
  */
-async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: number) => Promise<string | null>): Promise<{ from: number; had: number } | null> {
+async function rolledBack(hw: HighWater, headCount: number, chainAt: (n: number) => Promise<string | null>): Promise<{ from: number; had: number } | 'contradiction' | null> {
   const v = hw.st.value;
   if (!v || v.count <= headCount) return null;
   let pick: [number, string] | null = null;
   for (const p of v.ladder) if (p[0] <= headCount) pick = p;
   if (!pick) return null;
   const mine = await chainAt(pick[0]);
-  return mine !== null && mine.slice(0, 16) === pick[1] ? { from: headCount, had: v.count } : null;
+  if (mine === null) return null;
+  // WHY a contradiction is its own answer (restructure, review 9): a version never changes history, so the folder holding another chain value than the record at the same line count is not "an older copy of this
+  // version": it is lines that differ from acknowledged ones. It used to be "no claim" (a takeover could replace a history in place); now it is loud: the version is retired.
+  return mine.slice(0, 16) === pick[1] ? { from: headCount, had: v.count } : 'contradiction';
 }
 
 // ---- what the store does with the record (ChatStore forwards to these) -------------------------------
@@ -85,7 +96,10 @@ const chainAt = async (e: HwEnv, st: VState, n: number): Promise<string | null> 
 };
 /** Compare the head with the record; a head behind it with the same history is REPORTED, never repaired or cut (F3). */
 export async function checkRollback(e: HwEnv, st: VState): Promise<void> {
-  try { st.rolledBack = await rolledBack(st.hw, st.count, (n) => chainAt(e, st, n)); } catch (err) { advisoryFailed(err); st.rolledBack = null; }   // the record can only under-report
+  let r: Awaited<ReturnType<typeof rolledBack>> = null;
+  try { r = await rolledBack(st.hw, st.count, (n) => chainAt(e, st, n)); } catch (err) { advisoryFailed(err); }   // the record can only under-report
+  if (r === 'contradiction') throw new Damaged(`the lines this version holds at line ${st.count} are not the lines it acknowledged (the high-water record's chain value differs): refusing to serve them`);
+  st.rolledBack = r;
 }
 /** Raise the record to the head (advisory). Never lowers it. */
 export async function noteHw(e: HwEnv, st: VState, force = false): Promise<void> {

@@ -360,7 +360,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   }
 
   /** The version a file belongs to, or null (control, extras, FORMAT, LOCK). */
-  const ownerOf = (rel: string): Ver | null => { const m = /^(?:versions\/([0-9a-f]+)\/|aside\/([0-9a-f]+)-q?\d+\/|highwater\/([0-9a-f]+)\.hw$|forks\/([0-9a-f]+)\/)/.exec(rel); const h = m ? (m[1] ?? m[2] ?? m[3] ?? m[4]) : undefined; return h ? byHex(h) ?? null : null; };
+  const ownerOf = (rel: string): Ver | null => { const m = /^(?:versions\/([0-9a-f]+)\/|aside\/([0-9a-f]+)-q?\d+\/|highwater\/([0-9a-f]+)\.hw$|forks\/([0-9a-f]+)\/|retired\/([0-9a-f]+)\.ret$)/.exec(rel); const h = m ? (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]) : undefined; return h ? byHex(h) ?? null : null; };
 
   function dealFaults(n: number, cleanClose: boolean): void {
     void cleanClose;

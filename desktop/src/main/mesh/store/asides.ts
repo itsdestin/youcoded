@@ -1,6 +1,6 @@
 // Set-asides and quarantine, i.e. RETIRING a version id (split out of store.ts to keep it inside its line budget).
 //
-// THE RULE (restructure, closes review 8 F4 and review 7 F2): a version that was set aside as damaged is RETIRED FOR GOOD. Its files are MOVED (index, bodies, checkpoint, marks, ...) to
+// THE RULE (restructure, closes review 8 F4 and review 7 F2): a version that was set aside as damaged is RETIRED FOR GOOD. (Three witnesses since review 9 F3: the store-root record retired/<vhex>.ret, the aside folder and retired.json.) Its files are MOVED (index, bodies, checkpoint, marks, ...) to
 // aside/<vhex>-<n>/ (or -q<n>/ when the store itself found it unrepairable) and never deleted, and the id is never refilled: the replicator recopies from a peer into a NEW version id.
 // WHY this is the simplest mechanism: "retired" is said by TWO things that no single fault can remove together, and neither is a marker that an older copy could undo:
 //   1. the aside/<vhex>-<n>/ folder, which lives OUTSIDE the version folder, is never deleted and is created BEFORE anything is moved;
@@ -36,6 +36,8 @@ export class Asides {
     const re = new RegExp(`^${key}-q?\\d+$`);
     const names = (await this.fs.readdir(nodePath.join(this.root, 'aside'))).filter((n) => re.test(n)).sort();
     if (names.length) return names[0];
+    // the other two witnesses: the store-root record (survives a retention job that removes both the aside folder and the retired version folder, review 9 F3) and retired.json
+    if (await this.fs.exists(nodePath.join(this.root, 'retired', `${key}.ret`))) return 'unknown';
     return (await this.fs.exists(nodePath.join(this.vdir(key), RETIRED_FILE))) ? 'unknown' : null;
   }
 
@@ -64,6 +66,10 @@ export class Asides {
     const dir = this.vdir(key);
     const asideName = await nextAsideName(this.fs, this.root, key, quarantined);
     await mkdirDurable(this.fs, nodePath.join(this.root, 'aside', asideName));
+    // WHY a third witness at the store root (review 9 F3): a retention job that deletes aside folders and also reaps leftover retired version folders would otherwise bring the id back (registerVersion would make a fresh,
+    // empty version under it). retired/<vhex>.ret is the store's own record, in a folder no retention job owns; only its existence counts.
+    await mkdirDurable(this.fs, nodePath.join(this.root, 'retired'));
+    await writeSideFor(this.fs, nodePath.join(this.root, 'retired', `${key}.ret`), { role: 'retired-root', key }, { asideName, reason }); // DESTRUCTIVE-OK(hint): a NEW existence-only statement; an id is never retired twice
     this.host.forget(key);
     await this.finishAside(key, dir, reason);   // finds the bare aside folder just made, writes retired.json for it, and moves the files
     throw new StoreError('damaged', asideName);
