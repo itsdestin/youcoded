@@ -121,7 +121,7 @@ export class ChatStore {
     this.verifier = o.proofVerifier ?? (() => false);
     this.stamp = ((CLASSIFIER_VERSION << 1) | ((this.replyOpts.apiErrorsEndReplies ?? true) ? 1 : 0)) >>> 0;
     this.tools = new BodyTools(this.fs, this.replyOpts);
-    this.parkedStore = new Parked(this.fs, this.tools, { maxFiles: this.maxParkedFiles, maxBytes: this.maxParked, maxRejectedBytes: this.maxRejectedBytes, bytesUnder: (p) => this.bytesUnder(p) }, (st, from, lines) => this.applyLines(st, from, lines));
+    this.parkedStore = new Parked(this.fs, this.tools, { maxFiles: this.maxParkedFiles, maxBytes: this.maxParked, maxRejectedBytes: this.maxRejectedBytes, bytesUnder: (p) => this.bytesUnder(p) }, (st, from, lines) => this.applyLines(st, from, lines), (st) => this.ackedEnd(st)?.end ?? 0);
     this.asides = new Asides(this.fs, root, { forget: (k) => { this.versions.delete(k); } });
     this.extras = new Extras(this.fs, this.tools, root, this.maxExtraBytes, this.maxExtrasBytes);
     this.control = new ControlStore(this.fs, nodePath.join(root, 'control'), { maxParked: o.maxParkedControl });
@@ -641,8 +641,40 @@ export class ChatStore {
    * from another history, can no longer exist).
    */
   private assertServable(st: VState, from: number, to: number): void {
+    // WHY every line from the start (review 9 F1): after a rollback or a set-aside the lines refilled since are UNPROVEN until the recorded head is reached with the recorded chain value (checkRefill), so a read that
+    // reaches any of them is refused, not only a read that includes the first one. A single rotted line (badLine) stays narrow: the lines after it are checked against their own chain values.
+    const wide = this.ackedEnd(st);
+    if (wide && to > wide.from) throw new StoreError('corrupt', `lines from ${wide.from} are refilled below the head this version once had (${wide.end}); they are not served until it is reached again`);
     const bad = this.damagedFrom(st);
     if (bad !== null && from <= bad && bad < to) throw new StoreError('corrupt', `line ${bad} is reported damaged (head.damagedFromLine); it is not served`);
+  }
+
+  /**
+   * THE RULE (review 9 F1): a position that was ever acknowledged is never supplied by anything but a real append or resend of the SAME lines. The store knows two kinds of acknowledged positions it does not hold now:
+   * lines past a head that sits below the high-water record (a folder put back older), and lines a rebuild set aside (the partial marker). `from` is where the unproven range starts, `end` the head the version once had,
+   * `hash` the first 16 hex digits of its chain value there when known (the high-water ladder keeps the recorded head's value; the marker keeps the checkpoint's). Null when the version holds everything it ever acknowledged.
+   */
+  private ackedEnd(st: VState): { from: number; end: number; hash: string | null } | null {
+    let out: { from: number; end: number; hash: string | null } | null = null;
+    const rb = this.rolledBackOf(st);
+    if (rb) { const pt = st.hw.st.value?.ladder.find((p) => p[0] === rb.had); out = { from: rb.from, end: rb.had, hash: pt ? pt[1] : null }; }
+    if (st.partial && st.count < st.partial.fromLine + st.partial.lost) {
+      const end = st.partial.fromLine + st.partial.lost;
+      if (!out || end > out.end) out = { from: Math.min(st.partial.fromLine, out?.from ?? Infinity), end, hash: st.partial.endHash ?? null };
+      else out.from = Math.min(out.from, st.partial.fromLine);
+    }
+    return out;
+  }
+
+  /** Lines about to be appended that would reach the head this version once had must have the chain value it recorded there; otherwise they are NOT the acknowledged lines and the version is retired (kept in aside/, never served). */
+  private async checkRefill(st: VState, key: string, fromLine: number, lines: Buffer[]): Promise<void> {
+    const need = this.ackedEnd(st);
+    if (!need || need.hash === null) return;
+    const fresh = lines.slice(Math.max(0, st.count - fromLine));
+    if (fromLine > st.count || st.count + fresh.length < need.end) return;
+    let h: Buffer = st.h;
+    for (let i = 0; i < need.end - st.count; i++) h = chainStep(h, fresh[i]);
+    if (hex(h).slice(0, 16) !== need.hash) await this.asides.quarantineOrReport(key, `the lines refilled below the recorded head ${need.end} differ from the acknowledged ones`);
   }
 
   /** Slots [0, lostRecs) of the index hold no real record (review 5, F4); every scan starts at this slot. 0 normally. */
@@ -736,6 +768,7 @@ export class ChatStore {
           await this.parkedStore.park(st, fromLine, ls);
           return 'parked';
         }
+        await this.checkRefill(st, key, fromLine, ls);
         const res = await this.applyLines(st, fromLine, ls);
         if (res === 'ok') await this.parkedStore.drain(st);
         return res;

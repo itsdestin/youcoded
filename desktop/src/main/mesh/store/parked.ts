@@ -38,6 +38,8 @@ export class Parked {
     private readonly cfg: { maxFiles: number; maxBytes: number; maxRejectedBytes: number; bytesUnder: (path: string) => Promise<number> },
     /** The store's overlap-checked write of lines at a position (ChatStore.applyLines). */
     private readonly apply: (st: VState, from: number, lines: Buffer[]) => Promise<'ok' | 'not-a-prefix'>,
+    /** The line count below which no park may be applied: positions the store knows were acknowledged but does not hold now (store.ts ackedEnd). 0 when none. */
+    private readonly holdUntil: (st: VState) => number,
   ) {}
 
   async loadIndex(st: VState): Promise<void> {
@@ -96,6 +98,9 @@ export class Parked {
       for (const name of names) {
         const from = parseInt(name.slice(0, 16), 10);
         if (from > st.count) break; // sorted by line number: the rest still have a gap
+        // WHY (review 9 F1, the rule "a park only extends a version past its acknowledged head"): while the head is below a position that WAS acknowledged (a folder put back older, lines a rebuild set aside), a park's lines would be
+        // supplying lines at acknowledged positions with nothing to check them against. It waits in parked/ (kept); only a real append or resend may refill that range, and that is checked at the recorded head (store.ts checkRefill).
+        if (from < this.holdUntil(st)) { skip.add(name); continue; }
         const path = nodePath.join(dir, name);
         const raw = await this.fs.readFile(path);
         if (raw === null) { this.forget(st, name); progressed = true; continue; }   // the file is gone (parks are provisional): nothing to apply or move

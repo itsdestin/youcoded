@@ -424,3 +424,63 @@ describe('a stopped fork leaves only an invisible work folder, cleared at the ne
     await s.close(); await t.cleanup();
   });
 });
+
+describe('review 9 F1: a park never supplies a line at a position that was ever acknowledged', () => {
+  /** probe7 of review 9: true lines 0..9, a park of OTHER lines at 12..14, a snapshot of the folder, true lines 10..39 acknowledged, the snapshot put back (the high-water record says 40). */
+  async function rolledBackWithConflictPark(t: Awaited<ReturnType<typeof tmpRoot>>): Promise<void> {
+    const Y = mk('Y', 3);
+    let s = await open(t.dir);
+    await s.append(P, 0, 0, A.slice(0, 10)); await s.append(P, 0, 12, Y); await s.close();
+    const snap = path.join(path.dirname(t.dir), path.basename(t.dir) + '-snap'); fs.cpSync(vdir(t.dir), snap, { recursive: true });
+    s = await ChatStore.open(t.dir, opts); await s.append(P, 0, 10, A.slice(10, 40)); await s.close();
+    fs.rmSync(vdir(t.dir), { recursive: true }); fs.cpSync(snap, vdir(t.dir), { recursive: true }); fs.rmSync(snap, { recursive: true });
+  }
+  it('the park is NOT applied while the head is below the recorded head; a resend of the true lines is accepted; no line is ever wrong', async () => {
+    const t = await tmpRoot('f1-');
+    await rolledBackWithConflictPark(t);
+    const s = await ChatStore.open(t.dir, opts);
+    expect((await s.head(P)).rolledBack).toEqual({ from: 10, had: 40 });
+    expect(await s.append(P, 0, 10, A.slice(10, 12))).toBe('ok');                                  // the head reaches the park's start: the park must wait
+    expect((await s.head(P)).lines).toBe(12);
+    expect(await s.append(P, 0, 12, A.slice(12, 40))).toBe('ok');                                  // the true lines are accepted (the old store answered not-a-prefix forever)
+    expect((await s.head(P))).toMatchObject({ lines: 40, rolledBack: null, damagedFromLine: null });
+    expect(await s.read(P, 0, 0, 40)).toEqual(A.slice(0, 40));
+    await s.close(); await t.cleanup();
+  });
+  it('while the rollback is reported EVERY line from its start is refused, not only the first (refilled lines are unproven until the recorded head is reached)', async () => {
+    const t = await tmpRoot('f1-read-');
+    await rolledBackWithConflictPark(t);
+    const s = await ChatStore.open(t.dir, opts);
+    await s.append(P, 0, 10, A.slice(10, 20));
+    expect(await s.read(P, 0, 0, 10)).toEqual(A.slice(0, 10));                                     // below the rollback point: served
+    for (const [a, b] of [[10, 11], [15, 16], [12, 20], [0, 20]]) await expect(s.read(P, 0, a, b)).rejects.toMatchObject({ code: 'corrupt' });
+    await s.append(P, 0, 20, A.slice(20, 40));
+    expect(await s.read(P, 0, 0, 40)).toEqual(A.slice(0, 40));                                     // the recorded head is reached with the recorded chain value: all served again
+    await s.close(); await t.cleanup();
+  });
+  it('lines that refill the rolled-back range with DIFFERENT content are caught at the recorded head: the version is retired, never served', async () => {
+    const t = await tmpRoot('f1-diff-');
+    await rolledBackWithConflictPark(t);
+    const s = await ChatStore.open(t.dir, opts);
+    await expect(s.append(P, 0, 10, B.slice(10, 40))).rejects.toMatchObject({ code: 'damaged' });
+    await expect(s.head(P)).rejects.toMatchObject({ code: 'damaged' });
+    expect(fs.readdirSync(path.join(t.dir, 'aside')).length).toBe(1);                              // kept, not deleted
+    await s.close(); await t.cleanup();
+  });
+  it('the same holds for lines a rebuild set aside (the partial marker): a park cannot fill them, and the old chain value is checked when the head gets back', async () => {
+    const t = await tmpRoot('f1-partial-');
+    let s = await open(t.dir, { ...opts, chunkBytes: 700 }); await s.append(P, 0, 0, A.slice(0, 30)); await s.close();
+    // the index and bodies come back SHORTER than the checkpoint (an older pair put back): the rebuild reports lines 12..29 as set aside
+    const v = vdir(t.dir); const cut = A.slice(0, 12).reduce((n, l) => n + l.length, 0);
+    fs.truncateSync(path.join(v, 'index.bin'), 36 + 116 * 12);
+    for (const n of fs.readdirSync(v)) { const m = /^body-([0-9a-f]{16})\.bin$/.exec(n); if (!m) continue; const at = parseInt(m[1], 16); if (at >= cut) fs.unlinkSync(path.join(v, n)); else if (fs.statSync(path.join(v, n)).size > cut - at) fs.truncateSync(path.join(v, n), cut - at); }
+    fs.rmSync(path.join(t.dir, 'highwater'), { recursive: true, force: true });                     // so only the partial marker knows
+    s = await ChatStore.open(t.dir, { ...opts, chunkBytes: 700 }); await s.registerVersion(P, { chatId: CHAT, runtime: 'claude-code' });
+    expect((await s.head(P)).damagedFromLine).toBe(12);
+    await s.append(P, 0, 14, mk('Z', 3));                                                          // a park at 14 with other lines
+    expect(await s.append(P, 0, 12, A.slice(12, 14))).toBe('ok');                                  // the head reaches the park's start: it must wait
+    await expect(s.read(P, 0, 13, 14)).rejects.toMatchObject({ code: 'corrupt' });
+    await expect(s.append(P, 0, 14, B.slice(14, 30))).rejects.toMatchObject({ code: 'damaged' });  // other lines at the acknowledged positions: caught where the old chain value is known
+    await s.close(); await t.cleanup();
+  });
+});

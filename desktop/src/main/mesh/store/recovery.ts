@@ -5,7 +5,7 @@ import * as nodePath from 'node:path';
 import { writeFileAtomic, mkdirDurable, type Fs, type FileLike } from './fsio';
 import { readCheckpoint, writeCheckpoint, CHECKPOINT_FILE, type Boundary } from './checkpoint';
 import { writeSideFor } from './sidefile';
-import { setMarks } from './marks';
+import { setMarks, type PartialMark } from './marks';
 import { StoreError } from './errors';
 import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
@@ -420,8 +420,12 @@ export class BodyTools {
       const lastRec = count > 0 ? await this.recFromFile(nf, count - 1) : null;
       const endOff = lastRec ? lastRec.offset + lastRec.len : 0;
       const surplusLines = await this.countWholeLines(dir, endOff);
-      let partial: { fromLine: number; lost: number } | null = null;
-      if (ambiguous) partial = { fromLine: count, lost: Math.max(1, (ckpt ? Math.max(ckpt.count, include) : include) - count) };
+      let partial: PartialMark | null = null;
+      if (ambiguous) {
+        partial = { fromLine: count, lost: Math.max(1, (ckpt ? Math.max(ckpt.count, include) : include) - count) };
+        // WHY (review 9 F1): when the claimed end is the checkpoint's own head, its chain value is the evidence of what those lines were; kept in the marker so a refill can be checked against it
+        if (ckpt && ckpt.count === count + partial.lost) partial.endHash = hex(ckpt.h).slice(0, 16);
+      }
       else if (!ckpt && surplusLines > 0) {
         if (count === evLines && count === 0) throw new Damaged('nothing stored vouches for the body (no valid index record and no checkpoint): refusing to accept it');
         partial = { fromLine: count, lost: surplusLines };
@@ -451,7 +455,7 @@ export class BodyTools {
           try { if (old) await this.keepBytes(dir, 'checkpoint', old); }
           catch (e) { if (isDiskFull(e) || (e instanceof StoreError && e.code === 'limit')) throw new Damaged('the old checkpoint statement could not be kept (the keep-area or the disk is full)'); throw e; }
         }
-        await setMarks(this.fs, dir, { partial: { fromLine: partial.fromLine, lost: partial.lost } }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
+        await setMarks(this.fs, dir, { partial }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
       }
       const evBytesOut = evLines > 0 ? ev.bytes : 0;
       // the boundary is read back from the new index (a real record or the stand-in), so the checkpoint and the index agree by construction
@@ -613,4 +617,4 @@ export async function nextNumbered(fs: Fs, dir: string, prefix: string, suffix: 
 }
 
 interface Ref { f: FileLike; slots: number; size: number; mode: 'same' | 'changed' | 'unknown'; cache: Map<number, Buffer> }
-export interface RebuildResult { count: number; firstBad: number | null; partial: { fromLine: number; lost: number } | null; staleConv: boolean }
+export interface RebuildResult { count: number; firstBad: number | null; partial: PartialMark | null; staleConv: boolean }

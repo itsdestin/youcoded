@@ -2,7 +2,7 @@
 import type { ChainSeeds, RuntimeKind } from './chain';
 import type { ReplyState } from './classify';
 import type { Boundary, CheckpointState } from './checkpoint';
-import type { Marks } from './marks';
+import type { Marks, PartialMark } from './marks';
 import type { SlotState } from './slotfile';
 import type { HighWater } from './highwater';
 
@@ -41,13 +41,13 @@ export interface VState {
   /** The checkpoint file's newest statement and which slot the next write goes to (checkpoint.ts). */
   ck: CheckpointState;
   /** A copy-then-cut that could not be done yet (disk full, or torn/ at its cap): reads are served as if it were done, the next write retries it first and is refused if it still cannot (N5, review 3 F7). */
-  deferred: { trimTo: number | null; indexTail: boolean; partial: { fromLine: number; lost: number } | null } | null;
+  deferred: { trimTo: number | null; indexTail: boolean; partial: PartialMark | null } | null;
   /** summary.json is older than the in-memory summary (arrival time): saved at close. */
   summaryDirty: boolean;
   /** The empty version's index file could not be created (disk full): the first append creates it (N5). */
   indexNeedsInit: boolean;
   /** A rebuild set lines [fromLine, fromLine+lost) aside because their bodies did not match the chain (N7). */
-  partial: { fromLine: number; lost: number } | null;
+  partial: PartialMark | null;
   /** The conversation chain of the evicted prefix was written by another classifier (N4); the bit lives in the checkpoint stamp. */
   staleConv: boolean;
   /** marks.bin as read (the partial marker). */
