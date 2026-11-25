@@ -1495,6 +1495,6 @@ export class ChatStore {
   private rolledBackOf(st: VState): { from: number; had: number } | null { return st.rolledBack && st.count < st.rolledBack.had ? st.rolledBack : null; }
 
   private headOf(st: VState): Head {
-    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv, rolledBack: this.rolledBackOf(st), rejectedParks: st.rejected };
+    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv, rolledBack: this.rolledBackOf(st), rejectedParks: st.rejected, partial: st.partial && st.count < st.partial.fromLine + st.partial.lost ? { from: st.partial.fromLine, end: st.partial.fromLine + st.partial.lost } : null };
   }
 }

@@ -84,6 +84,12 @@ export interface Head {
    * when it is above what the caller last saw, `rejectedList` says which, why and where they start, and the caller resends those lines (the store never applies them).
    */
   rejectedParks: number;
+  /**
+   * Review 10 F-D: lines a rebuild set aside because they could not be verified (the partial marker): they start at `from` and the version must be re-supplied up to `end` (exclusive) before reads reopen; `end` includes
+   * lines the store counted as acknowledged although the caller never saw the answer (a call that finished durably and crashed). Resend from `from` through the source's head, not only what the caller itself saw acknowledged.
+   * Null when no marker is in force.
+   */
+  partial: { from: number; end: number } | null;
 }
 
 export type AppendResult = 'ok' | 'parked' | 'not-a-prefix';

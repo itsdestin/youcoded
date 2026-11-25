@@ -637,3 +637,23 @@ describe('review 10 F-C: a chain value that contradicts the high-water record re
     await t.cleanup();
   });
 });
+
+describe('review 10 F-D: head() says how far a set-aside range reaches, and re-supplying to that end reopens reads', () => {
+  it('partial: { from, end } is reported, the flag stays until the end is reached, then reads reopen', async () => {
+    const t = await tmpRoot('f-d-'); const o = { ...opts, chunkBytes: 700 };
+    let s = await open(t.dir, o); await s.append(P, 0, 0, A.slice(0, 30)); await s.close();
+    const v = vdir(t.dir); const cut = A.slice(0, 12).reduce((n, l) => n + l.length, 0);
+    fs.truncateSync(path.join(v, 'index.bin'), 36 + 116 * 12);
+    for (const n of fs.readdirSync(v)) { const m = /^body-([0-9a-f]{16})\.bin$/.exec(n); if (!m) continue; const at = parseInt(m[1], 16); if (at >= cut) fs.unlinkSync(path.join(v, n)); else if (fs.statSync(path.join(v, n)).size > cut - at) fs.truncateSync(path.join(v, n), cut - at); }
+    s = await ChatStore.open(t.dir, o); await s.registerVersion(P, { chatId: CHAT, runtime: 'claude-code' });
+    expect((await s.head(P)).partial).toEqual({ from: 12, end: 30 });
+    expect((await s.head(P)).damagedFromLine).toBe(12);
+    expect(await s.append(P, 0, 12, A.slice(12, 29))).toBe('ok');                               // one line short of the end: still set aside
+    expect((await s.head(P)).partial).toEqual({ from: 12, end: 30 }); expect((await s.head(P)).damagedFromLine).toBe(12);
+    await expect(s.read(P, 0, 0, 29)).rejects.toMatchObject({ code: 'corrupt' });
+    expect(await s.append(P, 0, 29, A.slice(29, 30))).toBe('ok');                               // the end is reached with the recorded chain value
+    expect(await s.head(P)).toMatchObject({ partial: null, damagedFromLine: null, lines: 30 });
+    expect(await s.read(P, 0, 0, 30)).toEqual(A.slice(0, 30));
+    await s.close(); await t.cleanup();
+  });
+});
