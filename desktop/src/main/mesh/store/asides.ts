@@ -78,9 +78,8 @@ export class Asides {
     const dir = this.vdir(key);
     const asideName = await nextAsideName(this.fs, this.root, key, quarantined);
     await mkdirDurable(this.fs, nodePath.join(this.root, 'aside', asideName));
-    await this.ensureRootRecord(key, asideName, reason);
     this.host.forget(key);
-    await this.finishAside(key, dir, reason);   // finds the bare aside folder just made, writes retired.json for it, and moves the files
+    await this.finishAside(key, dir, reason);   // finds the bare aside folder just made, writes the store-root record and retired.json for it, and moves the files
     throw new StoreError('damaged', asideName);
   }
 
