@@ -63,6 +63,7 @@ interface Ver {
   retired: boolean;                // set aside by the caller or quarantined by the store: its id is never served again
   faulted: boolean;                // a file fault was dealt to this version's files (or its high-water record)
   rollback: boolean;               // a family of older files was put back
+  bodiesRolledBack: boolean;       // the bodies went back with an older state: an eviction that was in force THEN is legitimately in force again
   indexFaulted: boolean;           // the index file was faulted
   recordFaulted: boolean;          // the high-water record of this version was faulted
   destroyed: boolean;              // a fault destroyed the only copy of some bytes (limit 1)
@@ -86,7 +87,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   const bad = (kind: string, detail: unknown) => { viol.push({ kind, detail: { seed, ...(detail as object), O }, log: log.slice(-(Number(process.env.MESH_STORE_FUZZ_LOG) || 16)) }); };
   const canonLen = big ? 10_600 : 260;
   let idc = 10; let tagc = 0;
-  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, retireMaybe: false, retired: false, faulted: false, rollback: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
+  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, retireMaybe: false, retired: false, faulted: false, rollback: false, bodiesRolledBack: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
   const root1 = mkVer(V(1), CHAT, makeCanon(r, `s${seed}`, canonLen, big), null);
   const other = mkVer(V(2), CHAT2, makeCanon(rng(seed * 31 + 5), `o${seed}`, 80, true), null);
   const vers: Ver[] = [root1, other];
@@ -198,7 +199,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
       if (head.evictedLines > v.evicted) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, asked: v.evicted });
       // review 9 F5: lines whose bodies are on disk and verify are never reported evicted because an older checkpoint remembers an eviction a restore had undone
       // (a version put back to an older state really can have lines evicted that were evicted THEN: that is only wrong when the bodies are on disk, i.e. the first chunk file is there)
-      if (head.evictedLines > v.evictedPossible && !v.recordFaulted && (!v.rollback || fs.existsSync(path.join(root, 'versions', v.hex, 'body-0000000000000000.bin')))) bad('evicted-more-than-in-force', { tag, v: v.hex.slice(0, 4), evictedLines: head.evictedLines, inForce: v.evictedPossible, faulted: v.faulted });
+      if (head.evictedLines > v.evictedPossible && !v.recordFaulted && !v.bodiesRolledBack && (!v.rollback || fs.existsSync(path.join(root, 'versions', v.hex, 'body-0000000000000000.bin')))) bad('evicted-more-than-in-force', { tag, v: v.hex.slice(0, 4), evictedLines: head.evictedLines, inForce: v.evictedPossible, faulted: v.faulted });
       const flagged: number | null = head.damagedFromLine;
       // 1. nothing served is wrong, 2. every acknowledged line is served or its loss is reported
       let all: Buffer[] | 'evicted' | null = null;
@@ -384,6 +385,8 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (changed.length) {
           for (const p of changed) { const old = sn.get(p); if (old === undefined) fs.unlinkSync(path.join(root, p)); else { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), old); } }
           v.faulted = true; v.rollback = true; if (fam.includes('body') || fam === 'whole-folder') v.destroyed = true;
+          if (fam.includes('body') || fam === 'whole-folder') v.bodiesRolledBack = true;
+          if (fam.includes('index') || fam === 'whole-folder') v.indexFaulted = true;   // an older index is an index fault: after an eviction the evicted lines' chain values lived only there (limit 2)
           log.push(`FAMILY ${fam} on ${v.hex.slice(0, 4)} (${changed.length} files)`); ev('fault'); ev('fault-family-' + fam);
           return;
         }
