@@ -59,6 +59,7 @@ interface Ver {
   acked: number;                   // lines acknowledged by an `ok` answer
   evicted: number;                 // the highest eviction ever asked for
   evictedPossible: number;         // the most lines that can be evicted NOW: raised by an evict call (it may have happened), reset to 0 by a restore that answered
+  storeRetired: boolean;           // the store answered that this id is retired (set aside by the caller or quarantined by the store): it must refuse registration and service for good
   retireMaybe: boolean;            // retired by an operation that was killed before it answered: it may or may not have happened
   retired: boolean;                // set aside by the caller or quarantined by the store: its id is never served again
   faulted: boolean;                // a file fault was dealt to this version's files (or its high-water record)
@@ -87,7 +88,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
   const bad = (kind: string, detail: unknown) => { viol.push({ kind, detail: { seed, ...(detail as object), O }, log: log.slice(-(Number(process.env.MESH_STORE_FUZZ_LOG) || 16)) }); };
   const canonLen = big ? 10_600 : 260;
   let idc = 10; let tagc = 0;
-  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, retireMaybe: false, retired: false, faulted: false, rollback: false, bodiesRolledBack: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
+  const mkVer = (id: Buffer, chat: string, lines: Buffer[], parent: Ver | null): Ver => ({ id, hex: id.toString('hex'), chat, lines, acked: 0, evicted: 0, evictedPossible: 0, storeRetired: false, retireMaybe: false, retired: false, faulted: false, rollback: false, bodiesRolledBack: false, indexFaulted: false, recordFaulted: false, destroyed: false, parent, conflicts: [] });
   const root1 = mkVer(V(1), CHAT, makeCanon(r, `s${seed}`, canonLen, big), null);
   const other = mkVer(V(2), CHAT2, makeCanon(rng(seed * 31 + 5), `o${seed}`, 80, true), null);
   const vers: Ver[] = [root1, other];
@@ -171,6 +172,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
     for (const v of vers.slice()) {
       if (v.retired && v.pendingFrom === undefined) {
         // a retired id: never served again, whatever was put back into its folder
+        if (v.storeRetired) { try { await s.registerVersion(v.id, { chatId: v.chat, runtime: 'claude-code' }); bad('retired-id-registered-again', { tag, v: v.hex.slice(0, 4) }); } catch (e: any) { if (e?.code !== 'damaged') bad('retired-register-threw-other', { tag, code: e?.code }); } }
         try { await s.head(v.id); if (v.retireMaybe) { v.retired = false; v.retireMaybe = false; ev('retire-did-not-happen'); } else bad('retired-version-served', { tag, v: v.hex.slice(0, 4) }); } catch (e: any) { if (!['damaged', 'unknown-version', 'corrupt'].includes(e?.code)) bad('retired-head-threw-other', { tag, code: e?.code }); }
         continue;
       }
@@ -186,7 +188,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (!allowedOpCodes.includes(code)) { bad('head-threw-untyped', { tag, v: v.hex.slice(0, 4), code }); continue; }
         // a refusal is a typed report: allowed only for a version a fault was dealt to (a plain crash, a full disk, a close and a reopen never cost a version)
         if (!v.faulted) bad('false-alarm-version-refused-without-any-fault', { tag, v: v.hex.slice(0, 4), code, msg: String(e?.message).slice(0, 120) });
-        if (code === 'damaged') { v.retired = true; if (v !== other && ackedNow > 0) planRecopy(v); ev('quarantined-by-store'); }
+        if (code === 'damaged') { v.retired = true; v.storeRetired = true; if (v !== other && ackedNow > 0) planRecopy(v); ev('quarantined-by-store'); }
         continue;
       }
       if (isChild) { v.acked = v.pendingFrom!; v.pendingFrom = undefined; ev('fork-found-complete'); if (head.lines < v.acked) bad('fork-incomplete', { tag, lines: head.lines, want: v.acked }); }
@@ -307,7 +309,7 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
         if (v === other || v.acked < 1) return;
         ev('retire-recopy'); log.push(`ep${n} retire ${v.hex.slice(0, 4)}`);
         v.retired = true; planRecopy(v);      // marked BEFORE the call: a crash inside it may already have retired the id
-        v.retireMaybe = true; await s.setAsideDamaged(v.id); v.retireMaybe = false;
+        v.retireMaybe = true; await s.setAsideDamaged(v.id); v.retireMaybe = false; v.storeRetired = true;
       } else if (op < 0.95) {
         const cchat = r() < 0.3 ? CHAT2 : CHAT; const mine = ctlAcked.filter((c) => c.chat === cchat);
         const body = Buffer.from(`ctl-${seed}-${ctlAcked.length}-${Math.floor(r() * 1e9)}-${'q'.repeat(30 + Math.floor(r() * 80))}`);
@@ -369,6 +371,14 @@ async function runSequence(seed: number, o: { big?: boolean; crashOnly?: boolean
 
   function dealFaults(n: number, cleanClose: boolean): void {
     void cleanClose;
+    // A RETENTION JOB (review 10 F-A): the aside folder AND the whole retired version folder (directories too) are deleted. The id must stay retired: the store-root record is the witness that is left.
+    const gone = vers.filter((v) => v.storeRetired && !v.retireMaybe && fs.existsSync(path.join(root, 'retired', `${v.hex}.ret`)));
+    if (gone.length && r() < 0.08) {
+      const v = gone[Math.floor(r() * gone.length)];
+      for (const nm of fs.existsSync(path.join(root, 'aside')) ? fs.readdirSync(path.join(root, 'aside')) : []) if (nm.startsWith(v.hex + '-')) fs.rmSync(path.join(root, 'aside', nm), { recursive: true, force: true });
+      fs.rmSync(path.join(root, 'versions', v.hex), { recursive: true, force: true });
+      log.push(`RETENTION removed aside and folder of ${v.hex.slice(0, 4)}`); ev('retention-job');
+    }
     // A FAMILY of older files of ONE version put back together (index / checkpoint / bodies, in pairs and triples), or the whole version folder: a restore tool at work
     if (snaps.length && r() < 0.18) {
       const sn = snaps[Math.floor(r() * snaps.length)];
