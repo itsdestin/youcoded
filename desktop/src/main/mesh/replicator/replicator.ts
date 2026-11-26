@@ -316,7 +316,7 @@ export class Replicator {
         peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
         // a version still marked diverged or pulling is looked at again now that this peer holds exactly what I hold (a stale or forged claim no longer stands)
         const r = this.#ctx.runs.get(k);
-        if (r && (r.diverged || r.pull)) void this.reconsider(e.version);
+        if (r && (r.diverged || r.pull || r.retiredRecopy || !r.caughtUp)) void this.reconsider(e.version);
       }
       return;
     }
@@ -480,6 +480,24 @@ export class Replicator {
     await this.adopt(d.version);
     this.#ctx.sendLive(KIND_INTRO, introBodyOf(intro));
   }
+  /** The highest head this device (as the writer) has ever signed or acknowledged to its adapter, kept in the replicator's OWN folder, apart from the store (review 1, F1; fuzz 400382). With it the writer
+   *  knows what "my own latest signed head" is even when its store lost lines (set aside, or the folder put back) and no peer is reachable to say so. */
+  private async ownHead(wire: Buffer): Promise<{ lines: number; hash: string } | null> {
+    const run = this.#ctx.runOf(wire);
+    if (run.ownHead !== undefined) return run.ownHead;
+    const raw = await (this.#o.fs ?? realFs).readFile(nodePath.join(this.#o.dir, 'own', wire.toString('hex')));
+    run.ownHead = raw && raw.length === 40 ? { lines: Number(raw.readBigUInt64BE(0)), hash: raw.subarray(8, 40).toString('hex') } : null;
+    return run.ownHead;
+  }
+  /** For tests: drop the in-memory copy of the writer's own record (its file is removed by the test). */
+  forgetOwnHeadForTests(wire: Buffer): void { this.#ctx.runOf(wire).ownHead = undefined; }
+  private async saveOwnHead(wire: Buffer, lines: number, hash: string): Promise<void> {
+    const b = Buffer.alloc(40); b.writeBigUInt64BE(BigInt(lines), 0); Buffer.from(hash, 'hex').copy(b, 8);
+    const fs = this.#o.fs ?? realFs; const dir = nodePath.join(this.#o.dir, 'own');
+    await mkdirDurable(fs, dir);
+    await writeFileAtomic(fs, nodePath.join(dir, wire.toString('hex')), b);
+    this.#ctx.runOf(wire).ownHead = { lines, hash };
+  }
   /** Adapter entry point: append lines to a version this device is the writer of. Refuses otherwise (invariant 7). The new lines are pushed to every device. */
   async appendLocal(wire: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string }> {
     // a line the wire cannot carry is refused BEFORE anything is written (review 1, F5): the store takes 512 MiB, a peer parses 64 MiB; a line only I could ever read is a quiet loss
@@ -498,7 +516,14 @@ export class Replicator {
       if (repairFrom(head) !== null) throw new Error('refilling');
       // WRITER-SIDE (review 1, F1): the writer appends only while it is provably at its own latest signed head. A fresh incarnation that has not been refilled, or any fresh peer claim of more lines
       // of this version (or of the same count with another chain value), means this device lost lines it signed; a new line now would start a second history at the same position. Loud refusal.
-      if (v.incarnation > 0 && !run.caughtUp) throw new Error('writer-recopy-not-confirmed');
+      const own = await this.ownHead(wire);
+      if (own) {
+        // what this writer itself has signed and acknowledged: the store must hold at least that, on the same chain (a loss of lines it signed is not something a peer's silence can excuse)
+        if (head.lines < own.lines) throw new Error('writer-behind-own-signed-head');
+        let mine: string | null = null;
+        try { mine = await this.#o.store.hashAt(v.local, 0, own.lines); } catch (e) { if (!(e instanceof StoreError && e.code === 'evicted')) throw e; mine = own.hash; /* evicted: the chain value was lost with the index, cannot be compared here */ }
+        if (mine !== own.hash) throw new Error('writer-diverged-from-own-signed-head');
+      } else if (v.incarnation > 0 && !run.caughtUp) throw new Error('writer-recopy-not-confirmed'); // no record of its own: only a level peer can say it is not behind
       const wk = wire.toString('hex'); const now = this.#ctx.clock.now();
       for (const p of this.#ctx.peers.values()) {
         const h = p.heads.get(wk);
@@ -510,6 +535,7 @@ export class Replicator {
       if (res !== 'ok') throw new Error(`append answered ${res}`);
       if (run.pushedThrough === null) run.pushedThrough = head.lines;
       const h = await this.#o.store.head(v.local);
+      await this.saveOwnHead(wire, h.lines, h.hash); // AFTER the store has the lines and BEFORE anything is signed or pushed from them
       return { lines: h.lines, hash: h.hash };
     });
     // WHY a microtask: calls made in the same turn become one batch

@@ -138,6 +138,10 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           const ok = await world.devs[wr].rep.appendLocal(v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; return false; });
           if (ok) O.push(...extra);
           await world.elapse(30_000, 10_000, true);
+          // the put-back is only a recoverable fault if an online peer holds every line the writer has acknowledged by now (the extra lines too); otherwise nothing is rolled back
+          const heldNow = await Promise.all(others.map(async (n) => (await world.heads(n, v)).lines));
+          const covered = others.some((n, i) => online.has(n) && heldNow[i] === O.length) && online.has(wr);
+          if (!covered) { fs.rmSync(snap, { recursive: true, force: true }); note('writer-rollback-skipped'); continue; }
           await world.devs[wr].rep.idle(); world.devs[wr].rep.stop(); world.devs[wr].link.stop(); await world.devs[wr].store.close();
           fs.rmSync(root, { recursive: true, force: true }); fs.cpSync(snap, root, { recursive: true }); fs.rmSync(snap, { recursive: true, force: true });
           await world.restart(wr); if (!online.has(wr)) world.devs[wr].carrier.setOnline(false);

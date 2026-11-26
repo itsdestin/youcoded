@@ -67,6 +67,8 @@ export interface VRun {
   serveWait: boolean;
   /** The highest incarnation this process has used for the version (a rise means the store retired the copy under us, F2). */
   incarnationSeen: number | null;
+  /** The writer's own record of the highest head it signed (undefined = not read yet, null = none). */
+  ownHead?: { lines: number; hash: string } | null;
 }
 
 /** A line larger than one frame, arriving in parts from one peer (receive.ts). Held in memory under `reassemblyBytes`, one per (peer, version). */

@@ -58,6 +58,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(6)); await world.settle();
     world.devs.B.carrier.setOnline(false);
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
+    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); // the writer's own record is gone too: only a level peer can say it is not behind
     await world.restart('A'); // a new process: it remembers no peer claim at all
     await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-recopy-not-confirmed/);
     world.devs.B.carrier.setOnline(true);
@@ -65,12 +66,21 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     expect(await world.readAll('A', V)).toEqual(six);
     await world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6));
   });
+  it('with its own record of what it signed, a writer whose copy was set aside refuses at once after a restart even when NO peer is reachable', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f1h');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(6)); await world.settle();
+    world.devs.B.carrier.setOnline(false);
+    await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
+    await world.restart('A');
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-behind-own-signed-head/);
+  });
   it('a recopied writer is not "caught up" because the only peer it can hear is repairing and so vouches for nothing (fuzz seed 300584)', async () => {
     w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1g');
     await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
     sendLive(world, KIND_HEADS, headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 2, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'refilling' }] }), 'A');
     await vi.waitFor(() => expect(world.devs.A.rep.peerView(V).some((p) => p.state === 'refilling')).toBe(true));
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
+    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); world.devs.A.rep.forgetOwnHeadForTests(V);
     await world.devs.A.rep.reportCorrupt(V); await world.settle();
     await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 4))).rejects.toThrow(/writer-recopy-not-confirmed/);
   });
