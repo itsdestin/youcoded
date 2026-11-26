@@ -1,7 +1,10 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, useContext } from 'react';
+import { announceFailed } from '../utils/announce';
 import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
+import { useToastClearance } from '../hooks/useToastClearance';
+import { useChipChoice } from './ChipChoiceStrip';
 import { createQueueDraft } from '../state/queue-draft';
 import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
 import { pendingQueueSend } from '../state/pending-queue-send';
@@ -47,6 +50,7 @@ import type { ClaudeAlias } from '../../shared/model-ids';
 import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
+import { isImageOnlyClipboard } from './composer-clipboard';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
 // with their own keyboard behavior focused so they can handle Enter and arrows.
@@ -72,8 +76,8 @@ export interface InputBarHandle {
   readDraftPayload: (sessionId?: string) => { text: string; attachments: string[] };
   /** Carry text and attachments to an admitted session without submitting either. */
   transferDraft: (fromId: string, toId: string) => void;
-  /** Replace and focus; caller must check hasDraft() first. */
-  fillDraft: (text: string) => void;
+  /** Replace and focus; caller must check hasDraft() first. `files` (sent-form text then) come back as chips. */
+  fillDraft: (text: string, files?: string[]) => void;
 }
 
 interface Props {
@@ -294,6 +298,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // textarea's scrollTop (overflow:hidden + transform is more reliable across
   // browsers than setting scrollTop on a hidden-overflow element).
   const mirrorContentRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  useToastClearance(barRef, !compact); // notices sit above the chips and the box, not over them
   const dispatch = useChatDispatch();
   // WHY: a primitive cached selector keeps streaming tokens from redrawing the
   // controlled textarea. An in-flight turn keeps Stop reachable even when stalled.
@@ -456,8 +462,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // Mirrors the initialInput prefill effect above (setText + focus + caret
     // at the end) so an edited queued message gets the same "ready to review/
     // send" placement.
-    fillDraft: (draftText: string) => {
+    fillDraft: (sentText: string, paths?: string[]) => {
+      // WHY (card #62 fault c): a native queued message with files comes back as words + chips; its words are in sent form, so reference markers
+      // become chips again as in the Claude Code edit (fillQueuedDraftIfCurrent). Files already in the box are kept, the restored ones added after.
+      const draftText = paths?.length ? tokenizeComposeRefs(sentText) : sentText;
       setText(draftText);
+      if (paths?.length) setAttachments((cur) => [...cur, ...paths.filter((p) => !cur.some((a) => a.path === p))
+        .map((path) => ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) }))]);
       requestAnimationFrame(() => {
         if (inputRef.current) {
           inputRef.current.focus();
@@ -628,7 +639,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // component keeps ownership of both clipboard serialization and attachments.
       void window.claude.dialog.saveClipboardImage().then((saved) => {
         if (saved) addFiles([saved]);
-      });
+        // WHY silent on null/undefined: the menu fires this whenever the clipboard has no words, not knowing a picture is there,
+        // so null is usually "nothing to paste"; undefined = a phone cannot paste a picture. Only a call that breaks is announced.
+      }, (err) => announceFailed('attach the pasted image', err));
     };
     window.addEventListener('youcoded:composer-paste-image', listener);
     return () => window.removeEventListener('youcoded:composer-paste-image', listener);
@@ -1012,19 +1025,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   };
 
-  const handleChip = useCallback(
-    (chip: QuickChip) => {
-      // All chips fill the input bar for the user to review/edit/send — never auto-send.
-      setText(chip.prompt);
-      requestAnimationFrame(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.setSelectionRange(chip.prompt.length, chip.prompt.length);
-        }
-      });
-    },
-    [],
-  );
+  const chipChoice = useChipChoice(textRef, setText, inputRef, sessionId, text);
 
   const handleAttachClick = useCallback(async () => {
     try {
@@ -1033,26 +1034,24 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         addFiles(paths);
       }
     } catch (err) {
-      console.error('Failed to open file dialog:', err);
+      // Card #134 round 4: the console line was the only trace; the person pressed Attach and nothing opened.
+      announceFailed('open the file picker', err);
     }
   }, [addFiles]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    // Only treat as image paste if there's no text content — copying from
-    // web pages often includes both text/plain and image/png items, and
-    // we don't want to block the text paste in that case.
-    const hasText = Array.from(items).some((item) => item.type.startsWith('text/'));
-    if (hasText) return;
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        const saved = await window.claude.dialog.saveClipboardImage();
-        if (saved) addFiles([saved]);
-        return;
-      }
-    }
+    if (!e.clipboardData || !isImageOnlyClipboard(e.clipboardData)) return;
+    e.preventDefault();
+    // WHY (card #134): a phone cannot reach the desktop's clipboard, so take the picture out of the paste itself.
+    // Must happen before the first await: the browser empties clipboardData once the event ends. Desktop ignores it.
+    const pastedFile = Array.from(e.clipboardData.items ?? []).find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile?.() ?? undefined;
+    // Card #134 round 4: the clipboard said it held an image, so "nothing came back" or a rejection is a real failure to
+    // attach it (it used to vanish with no word). A successful save attaches it exactly as before.
+    try {
+      const saved = await window.claude.dialog.saveClipboardImage(pastedFile);
+      if (saved) addFiles([saved]); else if (saved !== undefined) announceFailed('attach the pasted image');
+      // undefined = nothing to attach (phone without a readable picture, or an upload that already announced its refusal): silent.
+    } catch (err) { announceFailed('attach the pasted image', err); }
   }, [addFiles]);
 
   // WHY (decisions "Applied from earlier rules"): a file dragged in gets the session-tab drop
@@ -1076,7 +1075,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     e.preventDefault();
     fileDragDepth.current = 0;
     setFileDragOver(false);
-    const paths = Array.from(e.dataTransfer.files).map((f) => (f as any).path as string).filter(Boolean);
+    // WHY: Electron removed File.path, so on desktop a dropped file's path comes from the preload's
+    // webUtils bridge (dialog.pathForFile). Remote/Android have no such bridge and fall back to the
+    // old File.path read, which behaves exactly as before there.
+    const pathForFile = window.claude?.dialog?.pathForFile;
+    const paths = Array.from(e.dataTransfer.files)
+      .map((f) => (pathForFile ? pathForFile(f) : (f as any).path) as string)
+      .filter(Boolean);
     if (paths.length > 0) addFiles(paths);
   }, [addFiles]);
 
@@ -1093,6 +1098,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // 2026-09-10). The textarea itself stays selectable: globals.css
       // re-enables text fields.
       // `relative` holds the file-drag highlight below (nothing else positions against it).
+      ref={barRef}
       className="input-bar-container relative shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
@@ -1108,7 +1114,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}
       {minimal && <TerminalToolbar sessionId={sessionId} />}
-      {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
+      {chipChoice.strip}
+      {!minimal && !compact && <QuickChips onChipTap={chipChoice.onChip} />}
 
       {attachments.length > 0 && (
         <div className="scroll-mask-x flex gap-2 px-3 py-2 overflow-x-auto">

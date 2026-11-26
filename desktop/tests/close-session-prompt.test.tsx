@@ -38,6 +38,7 @@ function mount(onConfirm = vi.fn()) {
       sessionName="fix chat scroll stick"
       sessionId="sess-1"
       onCancel={() => {}}
+      onCloseAnyway={() => {}}
       onConfirm={onConfirm}
     />,
   );

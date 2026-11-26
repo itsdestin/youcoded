@@ -56,6 +56,8 @@ export function buildClaudeCodeContext(cwd: string, modelLabel: string | null): 
     id: s.id,
     label: s.displayName || s.id,
     description: s.description,
+    // WHY (#251): the panel's Global and Project tabs sort on this.
+    scope: s.source === 'project' ? 'project' as const : 'global' as const,
   }));
 
   return {

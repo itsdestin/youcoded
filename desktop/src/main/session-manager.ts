@@ -11,6 +11,8 @@ import { SessionInfo, SessionProvider } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
+import { SessionCleanup, type CleanupFn } from './session-cleanup';
+import { NEW_SESSION } from '../shared/session-title';
 import { claudeStartMode, userDefaultMode, projectDefaultMode, refreshUserDefaultMode, refreshProjectDefaultMode } from './claude-start-mode';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
@@ -188,6 +190,9 @@ interface ManagedSession {
 
 export type HandoffStopResult = { status: 'stopped' } | { status: 'unknown' };
 
+/** How long after a worker's process exits we wait for its channel to close before calling the exit unexpected. */
+const EXIT_SETTLE_MS = 500;
+
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, ManagedSession>();
   private handoffStops = new Map<string, { worker: ChildProcess; promise: Promise<HandoffStopResult>; finish: (result: HandoffStopResult) => void }>();
@@ -197,6 +202,12 @@ export class SessionManager extends EventEmitter {
   private readonly controlOptions: SessionManagerOptions;
   private controlSupport?: Promise<boolean>;
   private queueWorkerCalls = 0;
+  // WHY (R-4): one list of per-chat tidy-ups, run when the chat ends on ANY exit path below
+  // (destroy, worker crash, spawn failure, channel closed). Owners sign up with onSessionClose().
+  readonly cleanup = new SessionCleanup();
+
+  /** Run `fn` when chat `id` ends. Returns an un-register function. */
+  onSessionClose(id: string, fn: CleanupFn): () => void { return this.cleanup.register(id, fn); }
 
   constructor(options: SessionManagerOptions = {}) {
     super();
@@ -242,6 +253,13 @@ export class SessionManager extends EventEmitter {
   async primeStartMode(cwd: string | undefined): Promise<void> { await refreshProjectDefaultMode(cwd); }
 
   createSession(opts: CreateSessionOpts): SessionInfo {
+    // WHY: every session on every door is minted here (desktop windows, the
+    // remote/phone server, the Android backend, dev tools, Run in terminal), and
+    // a `session.create` call with no name made a session whose `name` was
+    // undefined — the header crashed the whole window on it. A missing or blank
+    // name gets the same default the New session button sends; a real name is
+    // kept exactly as given.
+    if (typeof opts.name !== 'string' || opts.name.trim() === '') opts = { ...opts, name: NEW_SESSION };
     const provider: SessionProvider = opts.provider || 'claude';
     // Resolve CWD: fall back to home directory if empty or nonexistent.
     const cwdExists = !!opts.cwd && fs.existsSync(opts.cwd);
@@ -494,6 +512,8 @@ export class SessionManager extends EventEmitter {
         this.sessions.get(id)!.info.status = 'destroyed';
         this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
         this.emit('session-exit', id, 1);
+        // WHY (R-4): the registry runs right after the exit event on every exit path
+        this.cleanup.closeSession(id);
       }
     });
 
@@ -569,7 +589,8 @@ export class SessionManager extends EventEmitter {
           flushCommand();
           break;
         case 'exit':
-          if (workerGone) return; // no proof from a frame after worker death
+          // A frame read while `settling` was sent BEFORE the worker died (frames are ordered); only one after a closed channel is refused.
+          if (workerGone && !settling) return; // no proof from a frame after worker death
           clearTimeout(commandFallbackTimer);
           // WHY: only this message is emitted by the worker's PTY onExit callback.
           // A dead/disconnected worker alone cannot certify a final transcript.
@@ -591,27 +612,60 @@ export class SessionManager extends EventEmitter {
           if (!this.sessions.has(id)) return;
           const exitingSession = this.sessions.get(id)!;
           exitingSession.info.status = 'destroyed';
-          this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
+          // WHY `stoppedAtExit`: if the process 'exit' event came first, the handoff entry is already gone, but a signal code from the
+          // deliberately stopped PTY (e.g. 143) must still read as a clean stop, not as a crash.
+          this.emit('session-exit', id, deliberate || stoppedAtExit ? 0 : msg.exitCode);
+          // WHY (R-4): the registry runs right after the exit event on every exit path
+          this.cleanup.closeSession(id);
           this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
           break;
       }
     });
 
+    // Set while the worker's process has exited but its message channel may still hold unread frames (see 'exit' below).
+    let settling = false;
+    // Whether a handoff stop was in progress when the process 'exit' event arrived (the handoff entry is cleared at that moment).
+    let stoppedAtExit = false;
+    let channelClosed: (() => void) | null = null;
     worker.on('disconnect', () => {
       workerGone = true;
       this.handoffStops.get(id)?.finish({ status: 'unknown' });
+      // Frames are delivered before 'disconnect', so by now any real exit message has been read.
+      channelClosed?.();
     });
 
     worker.on('exit', () => {
       workerGone = true;
+      // WHY (card #134, error inventory Backend row 4): reaching here with the session still listed means the worker died
+      // WITHOUT first sending its own exit message (native crash, out-of-memory kill). That used to be reported as exit
+      // code 0 = "finished normally", so an idle session's tab silently vanished. Only a handoff stop is a deliberate
+      // end; anything else is reported as an unexpected exit so the chat says "Session ended unexpectedly".
+      // WHY WAIT FOR THE CHANNEL (review of 9dbd8b927): on a NORMAL exit the worker sends {type:'exit'} and then quits, and
+      // Node can deliver the process 'exit' event BEFORE this side has read that message (~2% of runs). Deciding at once
+      // would show "ended unexpectedly" after a clean /exit. So the decision waits until the channel has closed (every
+      // frame delivered before 'disconnect') or a short settle passes, and a real exit message that arrives meanwhile wins.
+      const deliberateStop = this.handoffStops.has(id) || this.handoffStopping.has(id);
+      stoppedAtExit = deliberateStop;
       this.handoffStops.get(id)?.finish({ status: 'unknown' });
       this.handoffStopping.delete(id);
       clearTimeout(commandFallbackTimer);
       if (!this.sessions.has(id)) return;
-      const exitingSession = this.sessions.get(id)!;
-      exitingSession.info.status = 'destroyed';
-      this.emit('session-exit', id, 0);
-      this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
+      settling = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const decide = () => {
+        clearTimeout(timer); channelClosed = null; settling = false;
+        if (!this.sessions.has(id)) return; // the real exit message arrived and was handled
+        const exitingSession = this.sessions.get(id)!;
+        exitingSession.info.status = 'destroyed';
+        this.emit('session-exit', id, deliberateStop ? 0 : 1);
+        // WHY (R-4): the registry runs right after the exit event on every exit path
+        this.cleanup.closeSession(id);
+        this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
+      };
+      channelClosed = decide;
+      timer = setTimeout(decide, EXIT_SETTLE_MS);
+      (timer as { unref?: () => void }).unref?.(); // never keep the app alive for this (some environments' timers have no unref)
+      if (!worker.connected) decide(); // channel already closed: nothing more can arrive
     });
 
     // Tell the worker to spawn the CLI, passing our session ID
@@ -700,6 +754,8 @@ export class SessionManager extends EventEmitter {
     // Uniform teardown: native sessions (no worker) still emit session-exit so
     // downstream cleanup (window release, remote broadcast) runs identically.
     this.emit('session-exit', id, 0);
+    // WHY (R-4): the registry runs right after the exit event on every exit path
+    this.cleanup.closeSession(id);
     if (session.worker) {
       try {
         session.worker.send({ type: 'kill' });

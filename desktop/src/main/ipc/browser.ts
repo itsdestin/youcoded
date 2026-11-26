@@ -22,6 +22,10 @@ const watchers = new Map<string, Map<number, Sender>>();
  *  watching before the browser runs; the stream starts when it does. */
 const streaming = new Set<string>();
 let wired = false;
+/** Hears each conversation's open Browser card (or null). Set once by ipc-handlers.ts, which turns it into a session fact every screen
+ *  gets (session-live.ts browserAsk), so a phone can draw the card (card #205). */
+let askListener: ((sessionId: string, prompt: BrowserSessionState['prompt']) => void) | null = null;
+export function setBrowserAskListener(fn: typeof askListener): void { askListener = fn; }
 
 function startStream(sessionId: string): void {
   if (streaming.has(sessionId)) return;
@@ -34,6 +38,7 @@ function wire(): void {
   wired = true;
   const client = getBrowserClient();
   client.on('state', (state: BrowserSessionState) => {
+    try { askListener?.(state.sessionId, state.prompt ?? null); } catch { /* the windows' push below must still go out */ }
     if (state.run !== 'running') streaming.delete(state.sessionId);
     else if (watchers.has(state.sessionId)) startStream(state.sessionId);
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(IPC.BROWSER_STATE_CHANGED, state);
@@ -146,7 +151,9 @@ export const browserChannels: MainChannelDef[] = [
     handler: (payload) => { getBrowserClient().commandIfAlive({ cmd: 'ack', sessionId: str(payload?.sessionId, 'sessionId') }); },
   }),
   defineChannel({
-    name: IPC.BROWSER_ANSWER, kind: 'handle', desktopOnly: true,
+    // NOT desktopOnly (card #205; Destin, 2026-10-26: "build in remote browser approvals like every other approval card"). The answers are the
+    // same fixed list either way (ANSWERS) and the Browser still checks the prompt id is the one it is waiting on.
+    name: IPC.BROWSER_ANSWER, kind: 'handle',
     handler: async (payload) => {
       const answer = payload?.answer;
       if (!ANSWERS.includes(answer)) throw new TypeError('Unknown answer');

@@ -54,24 +54,36 @@ const UNREADABLE = (heading: string) => ({ unreadable: heading });
  * trust dialogs, so the dialog-only assertions would not fit it; the one that
  * matters here is that cardTitleFor() gives a card at all.
  */
-const SCREEN = (title: string, options: string[], cursor: number, extra: { numbered?: boolean; narrow?: string[] } = {}) =>
-  ({ screen: true as const, title, options, cursor, numbered: !!extra.numbered, narrow: extra.narrow });
+// `cursor` may list several rows: Claude Code has moved a dialog's starting highlight between versions, and the app
+// reads the highlight off the screen (selectedIndex), so any listed start is fine — the test pins that it is READ.
+const SCREEN = (title: string, options: string[], cursor: number | number[], extra: { numbered?: boolean; older?: string[][] } = {}) =>
+  ({ screen: true as const, title, options, cursor: ([] as number[]).concat(cursor), numbered: !!extra.numbered, older: extra.older ?? [] });
 const THEME = SCREEN('Choose a Theme', [
   'Auto (match terminal)', 'Dark mode', 'Light mode', 'Dark mode (colorblind-friendly)',
   'Light mode (colorblind-friendly)', 'Dark mode (ANSI colors only)', 'Light mode (ANSI colors only)',
-], 1);
+  // WHY [1, 0]: up to 2.1.325 the picker opened on "Dark mode"; the daily drift run of 2026-11-19 (latest CLI) found it
+  // opening on "Auto (match terminal)".
+], [1, 0]);
 const SIGN_IN = SCREEN('Select Login Method', [
   'Claude account with subscription · Individual, Team, or Enterprise',
   'Anthropic Console account · API usage billing',
-  '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+  '3rd-party platform · Bedrock, Microsoft Foundry, Google Vertex AI',
 ], 0, {
   numbered: true,
-  // WHY: at phone width (50 columns) the real screen, as Claude Code 2.1.322 draws it, shows
-  // "…API usage" with the word "billing" missing — captured as-is, not a parser loss.
-  narrow: [
-    'Claude account with subscription · Individual, Team, or Enterprise',
-    'Anthropic Console account · API usage',
-    '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+  // WHY: Claude Code 2.1.325 shortened "Amazon Bedrock" to "Bedrock" and stopped cutting "billing" off at phone
+  // width (50 columns). Older captures (2.1.322) are kept, so both wordings stay accepted: the first list below
+  // is the 2.1.322 wide wording, the second its 50-column one ("…API usage" with "billing" missing, as printed).
+  older: [
+    [
+      'Claude account with subscription · Individual, Team, or Enterprise',
+      'Anthropic Console account · API usage billing',
+      '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+    ],
+    [
+      'Claude account with subscription · Individual, Team, or Enterprise',
+      'Anthropic Console account · API usage',
+      '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+    ],
   ],
 });
 type Expect = typeof TRUST | ReturnType<typeof UNREADABLE> | ReturnType<typeof SCREEN>;
@@ -135,10 +147,11 @@ describe('startup-dialog captures', () => {
             expect(menu, `the app does not read this first-install screen:\n${screen}`).not.toBeNull();
             expect(cardTitleFor(menu!, true, screen)).toEqual({ title: want.title, generic: false });
             expect(menu!.title).toBe(want.title);
-            const wantOptions = want.narrow && load(file).cols < 60 ? want.narrow : want.options;
-            expect(menu!.options).toEqual(wantOptions);
-            expect(menu!.selectedIndex).toBe(want.cursor);
-            expect(menuToButtons(menu!).map((b) => b.label)).toEqual(wantOptions);
+            // The current wording, or any older one still accepted (see SIGN_IN).
+            const accepted = [want.options, ...want.older];
+            expect(accepted, 'unexpected option wording').toContainEqual(menu!.options);
+            expect(want.cursor).toContain(menu!.selectedIndex);
+            expect(menuToButtons(menu!).map((b) => b.label)).toEqual(menu!.options);
             return;
           }
           if ('unreadable' in want) {
@@ -455,8 +468,17 @@ describe('the last safety net: something is asking, and nothing above could read
     // (fine). Shorten it so the next word would land exactly in the 2-column
     // band the dialog's padding makes uncertain.
     const r = '─'.repeat(40);
-    const screen = [r, '  New MCP server found in this', '  project: demo', '', '    Use this MCP server', '    Use this and all future MCP serv', '    xy', '  ❯ Continue without', '', '  Enter to confirm · Esc to cancel'].join('\n');
+    const screen = [r, '  New MCP server found in this', '  project: demo', '', '    Use this MCP server', '    Use this and all future MCP serv', '    Xy', '  ❯ Continue without', '', '  Enter to confirm · Esc to cancel'].join('\n');
     expect(parseInkSelect(screen)).toBeNull();
+  });
+
+  it('a label wrapped inside the width band is rejoined when the rest starts in lower case (2.1.325 at 40 columns)', () => {
+    // Real 2.1.325 screen: "…all future MCP" + "servers" is 39 of 40 columns, which width maths alone cannot call.
+    const r = '─'.repeat(40);
+    const screen = [r, '  New MCP server found in this', '  project: demo', '  MCP servers may execute code or', '  access system resources. All tool', '  calls require approval. Learn more', '  in the MCP documentation.', '    Use this MCP server', '    Use this and all future MCP', '    servers in this project', '  ❯ Continue without using this MCP', '    server', '  Enter to confirm · Esc to cancel'].join('\n');
+    const menu = parseInkSelect(screen);
+    expect(menu!.options).toEqual(MCP_ONE.options);
+    expect(menu!.selectedIndex).toBe(2);
   });
 
   it('still reads the older NUMBERED trust dialog, and answers it by digit', () => {

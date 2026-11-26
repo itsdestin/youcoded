@@ -12,6 +12,7 @@
 // The project name is a clickable switcher trigger (opens <ProjectSwitcher>,
 // Task 2.3) and MUST NOT truncate — it wraps. The ONE accent use in this card is
 // the New conversation primary button.
+import { announceFailed } from '../../utils/announce';
 import React, { useEffect, useState } from 'react';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
 import { getCapabilities } from '../../platform';
@@ -27,13 +28,20 @@ interface HeroStats {
   // True when discovery hit a cap — render "N+" so a truncated sample never
   // poses as an exact total.
   filesTruncated?: boolean;
-  conversations: number;
-  contextFiles: number;
+  // null = the read FAILED (card #134, error inventory Projects row 8): shown as "—", never as a
+  // "0" that says the project has none.
+  conversations: number | null;
+  contextFiles: number | null;
   activeLabel: string;
 }
 
 // "N", "N+" (truncated), or "—" (gated — no scan ran). Shared by the hero
 // stat line and ProjectView's segment badges so the two can't disagree.
+/** "N", or "—" when that count could not be read. */
+export function formatCount(n: number | null): string {
+  return n === null ? '—' : String(n);
+}
+
 export function formatFileCount(files: number | null, truncated?: boolean): string {
   if (files === null) return '—';
   return truncated ? `${files.toLocaleString()}+` : String(files);
@@ -54,6 +62,26 @@ interface HeroSync {
   // True when this project's registry record is a `stopped` tombstone (review
   // #4): a permanent detach, distinct from the global "Sync is turned off" state.
   stopped: boolean;
+}
+
+
+// Card #134 round 4: rename, description and Stop syncing used to swallow every failure (`.catch(() => {})`), so a refused change
+// just looked like it never took. `refused` = the channel answered "no" (false, or { ok:false }). A synced-project call can also
+// REJECT after the change was already written locally (the push to other devices is the last step), so for those a rejection is
+// only logged: saying "Couldn't rename" there could be false. Plain-folder calls are purely local, so a rejection is a failure.
+function refused(r: unknown): { yes: boolean; why?: unknown } {
+  if (r === false) return { yes: true };
+  if (r && typeof r === 'object' && (r as { ok?: unknown }).ok === false) return { yes: true, why: (r as { error?: unknown }).error };
+  return { yes: false };
+}
+async function reportOutcome(what: string, call: Promise<unknown> | undefined, rejectionIsFailure: boolean): Promise<void> {
+  try {
+    const r = refused(await call);
+    if (r.yes) announceFailed(what, r.why);
+  } catch (e) {
+    if (rejectionIsFailure) announceFailed(what, e);
+    else console.warn(`[project-hero] ${what}: the call rejected (the change may still have been saved locally):`, e);
+  }
 }
 
 interface ProjectHeroProps {
@@ -99,6 +127,7 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 // languages for one status was the wrong call. PROJECT_DESCRIPTION_MAX keeps
 // the input's cap in lockstep with the shared type instead of re-typing 200.
 import { PROJECT_DESCRIPTION_MAX } from '../../../shared/artifacts/types';
+import { Tooltip } from '../ui';
 
 const MENU_WIDTH = 240;
 const SYNC_POPOVER_WIDTH = 288;
@@ -154,11 +183,11 @@ export function ProjectHero({
       // Synced project: change the SYNCED display name (propagates to every
       // device via the Personal space). NEVER the folder on disk — the repo name
       // is derived from the folder, so a folder move is a deferred flow (spec §15).
-      await (window.claude as any).syncSpaces.renameProject?.(syncedFolderName, n).catch(() => {});
+      await reportOutcome('rename this project', (window.claude as any).syncSpaces.renameProject?.(syncedFolderName, n), false);
     } else {
       // Plain local folder: picker nickname only. folders.rename updates the
       // nickname, which buildSavedFolderProjects prefers for the display name.
-      await (window.claude as any).folders.rename(project.path, n).catch(() => {});
+      await reportOutcome('rename this project', (window.claude as any).folders.rename(project.path, n), true);
     }
     onRenamed();
   };
@@ -191,12 +220,12 @@ export function ProjectHero({
       // displayName, so every device sees the same words.
       // No `?.` — both channels are real now (Tasks 2-5), so a missing one
       // should fail loudly instead of silently no-opping.
-      await (window.claude as any).syncSpaces.setProjectDescription(syncedFolderName, d).catch(() => {});
+      await reportOutcome('save the description', (window.claude as any).syncSpaces.setProjectDescription(syncedFolderName, d), false);
     } else {
       // Plain local folder: saved-folders record only — nothing to sync it to.
       // `d` is always a string (descDraft.trim()) — the local-folder handler's
       // trim() has no null guard, so this must never pass null/undefined.
-      await (window.claude as any).folders.setDescription(project.path, d).catch(() => {});
+      await reportOutcome('save the description', (window.claude as any).folders.setDescription(project.path, d), true);
     }
     onRenamed();
   };
@@ -209,7 +238,7 @@ export function ProjectHero({
   const commitStop = async () => {
     setConfirmingStop(false);
     if (!syncedFolderName) return;
-    await (window.claude as any).syncSpaces.stopProject?.(syncedFolderName).catch(() => {});
+    await reportOutcome('stop syncing this project', (window.claude as any).syncSpaces.stopProject?.(syncedFolderName), false);
     onRenamed(); // optimistic refresh; a Personal `synced` event also refreshes
   };
 
@@ -339,53 +368,56 @@ export function ProjectHero({
             onBlur={() => void commitRename()}
           />
         ) : (
-          <button
-            type="button"
-            onClick={onOpenSwitcher}
-            className="group flex items-start gap-2 text-left rounded-md -ml-1 px-1 py-0.5 hover:bg-inset transition-colors"
-            title="Switch project"
-          >
-            <span className="text-2xl font-semibold text-fg leading-tight whitespace-normal break-words">
-              {shownName}
-            </span>
-            <span className="text-fg-muted group-hover:text-fg shrink-0 mt-1.5">
-              <ChevronDown size={18} />
-            </span>
-          </button>
+          <Tooltip text="Switch project">
+            <button
+              type="button"
+              onClick={onOpenSwitcher}
+              className="group flex items-start gap-2 text-left rounded-md -ml-1 px-1 py-0.5 hover:bg-inset transition-colors"
+            >
+              <span className="text-2xl font-semibold text-fg leading-tight whitespace-normal break-words">
+                {shownName}
+              </span>
+              <span className="text-fg-muted group-hover:text-fg shrink-0 mt-1.5">
+                <ChevronDown size={18} />
+              </span>
+            </button>
+          </Tooltip>
         )}
 
         {/* Path + optional owner/name repo slug — both double as click targets
             (Open in File Explorer / Open on GitHub), replacing the old
             standalone buttons this row now subsumes. */}
         <div className="flex items-center gap-2 mt-1.5 min-w-0">
-          <button
-            type="button"
-            onClick={canOpenInOs ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
-            disabled={!canOpenInOs}
-            className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
-            title={canOpenInOs ? 'Open in File Explorer' : project.path}
-          >
-            <FolderIcon size={13} />
-            <span
-              className={`font-mono text-xs truncate ${canOpenInOs ? 'underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted' : ''}`}
+          <Tooltip text={canOpenInOs ? 'Open in File Explorer' : project.path}>
+            <button
+              type="button"
+              onClick={canOpenInOs ? () => void Promise.resolve((window.claude as any).shell.openPath(project.path)).then((err) => { if (typeof err === 'string' && err) announceFailed('open the folder', err); }, (e) => announceFailed('open the folder', e)) : undefined}
+              disabled={!canOpenInOs}
+              className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
             >
-              {project.path}
-            </span>
-          </button>
+              <FolderIcon size={13} />
+              <span
+                className={`font-mono text-xs truncate ${canOpenInOs ? 'underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted' : ''}`}
+              >
+                {project.path}
+              </span>
+            </button>
+          </Tooltip>
           {showRepoSlug && (
             <>
               <span className="text-fg-faint shrink-0">·</span>
-              <button
-                type="button"
-                onClick={() => window.claude.shell.openExternal(repo!.webUrl!)}
-                className="inline-flex items-center gap-1 text-xs text-fg-dim hover:text-fg-2 shrink-0 transition-colors"
-                title={`Open ${repo!.owner}/${repo!.name} on GitHub`}
-              >
-                <GitHubIcon size={13} />
-                <span className="underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted">
-                  {repo!.owner}/{repo!.name}
-                </span>
-              </button>
+              <Tooltip text={`Open ${repo!.owner}/${repo!.name} on GitHub`}>
+                <button
+                  type="button"
+                  onClick={() => void Promise.resolve(window.claude.shell.openExternal(repo!.webUrl!)).catch((e) => announceFailed('open the page', e))}
+                  className="inline-flex items-center gap-1 text-xs text-fg-dim hover:text-fg-2 shrink-0 transition-colors"
+                >
+                  <GitHubIcon size={13} />
+                  <span className="underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted">
+                    {repo!.owner}/{repo!.name}
+                  </span>
+                </button>
+              </Tooltip>
             </>
           )}
         </div>
@@ -431,18 +463,19 @@ export function ProjectHero({
             onBlur={() => void commitDescription()}
           />
         ) : description ? (
-          <button
-            type="button"
-            onClick={() => setEditingDesc(true)}
-            // The saved description hangs into the card's margin so its WORDS line up with the
-            // name above (the read state, kept as approved). The box you type in no longer
-            // copies that (above), so a click now moves the words in by the box's padding —
-            // the same as Session details' note since close-session-2.
-            className="mt-1.5 block text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors max-w-[46rem]"
-            title="Edit description"
-          >
-            <span className="text-sm italic text-fg-dim">“{description}”</span>
-          </button>
+          <Tooltip text="Edit description">
+            <button
+              type="button"
+              onClick={() => setEditingDesc(true)}
+              // The saved description hangs into the card's margin so its WORDS line up with the
+              // name above (the read state, kept as approved). The box you type in no longer
+              // copies that (above), so a click now moves the words in by the box's padding —
+              // the same as Session details' note since close-session-2.
+              className="mt-1.5 block text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors max-w-[46rem]"
+            >
+              <span className="text-sm italic text-fg-dim">“{description}”</span>
+            </button>
+          </Tooltip>
         ) : (
           // Dashed-outline add affordance, matching QuickChips' "+ Add Chip" and
           // ModelPicker's freeform row. Bare hover-only text read as a label,
@@ -479,8 +512,8 @@ export function ProjectHero({
         {/* Stat row — dot-separated. */}
         <div className="flex flex-wrap gap-4 mt-3 text-xs text-fg-muted">
           <span><b className="text-fg-2 font-semibold">{formatFileCount(stats.files, stats.filesTruncated)}</b> files</span>
-          <span><b className="text-fg-2 font-semibold">{stats.conversations}</b> conversations</span>
-          <span><b className="text-fg-2 font-semibold">{stats.contextFiles}</b> context files</span>
+          <span><b className="text-fg-2 font-semibold">{formatCount(stats.conversations)}</b> conversations</span>
+          <span><b className="text-fg-2 font-semibold">{formatCount(stats.contextFiles)}</b> context files</span>
           <span>active <b className="text-fg-2 font-semibold">{stats.activeLabel}</b></span>
         </div>
 
@@ -489,20 +522,21 @@ export function ProjectHero({
         {/* Narrow-only cog, now top-right of the card (it used to sit beside
             New conversation, which moved to the bottom). */}
         {narrow && (
-          <button
-            ref={menu.anchorRef}
-            type="button"
-            onClick={menu.toggle}
-            className={`coarse-hit shrink-0 p-2 rounded-md border border-edge transition-colors ${
-              menu.open ? 'bg-inset text-fg' : 'text-fg-muted hover:text-fg hover:bg-inset'
-            }`}
-            title="Project settings"
-            aria-label="Project settings"
-            aria-haspopup="menu"
-            aria-expanded={menu.open}
-          >
-            <CogIcon size={16} />
-          </button>
+          <Tooltip text="Project settings">
+            <button
+              ref={menu.anchorRef}
+              type="button"
+              onClick={menu.toggle}
+              className={`coarse-hit shrink-0 p-2 rounded-md border border-edge transition-colors ${
+                menu.open ? 'bg-inset text-fg' : 'text-fg-muted hover:text-fg hover:bg-inset'
+              }`}
+              aria-label="Project settings"
+              aria-haspopup="menu"
+              aria-expanded={menu.open}
+            >
+              <CogIcon size={16} />
+            </button>
+          </Tooltip>
         )}
       </div>
 

@@ -12,7 +12,10 @@ const scope = globalThis as unknown as {
 };
 scope.onmessage = async ({ data }) => {
   try {
-    const result = await mammoth.convertToHtml({ arrayBuffer: data.bytes });
+    // WHY includeEmbeddedStyleMap: false (card #161): ignore a file's own embedded style map, whose reader can take
+    // exponential time on a crafted file. Same options as MAMMOTH_OPTIONS in docx-convert-jobs.ts (written out here
+    // because importing that module would pull the worker constructor into the worker itself).
+    const result = await mammoth.convertToHtml({ arrayBuffer: data.bytes }, { includeEmbeddedStyleMap: false });
     scope.postMessage({ ok: true, html: result.value });
   } catch (e: any) {
     scope.postMessage({ ok: false, error: String(e?.message ?? e) });

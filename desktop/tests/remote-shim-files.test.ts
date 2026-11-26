@@ -97,6 +97,58 @@ describe('remote-shim — downloads', () => {
       expect(clicks).toEqual([]);
     });
   });
+
+  // Card #134 — a picture pasted on a phone is uploaded through the same 'file:upload' route as the Attach button.
+  describe('window.claude.dialog.saveClipboardImage over remote', () => {
+    it('uploads the pasted picture to the computer and returns the computer-side path', async () => {
+      const ws = await loadShim('ws://100.64.0.9:9900/ws');
+      const file = new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' });
+      const pending = (window as any).claude.dialog.saveClipboardImage(file);
+      await vi.waitFor(() => expect(ws.frames().some((f) => f.type === 'file:upload')).toBe(true));
+      const req = ws.frames().find((f) => f.type === 'file:upload');
+      expect(req.payload).toEqual({ name: 'image.png', data: btoa('\x89PNG'), size: 4 });
+      ws.receive({ type: 'file:upload:response', id: req.id, payload: { path: '/tmp/uploads/image.png' } });
+      await expect(pending).resolves.toBe('/tmp/uploads/image.png');
+    });
+
+    it('gives a nameless pasted picture a picture file name', async () => {
+      const ws = await loadShim('ws://100.64.0.9:9900/ws');
+      const pending = (window as any).claude.dialog.saveClipboardImage(new File([new Uint8Array([1])], '', { type: 'image/jpeg' }));
+      await vi.waitFor(() => expect(ws.frames().some((f) => f.type === 'file:upload')).toBe(true));
+      const req = ws.frames().find((f) => f.type === 'file:upload');
+      expect(req.payload.name).toBe('pasted-image.jpeg');
+      ws.receive({ type: 'file:upload:response', id: req.id, payload: { path: '/tmp/uploads/pasted-image.jpeg' } });
+      await pending;
+    });
+
+    it('stays silent (undefined) with nothing pasted and no readable browser clipboard', async () => {
+      const ws = await loadShim('ws://100.64.0.9:9900/ws');
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      await expect((window as any).claude.dialog.saveClipboardImage()).resolves.toBeUndefined();
+      expect(ws.frames().some((f) => f.type === 'file:upload')).toBe(false);
+    });
+
+    it('reads a picture from the browser clipboard for the right-click Paste route', async () => {
+      const ws = await loadShim('ws://100.64.0.9:9900/ws');
+      const blob = new Blob([new Uint8Array([1, 2])], { type: 'image/png' });
+      Object.defineProperty(navigator, 'clipboard', { value: { read: async () => [{ types: ['image/png'], getType: async () => blob }] }, configurable: true });
+      const pending = (window as any).claude.dialog.saveClipboardImage();
+      await vi.waitFor(() => expect(ws.frames().some((f) => f.type === 'file:upload')).toBe(true));
+      const req = ws.frames().find((f) => f.type === 'file:upload');
+      expect(req.payload.name).toBe('pasted-image.png');
+      ws.receive({ type: 'file:upload:response', id: req.id, payload: { path: '/tmp/uploads/pasted-image.png' } });
+      await expect(pending).resolves.toBe('/tmp/uploads/pasted-image.png');
+    });
+
+    it('returns undefined (the refusal was already announced) when the computer refuses the upload', async () => {
+      const ws = await loadShim('ws://100.64.0.9:9900/ws');
+      const pending = (window as any).claude.dialog.saveClipboardImage(new File([new Uint8Array([1])], 'big.png', { type: 'image/png' }));
+      await vi.waitFor(() => expect(ws.frames().some((f) => f.type === 'file:upload')).toBe(true));
+      const req = ws.frames().find((f) => f.type === 'file:upload');
+      ws.receive({ type: 'file:upload:response', id: req.id, payload: { error: 'That file is too large to upload.' } });
+      await expect(pending).resolves.toBeUndefined();
+    });
+  });
 });
 
 // Remote access batch 3, design test 8 (the phone's half) — after a reconnect a watcher

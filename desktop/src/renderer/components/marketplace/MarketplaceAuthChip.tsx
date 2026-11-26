@@ -16,6 +16,7 @@
 import { useState, useCallback } from "react";
 import { useAccount } from "../../state/account-context";
 import { FieldError, Menu, MenuItem, MenuNote } from "../ui";
+import { Tooltip } from '../ui';
 
 function GitHubMark({ size = 16 }: { size?: number }) {
   return (
@@ -75,34 +76,35 @@ export default function MarketplaceAuthChip() {
         label="Your account"
         className="min-w-44"
         trigger={(
-          <button
-            type="button"
-            onClick={handleClick}
-            title={title}
-            aria-label={title}
-            className="relative w-7 h-7 rounded-full overflow-hidden flex items-center justify-center bg-inset border border-edge-dim hover:border-edge text-fg-2 hover:text-fg transition-colors"
-          >
-            {showAvatar ? (
-              <img
-                src={user!.avatar_url}
-                alt=""
-                className="w-full h-full object-cover"
-                onError={() => setAvatarFailed(true)}
-              />
-            ) : (
-              <GitHubMark size={14} />
-            )}
-            {/* Red dot — same shape/position as the settings-gear danger badge in
-                HeaderBar.tsx. Only shown when signed-out so first-time users have
-                an obvious "you need to do something here" cue. */}
-            {!signedIn && !signInPending && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 ring-1 ring-canvas" />
-            )}
-            {/* Pending spinner replaces the red dot while we wait for the browser */}
-            {!signedIn && signInPending && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500 ring-1 ring-canvas animate-pulse" />
-            )}
-          </button>
+          <Tooltip text={title}>
+            <button
+              type="button"
+              onClick={handleClick}
+              aria-label={title}
+              className="relative w-7 h-7 rounded-full overflow-hidden flex items-center justify-center bg-inset border border-edge-dim hover:border-edge text-fg-2 hover:text-fg transition-colors"
+            >
+              {showAvatar ? (
+                <img
+                  src={user!.avatar_url}
+                  alt=""
+                  className="w-full h-full object-cover"
+                  onError={() => setAvatarFailed(true)}
+                />
+              ) : (
+                <GitHubMark size={14} />
+              )}
+              {/* Red dot — same shape/position as the settings-gear danger badge in
+                  HeaderBar.tsx. Only shown when signed-out so first-time users have
+                  an obvious "you need to do something here" cue. */}
+              {!signedIn && !signInPending && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 ring-1 ring-canvas" />
+              )}
+              {/* Pending spinner replaces the red dot while we wait for the browser */}
+              {!signedIn && signInPending && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500 ring-1 ring-canvas animate-pulse" />
+              )}
+            </button>
+          </Tooltip>
         )}
       >
         <MenuNote>Signed in as <span className="text-fg font-medium">@{user?.login}</span></MenuNote>

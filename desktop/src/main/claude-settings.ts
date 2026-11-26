@@ -48,6 +48,23 @@ export function settingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
 }
 
+// WHY (card #11 a, Destin 2026-11-12): the repair above used to be silent. The first repair this run is kept
+// here, once, until a window asks for it (take...), so the app can tell the person ONE time. Memory only: a
+// notice nobody was around to see at launch is still shown to the first window that opens, and a relaunch
+// (when the file is already healthy) never repeats it.
+let pendingRepairNotice: { backupPath: string } | null = null;
+// WHY one claim per KIND of screen (security/regression review 2026-11-13): with a single claim, a phone connecting during start-up
+// could take the notice before the computer's own window asked, and the window would never show it. The computer's windows are one
+// kind (a second window must not repeat it) and phones/Android are the other (one phone, once); neither can use up the other's.
+const repairNoticeTaken = { window: false, remote: false };
+
+/** The one-time "your settings file was replaced" fact, handed out once per kind of screen; null when nothing was repaired or that kind already took it. */
+export function takeSettingsRepairNotice(kind: 'window' | 'remote' = 'window'): { backupPath: string } | null {
+  if (!pendingRepairNotice || repairNoticeTaken[kind]) return null;
+  repairNoticeTaken[kind] = true;
+  return pendingRepairNotice;
+}
+
 let memo: { path: string; mtimeMs: number; size: number; parsed: Settings } | null = null;
 
 function isPlainObject(v: unknown): v is Settings {
@@ -115,7 +132,9 @@ function backupPathFor(p: string): string {
  * result differs from what was read or when it was repaired, atomically
  * (tmp + fsync + rename, via cas-write).
  */
-export async function mutateSettings(mutate: (settings: Settings) => void): Promise<MutateSettingsResult> {
+export async function mutateSettings(mutate: (settings: Settings) => void,
+  // `lockWaitMs`: only the launch-edit retry passes it (launch-settings-chores.ts, card #11 b).
+  opts: { lockWaitMs?: number } = {}): Promise<MutateSettingsResult> {
   const p = settingsPath();
   let repaired: MutateSettingsResult['repaired'];
   let written = false;
@@ -143,13 +162,15 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
     if (!repaired && onDisk !== null && before === after) return null;
     written = true;
     return JSON.stringify(settings, null, 2);
-  });
+  }, undefined, { maxWaitMs: opts.lockWaitMs });
   if (!locked) {
     log('WARN', 'ClaudeSettings', 'settings.json is locked by another process — write skipped', { path: p });
     return { written: false, refused: 'locked' };
   }
   if (written) memo = null;
   if (repaired) {
+    // A repair after both kinds of screen were already told is a new fact; one still waiting for anyone keeps the first.
+    if (!pendingRepairNotice || (repairNoticeTaken.window && repairNoticeTaken.remote)) { pendingRepairNotice = { backupPath: repaired.backupPath }; repairNoticeTaken.window = false; repairNoticeTaken.remote = false; }
     log('WARN', 'ClaudeSettings', 'settings.json did not parse — backed it up and wrote a fresh file', { path: p, backupPath: repaired.backupPath });
     return { written, repaired };
   }

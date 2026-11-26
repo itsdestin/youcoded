@@ -70,6 +70,9 @@ export function makeOpts(over: Partial<HarnessSessionOpts>): HarnessSessionOpts 
     binding: { providerId: 'openrouter', modelId: 'm' },
     retryDelays: [1, 1, 1],   // test hook: near-zero backoff so the suite stays fast
     skillCatalog: EMPTY_SKILL_CATALOG,
+    // WHY: without this, a test whose model call fails with a network error ran the REAL online
+    // check — it passed only while this computer had internet. Tests about "offline" pass their own.
+    checkInternet: async () => true,
     ...over,
   } as HarnessSessionOpts;
 }
@@ -278,3 +281,14 @@ export function makeSession(over: MakeSessionOver = {}): HarnessSession {
 export async function drainTurn(session: HarnessSession, text: string): Promise<void> {
   await session.send(text);
 }
+
+/** A believable compaction summary. WHY: the app now refuses junk summaries (empty, tool-call markup,
+ *  or implausibly short for what they replace — compaction.ts isJunkSummary), so a fixture summary
+ *  like "SUMMARY." no longer stands in for a real one. ~700 characters of plain prose. */
+export const FAKE_SUMMARY = '## Goal\nThe user is working through a task and asked the assistant for help.\n## Progress\n'
+  + 'The assistant read the relevant files, ran the requested searches and reported what it found. '.repeat(6)
+  + '\n## Next\nContinue from the most recent user request.';
+/** The same idea for small windows, where a 700-character summary would not fit. */
+export const SHORT_FAKE_SUMMARY = '## Goal\nThe user asked for help with a task.\n## Progress\nThe assistant gathered what it needed and reported back to the user.\n## Next\nContinue from the latest request, keeping answers short.';
+/** For histories of a few words, where any longer summary would be bigger than what it replaces. */
+export const TINY_FAKE_SUMMARY = 'Earlier: the user and assistant chatted ok.';

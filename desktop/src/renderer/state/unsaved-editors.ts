@@ -11,6 +11,7 @@
 // any window has one — showing this window's list (OfficeAlerts), with a way to open each parked
 // draft and a way to discard them all.
 import { useSyncExternalStore } from 'react';
+import { reportFailure } from '../utils/report-failure';
 
 /** How a parked draft's Save ended: saved, the file changed on disk since (or that can't be
  *  told — `unknown`), a settings file that needs a yes first, or a specific failure message. */
@@ -71,8 +72,10 @@ export function useUnsavedEdits(): UnsavedEdit[] {
  *  they chose to (fix round 12) — one that appeared since is kept, and main refuses again. */
 export function discardUnsaved(listed: readonly UnsavedEdit[]): Promise<void> {
   const current = new Set(holders.values());
+  // WHY a failure is logged, not shown (R-1, Destin H-2): the person already chose to throw these away and the quit
+  // goes on; a leftover recovery copy only means the file offers it back next open. Nothing is lost.
   // WHY awaited (fix round 1): the quit that follows must not race an Office journal's removal.
-  return Promise.all(listed.map((e) => (current.has(e) ? Promise.resolve(e.discard()).catch(() => {}) : undefined))).then(() => {});
+  return Promise.all(listed.map((e) => (current.has(e) ? Promise.resolve(e.discard()).catch((cause: unknown) => reportFailure({ what: 'discard the unsaved changes to a file', cause, where: 'discardUnsaved', show: 'log-only' })) : undefined))).then(() => {});
 }
 
 /** Tests only. */

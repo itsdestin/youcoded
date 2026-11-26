@@ -7,7 +7,7 @@ import { sanitizeDocHtml } from './sanitize-doc-html';
 // comment pane as a markdown file — CommentableDocument is that shared layout.
 import { CommentableDocument } from '../comments/CommentableDocument';
 
-import { convertDocx } from './docx-convert-jobs';
+import { convertDocx, DocxConvertTimeoutError } from './docx-convert-jobs';
 
 export function DocxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
   // BinaryContent owns loading/error for the byte read and remounts the inner
@@ -33,6 +33,7 @@ type CommentProps = Pick<ArtifactViewProps, 'path' | 'commentsMode' | 'onOpenCom
 function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: { bytes: Uint8Array } & CommentProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,11 +43,17 @@ function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId,
     job.promise
       // Cleaned before it is ever stored for render — see sanitize-doc-html.ts.
       .then((value) => { if (!cancelled) setHtml(sanitizeDocHtml(value)); })
-      .catch((e: any) => { if (!cancelled) setParseError(String(e?.message ?? e)); });
+      .catch((e: any) => {
+        if (cancelled) return;
+        setParseError(String(e?.message ?? e));
+        setTimedOut(e instanceof DocxConvertTimeoutError);
+      });
     return () => { cancelled = true; job.cancel(); };
   }, [bytes]);
 
-  if (parseError) return <CenterNote>Couldn’t open this document.</CenterNote>;
+  // WHY the extra sentence (card #161): when the 60-second limit stops the conversion we know exactly what happened,
+  // so we say it; every other failure keeps the plain notice because its cause is not known here.
+  if (parseError) return <CenterNote>Couldn’t open this document.{timedOut ? ' This document took too long to open.' : ''}</CenterNote>;
   // WHY CenterLoading: the shared LoadingState, not hand-typed grey words (guide "File viewers"
   // known deviation, 2026-10-13).
   if (html === null) return <CenterLoading what="document" />;

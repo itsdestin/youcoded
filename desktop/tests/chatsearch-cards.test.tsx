@@ -43,15 +43,15 @@ describe('ChatsearchFindCard', () => {
     (window as any).claude.chatsearch.resolve.mockResolvedValue({ ok: true, results: [ok({ missingProject: true, projectSlug: '', projectPath: '' }), ok({ id: 'x', notSyncedYet: true })] });
     render(<ChatsearchFindCard shortIds={['a3f2', 'x']} />);
     const [a, b] = (await screen.findAllByRole('button', { name: /Resume/ })) as HTMLButtonElement[];
-    expect(a.disabled).toBe(true); expect(a.title).toBe(COPY.resumeMissingProject);
-    expect(b.disabled).toBe(true); expect(b.title).toBe(COPY.resumeNotSynced);
+    expect(a.disabled).toBe(true); expect(a.getAttribute("data-hint")).toBe(COPY.resumeMissingProject);
+    expect(b.disabled).toBe(true); expect(b.getAttribute("data-hint")).toBe(COPY.resumeNotSynced);
     for (const p of screen.getAllByRole('button', { name: COPY.preview }) as HTMLButtonElement[]) expect(p.disabled).toBe(false);
   });
   it('disables Preview for a tombstone and says why', async () => {
     (window as any).claude.chatsearch.resolve.mockResolvedValue({ ok: true, results: [ok({ tombstone: true })] });
     render(<ChatsearchFindCard shortIds={['a3f2']} />);
     const p = (await screen.findByRole('button', { name: COPY.preview })) as HTMLButtonElement;
-    expect(p.disabled).toBe(true); expect(p.title).toBe(COPY.previewTombstone);
+    expect(p.disabled).toBe(true); expect(p.getAttribute("data-hint")).toBe(COPY.previewTombstone);
   });
   // Destin, 2026-08-27 gate (M-states): "should just hide dead." A row naming a
   // conversation this device has never heard of is an id and nothing else.
@@ -78,7 +78,7 @@ describe('ChatsearchFindCard', () => {
     (window as any).claude.chatsearch.resolve.mockResolvedValue({ ok: true, results: [ok({ tombstone: true })] });
     render(<ChatsearchFindCard shortIds={['a3f2']} />);
     const r = (await screen.findByRole('button', { name: COPY.resume })) as HTMLButtonElement;
-    expect(r.disabled).toBe(true); expect(r.title).toBe(COPY.previewTombstone);
+    expect(r.disabled).toBe(true); expect(r.getAttribute("data-hint")).toBe(COPY.previewTombstone);
   });
   it('never shows the raw lane name', async () => {
     (window as any).claude.chatsearch.resolve.mockResolvedValue({ ok: true, results: [ok({ provider: 'native' })] });

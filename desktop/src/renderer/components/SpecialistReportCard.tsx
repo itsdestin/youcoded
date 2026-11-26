@@ -4,6 +4,7 @@ import type { InjectedMeta } from '../state/chat-types';
 import MarkdownContent from './MarkdownContent';
 import { CheckIcon, FailIcon, ChevronIcon } from './Icons';
 import { formatBubbleTime } from '../utils/format-time';
+import { Tooltip } from './ui';
 
 interface Props {
   message: ChatMessage;
@@ -67,25 +68,26 @@ export default React.memo(function SpecialistReportCard({ message, injected, met
   return (
     <div className="px-4 py-1" data-testid="specialist-report-card" data-injected={injected} data-status={failed ? 'failed' : 'completed'}>
       <div className="border border-edge rounded-lg overflow-hidden max-w-[85%] bg-inset/40">
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors"
-          aria-expanded={expanded}
-          title={expanded ? 'Hide the report' : 'Show the report'}
-        >
-          {/* Fix: `danger` isn't a real CSS token (no --color-danger exists), so this
-              icon rendered in plain text color instead of red on failure. `destructive-fg`
-              is the app's real token for destructive/error TEXT. */}
-          <span className={`shrink-0 inline-flex ${failed ? 'text-destructive-fg' : 'text-fg-muted'}`}>
-            {failed ? <FailIcon className="w-3.5 h-3.5" /> : <CheckIcon className="w-3.5 h-3.5" />}
-          </span>
-          <span className="text-fg-faint text-xs select-none">|</span>
-          <span className="text-xs font-medium text-fg-2 shrink-0">{label}</span>
-          {detail && <span className="text-xs text-fg-muted truncate flex-1 min-w-0">{detail}</span>}
-          <span data-testid="specialist-report-chevron" className="shrink-0 inline-flex ml-auto">
-            <ChevronIcon className="w-3.5 h-3.5 text-fg-muted" expanded={expanded} />
-          </span>
-        </button>
+        <Tooltip text={expanded ? 'Hide the report' : 'Show the report'}>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors"
+            aria-expanded={expanded}
+          >
+            {/* Fix: `danger` isn't a real CSS token (no --color-danger exists), so this
+                icon rendered in plain text color instead of red on failure. `destructive-fg`
+                is the app's real token for destructive/error TEXT. */}
+            <span className={`shrink-0 inline-flex ${failed ? 'text-destructive-fg' : 'text-fg-muted'}`}>
+              {failed ? <FailIcon className="w-3.5 h-3.5" /> : <CheckIcon className="w-3.5 h-3.5" />}
+            </span>
+            <span className="text-fg-faint text-xs select-none">|</span>
+            <span className="text-xs font-medium text-fg-2 shrink-0">{label}</span>
+            {detail && <span className="text-xs text-fg-muted truncate flex-1 min-w-0">{detail}</span>}
+            <span data-testid="specialist-report-chevron" className="shrink-0 inline-flex ml-auto">
+              <ChevronIcon className="w-3.5 h-3.5 text-fg-muted" expanded={expanded} />
+            </span>
+          </button>
+        </Tooltip>
         {expanded && (
           <div className="px-4 py-3 border-t border-edge-dim text-sm">
             <MarkdownContent content={body} sessionId={sessionId} />

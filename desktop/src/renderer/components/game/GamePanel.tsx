@@ -4,6 +4,7 @@ import { GameConnection } from '../../state/game-types';
 import { useTheme } from '../../state/theme-context';
 import { clampDrawerWidth, applyGameWidthVar } from '../../state/drawer-width';
 import { ScreenMark } from '../../shoot-mode';
+import { Tooltip } from '../ui';
 
 interface Props {
   connection: GameConnection;
@@ -79,15 +80,16 @@ export default function GamePanel({ connection, chessConnection, incognito, onTo
       {/* w-1.5 is a 6px hit area hugging the pane's left edge; the visible
           affordance is the hover/drag accent tint. Theme tokens only — no new
           backdrop-filter (react-renderer rule). */}
-      <div
-        className={`absolute left-0 inset-y-0 w-1.5 cursor-col-resize z-10 transition-colors ${dragging ? 'bg-accent/50' : 'hover:bg-accent/30'}`}
-        title="Drag to resize · double-click to reset"
-        onPointerDown={onHandlePointerDown}
-        onPointerMove={onHandlePointerMove}
-        onPointerUp={onHandlePointerUp}
-        onPointerCancel={onHandlePointerUp}
-        onDoubleClick={resetGamePaneWidth}
-      />
+      <Tooltip text="Drag to resize · double-click to reset">
+        <div
+          className={`absolute left-0 inset-y-0 w-1.5 cursor-col-resize z-10 transition-colors ${dragging ? 'bg-accent/50' : 'hover:bg-accent/30'}`}
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+          onDoubleClick={resetGamePaneWidth}
+        />
+      </Tooltip>
       <ArcadeShell connection={connection} chessConnection={chessConnection} incognito={incognito} onToggleIncognito={onToggleIncognito} />
     </div>
   );

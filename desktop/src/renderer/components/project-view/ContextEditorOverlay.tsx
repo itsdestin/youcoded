@@ -11,6 +11,8 @@
 // project:read-context-file / project:write-context-file IPC. Errors from the
 // write path (the main-process allow-list can reject) surface inline rather
 // than being swallowed.
+import { announceFailed } from '../../utils/announce';
+import { copyText } from '../context-menu/clipboard';
 import { useEffect, useState } from 'react';
 import type { ContextFile, ContextScope } from '../../../shared/project-context-types';
 import { ProjectDetailOverlay } from './ProjectDetailOverlay';
@@ -145,10 +147,11 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
   };
 
   const handleCopyPath = () => {
-    navigator.clipboard?.writeText(file.absolutePath).then(() => {
+    void copyText(file.absolutePath).then((ok) => {
+      if (!ok) { announceFailed('copy the path'); return; }
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    }).catch(() => { /* clipboard unavailable — ignore */ });
+    });
   };
 
   // Header tools — Edit ↔ Save/Cancel (or Confirm/Cancel for the global gate),

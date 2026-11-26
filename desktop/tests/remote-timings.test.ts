@@ -17,9 +17,9 @@ describe('the computer\'s line for a phone\'s timings', () => {
   });
 
   it('says which conversation answer it was, how long it took and how big it was', () => {
-    expect(describeAnswer('session:open', { ptyOnly: true }, 12.4, 3 * 1024 * 1024)).toBe('terminal answered in 12 ms, 3.0 MB');
-    expect(describeAnswer('session:open', {}, 80, 200 * 1024)).toBe('conversation answered in 80 ms, 200 KB');
-    expect(describeAnswer('session:list', {}, 3, 900)).toBe('list answered in 3 ms, 1 KB');
+    expect(describeAnswer('session:open', { ptyOnly: true }, 12.4, 3 * 1024 * 1024)).toBe('terminal answered in 12 ms, 3.1 MB');
+    expect(describeAnswer('session:open', {}, 80, 200 * 1024)).toBe('conversation answered in 80 ms, 205 KB');
+    expect(describeAnswer('session:list', {}, 3, 900)).toBe('list answered in 3 ms, 900 B');
   });
 });
 

@@ -1,4 +1,4 @@
-// "A file has unsaved changes" — a quit, or the last window's close, refused because this window
+// "A file has unsaved changes" — a quit, or a window's close (any window since card #34), refused because this window
 // holds unsaved edits: a text file open for editing, a draft parked after its editor went away
 // (Task 6 fix rounds 9–14; state/unsaved-editors.ts, draft-store.ts), or an Office document whose
 // autosave has not landed yet (Task 8 — it saves as the prompt opens, office-store.ts).

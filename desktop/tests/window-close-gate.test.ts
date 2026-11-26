@@ -1,4 +1,4 @@
-// A window's X: the last window's unsaved files first, then the sessions prompt, then the window
+// A window's X: the window's own unsaved files first, then the sessions prompt, then the window
 // goes. The sessions answer is carried out only on the close that goes through; a close the page
 // vetoed asks again; a hung window can be closed anyway. (Task 8 removed the Office save step.)
 import { describe, expect, it, vi } from 'vitest';
@@ -37,14 +37,25 @@ describe('the window close gate', () => {
     const again = ev();
     await g.onClose(again); // the re-issued close
     expect(again.preventDefault).not.toHaveBeenCalled();
+    expect(deps.apply).not.toHaveBeenCalled(); // not yet: the page could still veto this close
+    g.onClosed(); // the window is really gone
     expect(deps.apply).toHaveBeenCalledTimes(1);
     expect(deps.ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('a close the page vetoes does NOT end the chats (card #34: they used to end while the window stayed)', async () => {
+    const { g, deps, ev } = gate();
+    await g.onClose(ev());
+    await g.onClose(ev());   // the close goes through the gate…
+    g.onUnloadPrevented();   // …and an unsaved text file's guard keeps the window open
+    g.onClosed();            // (nothing closed, but even a stray closed signal must not end them)
+    expect(deps.apply).not.toHaveBeenCalled();
   });
 
   it('asks again after the page vetoed the confirmed close', async () => {
     const { g, deps, ev } = gate();
     await g.onClose(ev());
-    await g.onClose(ev()); // goes through (apply)…
+    await g.onClose(ev()); // goes through…
     g.onUnloadPrevented(); // …but an unsaved text file's guard kept the window
     const e = ev();
     await g.onClose(e);
@@ -79,7 +90,7 @@ describe('the window close gate', () => {
     expect(deps.close).toHaveBeenCalledTimes(1);
   });
 
-  it("the last window's unsaved files are asked about before anything else", async () => {
+  it("the window's unsaved files are asked about before anything else", async () => {
     const { g, deps, state, ev } = gate();
     state.refuse = true;
     const e = ev();
@@ -119,6 +130,7 @@ describe('the window close gate', () => {
     await g.onClose(ev()); // confirmed with s1, s2
     state.sessions = 3; // a session started before the close goes through
     await g.onClose(ev());
+    g.onClosed();
     expect(deps.apply).toHaveBeenCalledWith(true, ['s1', 's2']);
   });
 });

@@ -29,20 +29,46 @@ export type BubbleAlign = 'center' | 'start';
  * window, because a dialog can itself be taller than a short window.
  */
 // `host`: round 3 (doc-comments polish) — the file viewer's popovers (the new-
-// comment box, the highlight hover card) anchor to a raw SELECTION rect, not a
-// dialog, and must stay inside the viewer's OWN content area (never over its
-// header row above). Passing the content element directly skips the
-// `[role="dialog"]` lookup instead of teaching this function about a second
-// kind of host to search for.
+// comment box, the highlight hover card) must stay inside the viewer's OWN
+// content area (never over its header row above). Passing the content element
+// directly skips the `[role="dialog"]` lookup.
+//
+// WHY `visibleRectOf(host)` and not the host's own rect (comment-box fix,
+// 2026-11-22): the viewer's content element is the WHOLE document — thousands
+// of pixels tall inside a scrolling panel — so its rect never limited
+// anything, and a new-comment box near the bottom was clamped to the window
+// edge, over the chat box. Only the part of the host you can actually see
+// counts.
 export function boundsFor(el: HTMLElement, host?: HTMLElement | null) {
-  const dialogHost = host ?? el.closest('[role="dialog"]');
-  const h = dialogHost ? dialogHost.getBoundingClientRect() : null;
+  // `?.`: a caller anchoring to a bare rect passes a stand-in with no `closest`.
+  const dialogHost = host ?? el.closest?.('[role="dialog"]');
+  const h = host ? visibleRectOf(host) : dialogHost ? dialogHost.getBoundingClientRect() : null;
   return {
     left: Math.max(EDGE, h ? h.left + EDGE : EDGE),
     right: Math.min(window.innerWidth - EDGE, h ? h.right - EDGE : window.innerWidth - EDGE),
     top: Math.max(EDGE, h ? h.top + EDGE : EDGE),
     bottom: Math.min(window.innerHeight - EDGE, h ? h.bottom - EDGE : window.innerHeight - EDGE),
   };
+}
+
+/**
+ * The part of `el` that is actually on screen: its rect cut down by every
+ * ancestor that clips its overflow (a scrolling panel, a hidden-overflow
+ * frame). Only read when a bubble is placed — never per frame on its own.
+ */
+export function visibleRectOf(el: HTMLElement): DOMRect {
+  const r = el.getBoundingClientRect();
+  let { left, top, right, bottom } = r;
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+    const c = p.getBoundingClientRect();
+    left = Math.max(left, c.left);
+    top = Math.max(top, c.top);
+    right = Math.min(right, c.right);
+    bottom = Math.min(bottom, c.bottom);
+  }
+  return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
 /**
@@ -62,6 +88,9 @@ export function placeBubble(
     align: BubbleAlign;
     gapBelow: number;
     gapAbove: number;
+    /** Extra band at the bottom of the bounds the bubble must keep clear of
+     *  (the file viewer's floating Edit button — see NewCommentPopover). */
+    reserveBottom?: number;
   },
   // Optional explicit bounds host (see boundsFor's WHY) — omit for the
   // original dialog-or-window behavior AnchorTip/Tooltip rely on.
@@ -72,6 +101,7 @@ export function placeBubble(
   const w = box?.width ?? 0;
   const h = box?.height ?? 0;
   const b = boundsFor(trigger, boundsHost);
+  if (opts.reserveBottom) b.bottom = Math.max(b.top, b.bottom - opts.reserveBottom);
 
   // Preferred side, then flip if the preferred side does not fit and the other
   // one does. Flipping only happens when staying put would push the bubble out

@@ -14,6 +14,29 @@
   const entriesOf = (s) => [...s.querySelectorAll('.timeline-entry')];
   const isSpacer = (e) => !e.firstElementChild;
   const r1 = (n) => Math.round(n * 10) / 10;
+  // FONTS FIRST. WHY (2026-11-12, intermittent failures 1 in ~10-20 runs, on master and branch alike): the
+  // journey's theme (Meadow Mist) draws text in a web font fetched from fonts.googleapis.com, and each run is a
+  // fresh private browser with no cache, so the font arrived at an unpredictable moment, sometimes in the middle
+  // of the measurement. Then every drawn line re-wraps (a user message 95 -> 75 px, one line fewer) and the
+  // check read that as the first-draw plan jumping ("moved the entry in view by 20.3px ... msg drawn 95 -> 75",
+  // or "the bottom moved 23px after opening"). Holding the font back 1.5-5 s on purpose failed 6 of 6 runs with
+  // exactly those messages. This check guards the first-draw plan, not font loading, so the theme's font is
+  // made to finish BEFORE the conversation opens. Capped, so an offline run (font never comes) measures in the
+  // fallback font, which is just as stable, rather than hanging.
+  const tFonts = performance.now();
+  const fontLink = document.getElementById('theme-google-font');
+  if (fontLink && !fontLink.sheet) {
+    await Promise.race([new Promise((r) => { fontLink.addEventListener('load', r, { once: true }); fontLink.addEventListener('error', r, { once: true }); }), wait(10000)]);
+  }
+  const family = getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim();
+  // Every weight the chat can use (body, semi-bold names, bold markdown), not only the ones the Home page drew.
+  if (family) await Promise.race([Promise.all(['400', '600', '700', '800'].map((w) => document.fonts.load(`${w} 16px ${family}`).catch(() => null))), wait(10000)]);
+  await Promise.race([document.fonts.ready, wait(10000)]);
+  const fontWaitMs = Math.round(performance.now() - tFonts);
+  // WHY recorded: should a font still land mid-measurement (a theme change, a weight not listed above), the
+  // failure says so instead of looking like the first-draw plan moving text.
+  const fontsLanded = [];
+  document.fonts.addEventListener('loadingdone', (e) => { if (e.fontfaces.length) fontsLanded.push(`${e.fontfaces.map((f) => `${f.family} ${f.weight}`).join(', ')} at ${Math.round(performance.now() - t0)} ms`); });
   const t0 = performance.now();
   document.querySelector('[data-session-strip] [data-session-id="wb-2"]').click();
   let s = null;
@@ -23,7 +46,7 @@
     if (s && !entriesOf(s).length) s = null;
   }
   if (!s) return { ok: false, why: 'the long conversation never appeared (is the journey started with seed=long-N?)' };
-  const rep = { clickToFirstFrameMs: Math.round(performance.now() - t0) };
+  const rep = { fontWaitMs, clickToFirstFrameMs: Math.round(performance.now() - t0) };
   const gap = () => s.scrollHeight - s.scrollTop - s.clientHeight;
   const spacersInWindow = () => {
     const r = s.getBoundingClientRect();
@@ -109,5 +132,7 @@
   if (rep.worstDriftPx > 1) why.push(`scrolling up moved the entry in view by ${rep.worstDriftPx}px (${driftAt ? `${driftAt.frame} ms into step ${driftAt.step}, ${driftAt.after450ms ?? '?'}px off 450 ms later — ${driftAt.after450ms > 1 ? 'a lasting jump' : 'corrected a frame late'}; scrollTop at step start ${driftAt.stAtStart}; changed above it: ${driftAt.above.join(', ') || 'nothing'}` : 'no detail'})`);
   if (rep.framesWithSpacerInWindow > 0) why.push(`${rep.framesWithSpacerInWindow} frames showed a blank spacer in the window while scrolling up (first: step ${firstSpacerAt.step}, ${firstSpacerAt.frame} ms in)`);
   if (rep.spacersNearWindowAtTop > 0) why.push(`${rep.spacersNearWindowAtTop} entries near the window are still blank at the top`);
+  rep.fontsLandedDuringMeasurement = fontsLanded;
+  if (why.length && fontsLanded.length) why.push(`NOTE a font finished downloading while measuring (${fontsLanded.join('; ')}): text re-wrapping can move entries by itself, so suspect that before the first-draw plan`);
   return { ok: why.length === 0, why: why.join('; '), report: rep };
 })()

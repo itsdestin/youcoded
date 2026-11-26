@@ -25,8 +25,12 @@ import {
   presetGlobalValue, parseExtraFlags, checkFlagsAgainstBinary,
 } from './model-presets';
 import type { BinaryCheckOptions, BinaryCheckResult } from './model-presets';
+import { LoadTimes } from './load-times';
+import { SlotPins, slotField } from './slot-pins';
 import { contextLengthFor } from '../models/fit-estimator';
-import { readManifest, removeManifest, markManifestComplete, isManifestComplete } from '../models/download-manifest';
+import { readManifest, removeManifest, markManifestComplete, isManifestComplete, installedDirFor } from '../models/download-manifest';
+import { GgufHeaderCache, readLocalGgufHeader, localHeaderStamp } from '../models/gguf-header';
+import { MtpFallback } from './mtp-fallback';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
 import type { BackfillCandidate, BackfillLookups } from '../models/manifest-backfill';
 import { scanGgufCache, scanLocalDownloads, isComplete, visionModelIdsOnDisk } from './cache-scan';
@@ -58,6 +62,8 @@ export interface LocalEngineHook {
    *  CLEARS the reading rather than leaving the previous reply's number
    *  standing under a newer one. Feeds the engine card's fact line. */
   recordReply(timings: ReplyTimings | null): void;
+  /** The engine slot for a request: a chat's own (its session id), or the shared spare (slot-pins.ts). */
+  slotFor?(modelId: string, key?: string, helper?: boolean): number | undefined;
 }
 
 /** Pick the asset to install: the preferred backend if it ships an asset for
@@ -244,6 +250,11 @@ export function backendDeviceRefusal(
  *  disabled with the download bar already gone and nothing else on screen.
  *  Overridable for tests only (`loadProbeTimeoutMs`); production never sets it. */
 const LOAD_PROBE_TIMEOUT_MS = 10 * 60_000;
+// deleteModel: how long to wait for the engine to release a model (its process
+// exited in ~150 ms when measured), and how hard a remove retries a busy file.
+const RELEASE_WAIT_MS = 10_000;
+const DELETE_RETRIES = 8;
+const DELETE_RETRY_MS = 250;
 
 /** A duration in the units a reader would use for it. The verification load's
  *  cap is ten minutes in production and milliseconds under test, and neither
@@ -372,6 +383,11 @@ export class EngineManager extends EventEmitter {
    *  told from "the engine is still up" (see notePresetInForce). */
   private lastSupervisorState: string | null = null;
 
+  /** Past load durations on this machine — the bar's estimate where bytes can't be measured. */
+  private readonly loadTimes: LoadTimes;
+  /** Which engine slot each chat keeps (slot-pins.ts). Per run: slots empty when the engine restarts. */
+  private readonly slotPins = new SlotPins();
+
   constructor(
     private home: NativeHome,
     // Kept on the instance since §E3: the manifest backfill's curated-list
@@ -404,6 +420,7 @@ export class EngineManager extends EventEmitter {
     } = {}
   ) {
     super();
+    this.loadTimes = new LoadTimes(path.join(path.dirname(presetFilePath(home.root)), 'load-times.json'));
     // The third argument matters: acquisition fills in the device list of an
     // engine installed before that list existed, in the background, because
     // status() is synchronous and cannot wait on a spawned process. status() is
@@ -692,6 +709,8 @@ export class EngineManager extends EventEmitter {
       modelIds: scanGgufCache(cfg.cacheDir).map((m) => m.id),
       settings: cfg.models,
       preserve: held.size > 0 ? held : undefined,
+      mtpModelIds: this.mtpModelIds,
+      speculative: this.spawnConfig().speed?.speculative !== false,
     });
     writePresetFile(filePath, contents);
   }
@@ -1243,7 +1262,50 @@ export class EngineManager extends EventEmitter {
         compressCache: speed?.compressCache !== false,
       },
       models: models && typeof models === 'object' ? models : null,
+      mtpModelIds: [...this.mtpModelIds],
     };
+  }
+
+  /** Ids of downloaded models whose file carries MTP heads. Read from each file's
+   *  header (cached by modification time, shared with the Local Models panel's
+   *  cache), so it is refreshed asynchronously before every spawn and every
+   *  preset rewrite rather than inside the synchronous config read.
+   *
+   *  WHY from the file and never from the model's name: the heads are a property
+   *  of the conversion, not the family — the same Qwen3.5-9B ships with them in one
+   *  repo and without them in another, and turning MTP on for a file without them
+   *  makes that model refuse to load. Best-effort: an unreadable header just
+   *  means no MTP for that model. */
+  private mtpModelIds = new Set<string>();
+  private mtpHeaderCache: GgufHeaderCache | null = null;
+  /** A model MTP stops from loading is loaded once more without it, and that is remembered (mtp-fallback.ts). */
+  private mtpFallback = new MtpFallback({
+    hasMtp: (id) => this.mtpModelIds.has(id) && this.spawnConfig().speed?.speculative !== false,
+    reloadWithoutMtp: async (id) => { await this.refreshModels(); await this.loadModel(id); },
+    remember: async (id) => { await updateModelSettings(this.home, id, { noMtp: true }); },
+    restore: () => this.refreshModels(),
+  });
+  private async refreshMtpModels(): Promise<void> {
+    const { cacheDir, models } = readEngineConfig(this.home);
+    this.mtpHeaderCache ??= new GgufHeaderCache(this.userDataDir);
+    const next = new Set<string>();
+    for (const { id } of scanGgufCache(cacheDir)) {
+      if (models[id]?.noMtp || this.mtpFallback.excluded(id)) continue;   // MTP stopped it loading here
+      const filePath = path.join(installedDirFor(cacheDir, id), `${id}.gguf`);
+      try {
+        const stamp = localHeaderStamp((await fs.promises.stat(filePath)).mtimeMs);
+        const key = `local:${filePath}`;
+        let header = this.mtpHeaderCache.get(key, stamp);
+        if (!header) { header = await readLocalGgufHeader(filePath); this.mtpHeaderCache.set(key, stamp, header); }
+        // Dense only. WHY: measured 2026-11-08 on Strix Halo — Qwen3.8-27B (dense)
+        // wrote replies 6.5 → 11-12 t/s with MTP; Qwen3.6-35B-A3B (mixture of
+        // experts, ~3B used per token) only 47 → 50-52 t/s while its reading got
+        // 5-15% slower. An MoE is already fast per token, so guessing ahead has
+        // little to save.
+        if ((header.nextnPredictLayers ?? 0) > 0 && !(header.expertCount ?? 0)) next.add(id);
+      } catch { /* unreadable or split-named file: no MTP for it */ }
+    }
+    this.mtpModelIds = next;
   }
 
   private async rebuildSupervisor(installed: InstalledEngine): Promise<void> {
@@ -1257,7 +1319,11 @@ export class EngineManager extends EventEmitter {
       // now actually restarts with the new setting. Passing cfg.* here is what
       // used to freeze the old values into the object for its whole life.
       readConfig: () => this.spawnConfig(),
+      beforeSpawn: () => this.refreshMtpModels(),
       presetPath: presetFilePath(this.home.root),
+      // Beside models.ini: per machine, never synced (engine-log.ts).
+      logPath: path.join(path.dirname(presetFilePath(this.home.root)), 'engine.log'),
+      expectedLoadMs: (id: string, size: number | null) => this.loadTimes.expected(id, size),
       fetchImpl: this.opts.fetchImpl,
       ...(this.opts.supervisorOpts ?? {}),
     });
@@ -1283,9 +1349,14 @@ export class EngineManager extends EventEmitter {
           // The request could not be made — say that, not a guess at why.
           ? (e.body || 'the engine could not be reached')
           : routerErrorText(e.status, e.body);
-      void this.noteLoadError(e.modelId, message);
+      const report = () => { void this.noteLoadError(e.modelId, message); };
+      if (this.mtpFallback.onLoadResult(e.modelId, e.ok, e.status !== null, report)) return;   // being retried without MTP
+      report();
     });
     this.supervisor.on('crashed', (info) => this.emit('crashed', info));
+    this.supervisor.on('load-timed', (e: { modelId: string; sizeBytes: number | null; ms: number }) => {
+      this.loadTimes.record(e.modelId, e.sizeBytes, e.ms);
+    });
     // Fan out per-model residency (load/sleep/unload) → the model-state
     // coordinator turns this into per-session banners (unloaded/loading UI).
     this.supervisor.on('models-changed', (models) => this.emit('models-changed', models));
@@ -1324,7 +1395,7 @@ export class EngineManager extends EventEmitter {
     if (!inst) throw new Error('The local engine is not installed yet.');
     await this.rebuildSupervisor(inst);
     await this.supervisor!.ensureServable(modelId);
-    await this.supervisor!.loadModel(modelId);
+    await this.supervisor!.loadModel(modelId, this.slotPins.slotFor(modelId)); // the spare slot: never a chat's reading
   }
 
   /** Is a llama-server process running right now? Asked by "Add vision" (design
@@ -1341,6 +1412,8 @@ export class EngineManager extends EventEmitter {
   inFlightFor(modelId: string): number {
     return this.supervisor?.inFlightFor(modelId) ?? 0;
   }
+
+  latestModels(): EngineModel[] | null { return this.supervisor?.latestModels() ?? null; } // null = not running
 
   /** The router's own word on one model's residency; `null` = could not be
    *  determined, NEVER "unloaded" (EngineSupervisor.routerModelState). */
@@ -1360,6 +1433,9 @@ export class EngineManager extends EventEmitter {
     // (writeModelPresets holds it back) — this reload must not unload a model
     // mid-reply, which is the entire reason the pending flag exists (design §C2).
     const merged = await this.mergeIdlePendingSettings();
+    // A finished download may be a model with MTP heads: learn that before the
+    // section is written, or it would get MTP only at the next engine start.
+    await this.refreshMtpModels().catch(() => {});
     try { this.writeModelPresets(); } catch { /* keep the file the engine already read */ }
     await this.supervisor.refreshModels();
     for (const id of merged) await this.unloadModel(id);
@@ -1405,6 +1481,7 @@ export class EngineManager extends EventEmitter {
       },
       ensureServable: async (modelId: string) => this.ensureServable(modelId),
       recordReply: (timings) => this.recordReply(timings),
+      slotFor: (modelId, key, helper) => this.slotPins.slotFor(modelId, key, helper),
       // Bound lazily: the supervisor may not exist yet when the registry is
       // constructed; by the time the AI SDK fetches, ensureRunning built it.
       fetchImpl: () => (input: any, init?: any) => {
@@ -1529,6 +1606,7 @@ export class EngineManager extends EventEmitter {
       // existed, and its tests pinned the wrong name); `n_slots` stays as a
       // fallback for older llama.cpp builds a user may still be running.
       const totalSlots = resolveSlotCount(props?.total_slots ?? props?.n_slots);
+      if (totalSlots) this.slotPins.setSlotCount(modelId, totalSlots);
       const trained = this.trainedContextFor(modelId);
       // Fall back to the -c WE spawned the server with, not a blind constant.
       //
@@ -1816,11 +1894,18 @@ export class EngineManager extends EventEmitter {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false,
+          ...slotField(this.slotPins.slotFor(modelId)),   // the spare slot: never a chat's reading
         }),
         signal: abort.signal,
       });
+      // WHY the body is read on success too: trackedFetch counts this request as
+      // running until its body is fully read or cancelled. Returning on res.ok
+      // without reading left it counted forever — the engine then always looked
+      // busy, so a settings change waited out its 10-minute cap and idle shutdown
+      // never came (fault 3, same shape as the supervisor's load "hi").
+      const text = await res.text().catch(() => '');
       if (res.ok) return null;
-      return { kind: 'answered', message: routerErrorText(res.status, await res.text().catch(() => '')) };
+      return { kind: 'answered', message: routerErrorText(res.status, text) };
     } catch (e: any) {
       // The request could not be made, or took longer than a model load ever
       // should. Report what actually happened — never a guess at why.
@@ -1973,9 +2058,12 @@ export class EngineManager extends EventEmitter {
   // Do NOT reintroduce until the model picker actually consumes a per-tier
   // default — a write-only stat would just be dead state.
 
-  /** Plan C: delete a model (all parts). Best-effort /models/unload first so
-   *  the router isn't serving a file we're removing; file deletion proceeds
-   *  regardless (the router tolerates a vanished file on next request). */
+  /** Plan C: delete a model (all parts). /models/unload first, then WAIT for the
+   *  engine to let go before removing anything. WHY (2026-10-29): Linux removes
+   *  a file that is still open, Windows refuses (EBUSY/EPERM), and the unload
+   *  call returns before the model's process has exited — so deleting a loaded
+   *  model on Windows failed. The removes are async and retry on those errors
+   *  (Node's own rm retry), which also covers antivirus briefly holding a file. */
   async deleteModel(id: string): Promise<void> {
     const cfg = readEngineConfig(this.home);
     if (this.supervisor?.status() === 'running') {
@@ -1985,16 +2073,18 @@ export class EngineManager extends EventEmitter {
           body: JSON.stringify({ model: id }),
         });
       } catch { /* best-effort */ }
+      await this.waitUntilReleased(id);
     }
+    const rm = (p: string, recursive = false) =>
+      fs.promises.rm(p, { force: true, recursive, maxRetries: DELETE_RETRIES, retryDelay: DELETE_RETRY_MS });
     // A vision model IS its folder — weights, projector, manifest and any
     // .partial all live inside it, and the engine names the model by that
     // folder (design §E2). So one recursive remove is the whole delete, and it
     // needs no guesses about what is in there.
     const folder = path.join(cfg.cacheDir, id);
-    let isFolderModel = false;
-    try { isFolderModel = fs.statSync(folder).isDirectory(); } catch { /* flat model */ }
+    const isFolderModel = await fs.promises.stat(folder).then((st) => st.isDirectory(), () => false);
     if (isFolderModel) {
-      fs.rmSync(folder, { recursive: true, force: true });
+      await rm(folder, true);
     } else {
       // A multi-part id points at part 00001 — delete every sibling part.
       const partMatch = /-(\d{5})-of-(\d{5})$/.exec(id);
@@ -2003,8 +2093,8 @@ export class EngineManager extends EventEmitter {
             `${id.replace(/-\d{5}-of-\d{5}$/, '')}-${String(i + 1).padStart(5, '0')}-of-${partMatch[2]}.gguf`)
         : [`${id}.gguf`];
       for (const name of names) {
-        fs.rmSync(path.join(cfg.cacheDir, name), { force: true });
-        fs.rmSync(path.join(cfg.cacheDir, `${name}.partial`), { force: true });
+        await rm(path.join(cfg.cacheDir, name));
+        await rm(path.join(cfg.cacheDir, `${name}.partial`));
       }
       // The manifest describes files that no longer exist — remove it with them.
       removeManifest(cfg.cacheDir, `${id}.gguf`);
@@ -2019,6 +2109,19 @@ export class EngineManager extends EventEmitter {
     // 400s on use — the delete-side twin of the post-download refresh.
     await this.refreshModels();
     this.emit('status-changed');
+  }
+
+  /** Resolves once the engine no longer lists `id` as loaded, loading or asleep
+   *  (its process has exited and closed the file), or after RELEASE_WAIT_MS —
+   *  the delete then still tries, and its retries cover a slow exit. */
+  private async waitUntilReleased(id: string): Promise<void> {
+    const deadline = Date.now() + RELEASE_WAIT_MS;
+    while (Date.now() < deadline && this.supervisor?.status() === 'running') {
+      let row: EngineModel | undefined;
+      try { row = (await this.supervisor.listModels()).find((m) => m.id === id); } catch { return; }
+      if (!row || row.state === 'unloaded') return;
+      await new Promise((r) => setTimeout(r, 150));
+    }
   }
 
   /** App-quit teardown — registered next to nativeHost.destroyAll(). Resolves

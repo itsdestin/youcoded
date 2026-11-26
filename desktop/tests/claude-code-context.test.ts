@@ -58,7 +58,12 @@ describe('what a Claude Code chat is allowed to claim', () => {
   it('lists installed skills AND this project’s own', () => {
     scanSkills.mockReturnValue([{ id: 'a:one', displayName: 'one', description: 'first' }]);
     scanProjectSkills.mockReturnValue([{ id: 'proj', displayName: 'proj', description: 'local' }]);
-    expect(buildClaudeCodeContext(dir, null).skills?.map((s) => s.id)).toEqual(['a:one', 'proj']);
+    scanProjectSkills.mockReturnValue([{ id: 'proj', displayName: 'proj', description: 'local', source: 'project' }]);
+    const skills = buildClaudeCodeContext(dir, null).skills;
+    expect(skills?.map((s) => s.id)).toEqual(['a:one', 'proj']);
+    // WHY pinned (#251 code review F1): the pop-up's Global context and Project context
+    // tabs sort on this. Without it every skill silently lands on Global and nothing fails.
+    expect(skills?.map((s) => s.scope)).toEqual(['global', 'project']);
   });
 
   it('reads a file whole, with both sides equal so no cut is implied', () => {

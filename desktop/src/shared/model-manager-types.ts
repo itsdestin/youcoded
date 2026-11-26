@@ -194,6 +194,10 @@ export interface StoredModelSettings extends ModelSettings {
    *  what the settings dialog is allowed to write, and this is something the app
    *  observes and records for the user, never something the user sets. */
   lastLoadError?: string;
+  /** MTP drafting stopped this model from loading on THIS computer, and it
+   *  loaded without it (engine/mtp-fallback.ts). Recorded by the app, never set
+   *  by the user; the model simply runs without MTP from then on. */
+  noMtp?: boolean;
 }
 
 /** What the `models:set-settings` channel accepts — the ONE patch shape every

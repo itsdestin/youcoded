@@ -7,6 +7,7 @@ import { deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, MAX_ATTACHME
 import { readPdfAsToolResult } from '../pdf-text';
 import { IMAGE_LIMITS_DEFAULT } from '../capability-profile';
 import { fingerprintFile, fingerprintFileInPieces, fingerprintOf } from './file-fingerprint';
+import { formatBytes, formatMbWhole } from '../../../shared/format-bytes';
 
 const BINARY_SNIFF_BYTES = 8000;
 
@@ -39,7 +40,7 @@ const DIR_LIST_LIMIT = 50;
  *  refusal branch is unit-testable without writing a 50 MB fixture. */
 export function readSizeError(sizeBytes: number, filePath: string): string | null {
   if (sizeBytes <= MAX_READ_BYTES) return null;
-  const mb = (sizeBytes / (1024 * 1024)).toFixed(0);
+  const mb = formatMbWhole(sizeBytes).replace(' MB', ''); // 1000-based (card #143)
   // Honest hint: offset/limit can't help once we refuse the read entirely, so
   // point at tools that stream instead of loading the whole file into memory.
   return `Read rejected: ${filePath}: file is ${mb} MB (limit 50 MB). Use Grep to search it, or Bash head/tail to sample it.`;
@@ -182,7 +183,7 @@ export const ReadTool = defineTool({
     }
     if (imageMediaType) {
       if (st.size > MAX_ATTACHMENT_BYTES) {
-        return { text: `Read rejected: ${args.file_path} is a ${(st.size / (1024 * 1024)).toFixed(1)} MB image (limit ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB).`, isError: true };
+        return { text: `Read rejected: ${args.file_path} is a ${formatBytes(st.size)} image (limit ${formatBytes(MAX_ATTACHMENT_BYTES, { trimZero: true })}).`, isError: true };
       }
       // WHY the registry keeps the ORIGINAL path even when a derivative is
       // promised: Edit/Write's read-before-write guard is about the user's
@@ -209,7 +210,7 @@ export const ReadTool = defineTool({
           imageLabels: [path.basename(abs)],
         };
       }
-      return { text: `Read image ${args.file_path} (${Math.max(1, Math.round(st.size / 1024))} KB, ${imageMediaType}).`, images: [abs] };
+      return { text: `Read image ${args.file_path} (${st.size < 1000 ? '1 KB' : formatBytes(st.size, { kbDecimals: 0 })}, ${imageMediaType}).`, images: [abs] };
     }
     if (undeliverableExt) {
       return { text: `Read rejected: ${args.file_path} is a ${path.extname(args.file_path).slice(1)} image — a format that cannot be delivered to the model. Convert it to PNG (e.g. Bash: magick in.svg out.png) and Read the copy.`, isError: true };

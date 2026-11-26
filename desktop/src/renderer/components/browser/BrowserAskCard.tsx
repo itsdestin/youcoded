@@ -107,6 +107,44 @@ function PermissionAsk({ sessionId, prompt: p, answer }: { sessionId: string; pr
   );
 }
 
+/**
+ * The same card on a PHONE (card #205; Destin 2026-10-26: "build in remote browser approvals like every other approval card"). A phone has no
+ * Browser of its own (capabilities.assistantBrowser is false), so the card comes from the conversation's `browserAsk` fact the computer
+ * publishes and the answer goes back over `browser:answer`, the one Browser channel a phone may use. The four permission asks draw through
+ * the very same ToolCard ask as on the computer. A hand-off needs the browser itself, so the phone says where to do it and offers only
+ * "I can't do this"; "no browser" asks to download, which the phone cannot do from here, so it offers Not now only.
+ */
+export const PhoneBrowserAskCard = memo(function PhoneBrowserAskCard({ sessionId, prompt: p }: { sessionId: string; prompt: BrowserPrompt }) {
+  const [sending, setSending] = useState(false);
+  const answer = useCallback(async (a: PromptAnswer) => {
+    setSending(true);
+    try { await bridge().answer(sessionId, p.id, a); } finally { setSending(false); }
+  }, [p.id, sessionId]);
+  if (p.kind === 'site' || p.kind === 'form' || p.kind === 'final' || p.kind === 'local') {
+    return <PermissionAsk key={p.id} sessionId={sessionId} prompt={p} answer={answer} />;
+  }
+  const copy = browserCardCopy(p);
+  const body = p.kind === 'handoff' ? `${copy.body} Do this in the browser on your computer.` : copy.body;
+  return (
+    <PendingAskBubble>
+      <div role="group" aria-label="The browser is asking you">
+        <div className="flex items-start gap-2">
+          <GlobeIcon className="w-4 h-4 mt-0.5 text-fg-muted shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-fg">{copy.title}</div>
+            <p className="text-xs text-fg-2 mt-1">{body}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 mt-3">
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer(p.kind === 'handoff' ? 'cant' : 'no')}>
+            {p.kind === 'handoff' ? "I can't do this" : 'Not now'}
+          </Button>
+        </div>
+      </div>
+    </PendingAskBubble>
+  );
+});
+
 const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: string }) {
   const state = useBrowserState(sessionId);
   const paneOpen = useBrowserPaneOpen(sessionId);

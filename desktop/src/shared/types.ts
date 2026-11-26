@@ -756,6 +756,13 @@ export interface SessionContextSkill {
   label: string;
   /** The one-liner the model itself is given. */
   description?: string;
+  /** Where the skill is installed: 'project' = this project's own `.claude/skills`
+   *  folder, 'global' = installed for every project.
+   *  WHY (Destin, 2026-11-12, work item #251): the panel sorts what the assistant
+   *  was given into Global and Project tabs. Both scanners always knew this and
+   *  dropped it on the way out. Absent on a record written before this field
+   *  existed; the panel files those under Global, where every skill used to be. */
+  scope?: 'global' | 'project';
 }
 
 export interface SessionContext {
@@ -900,6 +907,9 @@ export interface SpecialistInjectedMeta {
   status: 'completed' | 'failed';
   steps?: number;
   parentToolCallId?: string;
+  /** Which run of this helper the report is for (1 = the original hire, +1 per resume). Bookkeeping only:
+   *  lets the host tell run 2's report from run 1's when matching durable receipts. */
+  runNumber?: number;
 }
 
 /** Companion to `injected: 'shell-complete'` (G-1): the background commands

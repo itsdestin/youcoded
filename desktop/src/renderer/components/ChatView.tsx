@@ -1,10 +1,11 @@
 import { KeepGoingRow } from './KeepGoingRow';
+import { announceFailed } from '../utils/announce';
 import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
 import { shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
-import { workbenchQueuePreview } from '../workbench-mode';
+import { workbenchQueuePreview, workbenchModelLoading } from '../workbench-mode';
 import ToolCard from './ToolCard';
 import type { PromptCardButton } from './PromptCard';
 import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
@@ -12,12 +13,13 @@ import { answerPrompt } from '../state/prompt-input';
 import { findArchiveBoundary } from '../state/archive-boundary';
 import { projectTimeline } from '../state/timeline-presentation';
 import ThinkingIndicator from './ThinkingIndicator';
-import BrowserAskCard from './browser/BrowserAskCard';
+import BrowserAskCard, { PhoneBrowserAskCard } from './browser/BrowserAskCard';
 import { PendingAskBubble } from './PendingAskBubble';
 import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
+import { useReturnWarm } from '../hooks/use-return-warm';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { messageTimeMarks } from '../state/message-time-marks';
@@ -44,10 +46,13 @@ import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 
 // Matches the .jump-to-bottom exit transition in globals.css.
 const JUMP_FADE_MS = 180;
+/** Keys the browser scrolls the chat with by itself (ChatView only listens to note them). */
+const NATIVE_SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', ' ']);
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
+import { HistoryTopMarker, useHeldFlag } from './HistoryTopMarker';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -128,7 +133,19 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
+// The loading strip's workbench review states. 29.3 GB is the Z13's 27B model.
+const DEMO_INFO = { modelId: 'Qwen3.8-27B-UD-Q8_K_XL', sizeBytes: 29.3 * 1024 ** 3 };
+const DEMO_BASE = { modelState: 'loading' as const, modelInfo: DEMO_INFO, loadedBytes: null, loadExpectedMs: null, everResident: false, isThinking: false };
+const MODEL_LOADING_DEMOS: Record<string, Omit<React.ComponentProps<typeof ModelLoadingBar>, 'onReload' | 'ref'>> = {
+  '1': { ...DEMO_BASE, modelInfo: { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } },
+  reading: { ...DEMO_BASE, loadedBytes: 11.4 * 1024 ** 3 },
+  finishing: { ...DEMO_BASE, loadedBytes: 29.3 * 1024 ** 3 },
+  timed: { ...DEMO_BASE, loadExpectedMs: 14_000 },
+  unloaded: { ...DEMO_BASE, modelState: 'sleeping', everResident: true },
+};
+
 function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType, compact }: Props) {
+  const demoLoading = modelLoadingDemo ? workbenchModelLoading() : null; // workbench review only
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -202,6 +219,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         if (cancelled || !res?.ok || !Array.isArray(res.artifacts)) return;
         artifactDispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: res.artifacts });
       })
+      // WHY silent: a background pre-warm so inline file pills can resolve; nothing is waiting on it. The files drawer
+      // runs its own read and shows its own "Couldn't load this chat's files" notice with Try again when that one fails.
       .catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, sessionId, artifactDispatch]);
@@ -218,7 +237,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // intent-driven instead of observer-driven — the old IntersectionObserver
   // could not see a scroll that a streaming delta undid in the same frame.
   const {
-    atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
+    atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick, holdPosition, noteUserScroll,
   } = useStickToBottom(scrollContainerRef);
   useEffect(() => {
     if (!atBottom) { setJumpMounted(true); return; }
@@ -231,6 +250,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const chatRootRef = useRef<HTMLDivElement>(null);
   const queuedStripRef = useRef<HTMLDivElement>(null);
   const modelStatusRef = useRef<HTMLDivElement>(null);
+  // Coming back after the model went to sleep: load it and re-read this chat in the background (review deck Q-6).
+  useReturnWarm({ rootRef: chatRootRef, sessionId, visible, modelId: state.modelInfo?.modelId, modelState: state.modelState,
+    everResident: state.modelEverResident, isThinking: state.isThinking, load: (modelId, sid) => { void window.claude.models.load(modelId, sid); } });
   // Ctrl+F find-over-chat-history. Searches the message timeline (contentRef)
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
@@ -398,9 +420,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // the very same object (the reducer spreads the existing tail). Without this
     // identity check, loading older history yanked the view to the bottom whenever
     // the newest entry happened to be the user's — a jump, not a re-arm.
+    const prev = lastEntryRef.current as { kind?: string; pending?: boolean; message?: unknown } | undefined;
     const isNewBottomEntry = last !== lastEntryRef.current;
     lastEntryRef.current = last;
-    if (isNewBottomEntry && (last as { kind?: string } | undefined)?.kind === 'user') stickToBottom();
+    const tail = last as { kind?: string; message?: unknown } | undefined;
+    // WHY: the transcript's echo of a message already on screen REBUILDS that bubble (pending → confirmed, same
+    // `message` object, chat-reducer TRANSCRIPT_USER_MESSAGE). When another entry lands in the same batch the length
+    // changes too, and this used to read the echo as a fresh send and re-pin — yanking a reader who had scrolled up
+    // (or jumped to a quote) since sending back to the bottom. Only a genuinely new message re-arms.
+    const isEcho = prev?.kind === 'user' && prev.pending === true && tail?.message === prev.message;
+    if (isNewBottomEntry && tail?.kind === 'user' && !isEcho) stickToBottom();
     // state.timeline is intentionally not a dep — only its length matters here,
     // and the array identity changes on every reducer dispatch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -462,6 +491,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   /** The timer fires long after the closure that scheduled it went stale. */
   const loadOlderPageRef = useRef<() => void>(() => {});
 
+  // Card #134 r4: set only by a real failure of the CURRENT conversation's request; cleared by success, Try again, switching conversation.
+  const [olderFailed, setOlderFailed] = useHeldFlag(scrollContainerRef, prependAnchorRef, captureScrollAnchor);
+  const liveSessionRef = useRef(sessionId); liveSessionRef.current = sessionId;
   const loadOlderPage = useCallback(async () => {
     const cursor = history.cursor;
     if (!cursor || history.loading) return;
@@ -469,7 +501,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // Announce FIRST: `loading` is the one-in-flight guard, so a second sentinel
     // hit in the same frame must already see it set.
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
-    try {
+    const stillHere = () => liveSessionRef.current === sessionId;    try {
       const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: cursor });
       // Main could not LOCATE the transcript — NOT "this is the beginning of the
       // conversation". Recording it as a page would write hasMore:false and a
@@ -491,33 +523,35 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             unresolvedRetryRef.current.notBefore = 0;
             void loadOlderPageRef.current();
           }, delay);
-        }
+        } else if (stillHere()) { console.warn('[chat] older history could not be located after retries'); setOlderFailed(true); }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
         return;
       }
       if (page) {
-        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; if (stillHere()) setOlderFailed(false);
         // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
         // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
         dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true });
       } else {
+        if (stillHere()) { console.warn('[chat] older history request returned nothing'); setOlderFailed(true); }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
-    } catch {
-      // Clear the flag so the next scroll retries — a stuck `loading` would make
-      // the rest of the conversation permanently unreachable.
+    } catch (e) {
+      // FAILED clears `loading` (a stuck flag would make the rest of the conversation unreachable).
+      if (stillHere()) { console.warn('[chat] older history request failed:', e); setOlderFailed(true); }
       dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
     }
-  }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor]);
+  }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor, setOlderFailed]);
 
   useEffect(() => { loadOlderPageRef.current = loadOlderPage; });
+  useEffect(() => { setOlderFailed(false); }, [history.cursor, history.hasMore]); // refilled by something else: the old failure is moot
 
   // A pending retry belongs to the conversation that scheduled it. Switching
   // sessions (this component is reused per session id) must not fire it against
   // the new one, and must give the new one a full budget of its own.
   useEffect(() => {
-    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false);
     return () => {
       if (unresolvedTimerRef.current) clearTimeout(unresolvedTimerRef.current);
       unresolvedTimerRef.current = null;
@@ -525,7 +559,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [sessionId]);
 
   useEffect(() => {
-    if (!history.hasMore || history.loading || !history.cursor) return;
+    if (!history.hasMore || history.loading || !history.cursor || olderFailed) return;
     // No IntersectionObserver (an exotic WebView): fall back to nothing rather
     // than eagerly loading the whole conversation, which is the cost this
     // feature exists to avoid. There is NO scroll-handler backstop — this
@@ -542,7 +576,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [history.hasMore, history.loading, history.cursor, loadOlderPage]);
+  }, [history.hasMore, history.loading, history.cursor, loadOlderPage, olderFailed]);
 
   // Hold the reader's place across a prepended page. Runs BEFORE paint (useLayoutEffect), so the prepended
   // turns are never SEEN to push the view down, and keeps correcting for a short window afterwards because
@@ -601,7 +635,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       if (endAnchorWindowRef.current === end) endAnchorWindowRef.current = null;
     }
     endAnchorWindowRef.current = end;
-  }, [state.timeline]);
+  }, [state.timeline, olderFailed]);   // olderFailed: the notice box above the messages also holds the reader's place
   // WHY separate: the window must outlive later timeline changes (a streamed delta must not cut the
   // correction short), so the layout effect above has no cleanup of its own; only leaving the chat ends it.
   useEffect(() => () => { endAnchorWindowRef.current?.(); }, []);
@@ -726,6 +760,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // its own side — the yield has to happen here.
       if (document.activeElement?.closest('[data-game-keys]')) return;
       if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      // PageUp/PageDown/Home/End/Space scroll natively (no wheel, touch or arrow),
+      // so say so: they lift a quote-chip / Find hold, so reaching the bottom with
+      // End re-arms following. The upward ones also un-pin, like ArrowUp.
+      if (NATIVE_SCROLL_KEYS.has(e.key)) {
+        if (e.key === 'PageUp' || e.key === 'Home') releaseStick();
+        noteUserScroll();
+        return;
+      }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
 
       e.preventDefault();
@@ -742,6 +784,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // doesn't unstick: when already pinned it cannot move the container, so
       // no scroll event would fire to re-arm.
       if (direction < 0) releaseStick();
+      // ArrowDown is a hand scroll the hook cannot hear: it lifts a quote-chip /
+      // Find hold so arriving at the bottom re-arms following.
+      else noteUserScroll();
       container.scrollBy({ top: direction * scrollSpeed.current, behavior: 'auto' });
     };
 
@@ -760,7 +805,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // visit at the accelerated speed.
       scrollSpeed.current = 0;
     };
-  }, [visible, releaseStick]);
+  }, [visible, releaseStick, noteUserScroll]);
 
   // Ctrl/Cmd+F opens the chat-history find bar. Only the visible ChatView
   // responds (one per session is mounted). Defers to the artifact drawer's own
@@ -789,11 +834,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   useEffect(() => {
     if (!visible) return;
     const onJump = (e: Event) => {
-      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') releaseStick();
+      // holdPosition, not releaseStick (Destin, 2026-11-12: a chip in a message just sent "gets stuck to the bottom
+      // and pulls itself back down"): the quoted words are usually the reply right above, so the jump ends near the
+      // bottom, and a plain release re-armed there 90 ms later and followed the new reply away from the quote.
+      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') holdPosition();
     };
     window.addEventListener('youcoded:jump-to-ref', onJump);
     return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
-  }, [visible, releaseStick]);
+  }, [visible, holdPosition]);
 
   // The on-screen keyboard (Destin, 2026-11-02: "when keyboard is up, i can no longer see the very latest messages"): the
   // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows by the keyboard instead.
@@ -1002,7 +1050,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     observer.observe(el);
     update();
     return () => observer.disconnect();
-  }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelEverResident, state.isThinking]);
+  }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelLoadExpectedMs, state.modelEverResident, state.isThinking]);
 
   return (
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
@@ -1104,7 +1152,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               getEntryEl={getEntryEl}
               revealAndPin={folding.revealAndPin}
               unfoldNearViewport={folding.unfoldNearViewport}
-              releaseStick={releaseStick}
+              // WHY holdPosition, not releaseStick: a hit near the bottom must not
+              // re-pin the chat and let a streaming reply drag it away (same as
+              // the quote chip below; use-stick-to-bottom.ts holdRef).
+              releaseStick={holdPosition}
               onClose={() => setFindOpen(false)}
             />
           )}
@@ -1140,7 +1191,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             only while there IS older history, so reaching the beginning of the
             conversation stops the fetching for good. */}
         {history.hasMore && (
-          <div ref={historySentinelRef} data-history-sentinel className="h-px" aria-hidden="true" />
+          <HistoryTopMarker failed={olderFailed} sentinelRef={historySentinelRef} onRetry={() => { unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false); void loadOlderPage(); }} />
         )}
         {state.timeline.length === 0 && !state.isThinking ? null : (
           <>
@@ -1155,6 +1206,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // timeline instead, which threw away readable history to express a
               // context reset (Destin, 2026-07-28).
               const { index: lastArchiveIdx, kind: archiveKind } = archiveBoundary;
+              // Card #236: a sign-in card shows only while its reply is the last thing in the chat — it leaves
+              // as soon as the person sends another message (review round 2, R2-3), before any reply arrives.
+              let lastAssistantIdx = -1;
+              for (let i = presentation.timeline.length - 1; i >= 0; i--) {
+                const kind = presentation.timeline[i].kind;
+                if (kind === 'assistant-turn') { lastAssistantIdx = i; break; }
+                if (kind === 'user') break;
+              }
               return presentation.timeline.map((entry, idx) => {
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
@@ -1195,6 +1254,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     // "the model is writing this turn now". Lets a long open code fence be drawn in
                     // chunks only while that is true (MarkdownContent `live`).
                     streaming={isAssistant && !!turn && streamingTurnId === turn.id}
+                    latest={isAssistant && idx === lastAssistantIdx}
                     archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
                     archiveKind={archiveKind}
                     foldHeight={foldHeight}
@@ -1320,7 +1380,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             {/* The Browser's ask card (2026-10-13): the assistant is waiting on
                 the person — a site permission, a final step, "needs you", or a
                 browser download. Reads only this conversation's slice. */}
-            {browserSupported() && <BrowserAskCard sessionId={sessionId} />}
+            {browserSupported() ? <BrowserAskCard sessionId={sessionId} />
+              // A phone: the card the computer published (card #205).
+              : state.browserAsk && <PhoneBrowserAskCard sessionId={sessionId} prompt={state.browserAsk} />}
           </>
         )}
            </div>
@@ -1348,13 +1410,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               Games opens, outer-root centering would span the drawer as well. */}
           <ModelLoadingBar
             ref={modelStatusRef}
-            // Workbench-only sample; the normal model state still comes from chat.
-            modelState={modelLoadingDemo ? 'loading' : state.modelState}
-            modelInfo={modelLoadingDemo ? { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } : state.modelInfo}
-            loadedBytes={state.modelLoadedBytes}
-            everResident={state.modelEverResident}
-            isThinking={state.isThinking}
-            onReload={(modelId) => { void window.claude.models.load(modelId); }}
+            // Workbench-only samples (?modelLoading=…); the normal state still comes from chat.
+            {...(demoLoading
+              ? MODEL_LOADING_DEMOS[demoLoading] ?? MODEL_LOADING_DEMOS['1']
+              : { modelState: state.modelState, modelInfo: state.modelInfo, loadedBytes: state.modelLoadedBytes,
+                loadExpectedMs: state.modelLoadExpectedMs, everResident: state.modelEverResident, isThinking: state.isThinking })}
+            onReload={(modelId) => { void Promise.resolve(window.claude.models.load(modelId, sessionId)).catch((e) => announceFailed('reload the model', e)); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.

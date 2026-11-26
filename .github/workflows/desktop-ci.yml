@@ -149,11 +149,12 @@ jobs:
       fail-fast: false
       matrix:
         format: [AppImage, deb, rpm, pacman]
-    # WHY pinned (2026-11-10): GitHub moved ubuntu-latest from 24.04 to 26.04 between the morning and
-    # afternoon runs, and on 26.04 the rpm check fails for every branch and for master ("bsdtar:
-    # Unrecognized archive format" when unpacking the rpm we just built). 24.04 is the image these
-    # checks last passed on. Moving to 26.04 is a deliberate change with its own fix, not a surprise.
-    runs-on: ubuntu-24.04
+    # WHY unpinned again (card #247, 2026-11-11): these checks were pinned to 24.04 for a day because
+    # the rpm built on 26.04 failed to unpack. Cause, measured: 26.04 ships rpm 6, which builds the new
+    # "v6" rpm whose inner file list bsdtar cannot read; rpm's own rpm2cpio can (see ci-linux.mjs).
+    # The v6 rpm itself installed with dnf/zypper on Fedora 41, 42 and latest, Rocky 9, Alma 8,
+    # openSUSE Leap 15.6 and Tumbleweed (run 43126293184), so nothing ties us to the old image.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:

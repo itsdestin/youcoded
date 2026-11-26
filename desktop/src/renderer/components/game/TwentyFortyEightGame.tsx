@@ -68,7 +68,7 @@ const KEYS: Record<string, Direction> = {
 const FRAME_INSET = '2.6%'; // gap between the board's border and the grid
 const CELL_PAD = '1.6%';    // half the gap between two tiles
 
-export default function TwentyFortyEightGame({ onEnd, best, onExit }: SoloGameProps) {
+export default function TwentyFortyEightGame({ onEnd, best, onExit, onlineBestUnknown }: SoloGameProps) {
   const { reducedEffects } = useTheme();
   // Real play is unpredictable; the rules module never calls Math.random itself.
   const rng = useRef<Rng>(Math.random).current;
@@ -256,7 +256,7 @@ export default function TwentyFortyEightGame({ onEnd, best, onExit }: SoloGamePr
             score={game.score.toLocaleString()}
             // Same rule as Flappy: a zero is not a new best, and "Your best: 0"
             // is not a target worth printing.
-            isBest={game.score > 0 && game.score > (best ?? 0)}
+            isBest={!onlineBestUnknown && game.score > 0 && game.score > (best ?? 0)}
             best={best != null && best > 0 && game.score <= best ? best.toLocaleString() : undefined}
             onRetry={restart}
             onExit={onExit}

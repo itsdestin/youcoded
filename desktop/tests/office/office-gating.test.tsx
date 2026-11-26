@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-l
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
 import { officeHeaderAction, useOfficeHeaderAction } from '../../src/renderer/components/office/use-office-edit-screen';
 import { resetOfficeAvailabilityForTests, useOfficeAvailable } from '../../src/renderer/components/office/office-availability';
-import { markFailed, openDoc, resetOfficeStoreForTests } from '../../src/renderer/components/office/office-store';
+import { HOME_TAB, markFailed, openDoc, resetOfficeStoreForTests, selectTab } from '../../src/renderer/components/office/office-store';
 import { usePages } from '../../src/renderer/components/pages/use-pages';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../../src/renderer/components/artifact-views/ActiveArtifactView';
 import { OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
@@ -32,14 +32,14 @@ describe('the Office page', () => {
   it("says Office isn't included when this build has no Office, with nothing to retry", async () => {
     withOffice({ status: async () => ({ ...READY, available: false }) });
     const { findByText, queryByRole } = render(<OfficeView />);
-    expect(await findByText(/isn.t included/i)).toBeTruthy();
+    expect(await findByText("Office isn't included in this build.")).toBeTruthy();
     expect(queryByRole('button', { name: /try again/i })).toBeNull();
   });
 
   it('says the same when the host refuses Office (the remote browser, the phone)', async () => {
     withOffice({ status: () => Promise.reject(new Error('remote-unsupported: office:status')) });
     const { findByText, queryByRole } = render(<OfficeView />);
-    expect(await findByText(/isn.t included/i)).toBeTruthy();
+    expect(await findByText("Office isn't included in this build.")).toBeTruthy();
     expect(queryByRole('button', { name: /try again/i })).toBeNull();
   });
 
@@ -47,7 +47,7 @@ describe('the Office page', () => {
     const status = vi.fn(async () => READY);
     withOffice({ status });
     const { findByText } = render(<OfficeView projectRoot="/home/you/Projects/garden" />);
-    await findByText(/show up here/i);
+    await findByText(/will show up here/i);
     expect(status).toHaveBeenCalledWith('/home/you/Projects/garden');
   });
 
@@ -55,7 +55,7 @@ describe('the Office page', () => {
     const status = vi.fn(async () => READY);
     withOffice({ status });
     const { findByText, rerender } = render(<OfficeView visible />);
-    await findByText(/show up here/i);
+    await findByText(/will show up here/i);
     expect(status).toHaveBeenCalledTimes(1);
     rerender(<OfficeView visible={false} />);
     expect(status).toHaveBeenCalledTimes(1);
@@ -63,6 +63,25 @@ describe('the Office page', () => {
     status.mockResolvedValueOnce({ ...READY, recent: [FILE] });
     rerender(<OfficeView visible />);
     expect(await findByText('plan.docx')).toBeTruthy();
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks for Recent again when the Home tab comes back from a document tab', async () => {
+    const status = vi.fn(async () => READY);
+    withOffice({
+      status,
+      open: async () => ({ ok: true as const, token: 't1', origin: 'office://t1' }),
+      invoke: async () => null,
+      close: async () => {},
+    });
+    const { findByText } = render(<OfficeView visible />);
+    await findByText(/will show up here/i);
+    expect(status).toHaveBeenCalledTimes(1);
+    // The page never hides here — only its tab changes — so `visible` alone would miss this.
+    act(() => openDoc(FILE));
+    status.mockResolvedValueOnce({ ...READY, recent: [FILE] });
+    act(() => selectTab(HOME_TAB));
+    expect(await findByText('plan')).toBeTruthy();
     expect(status).toHaveBeenCalledTimes(2);
   });
 
@@ -75,7 +94,7 @@ describe('the Office page', () => {
     const { findByText, getByText, queryByText } = render(<OfficeView projectRoot="/home/you/Projects/garden" />);
     // Nothing has answered yet: New and Open are already there.
     expect(getByText('Document')).toBeTruthy();
-    expect(getByText('Open a file…')).toBeTruthy();
+    expect(getByText('Browse files')).toBeTruthy();
     act(() => answerRecent({ ...READY, recent: [FILE] }));
     expect(await findByText('plan.docx')).toBeTruthy();
     expect(queryByText('In garden')).toBeNull();
@@ -113,7 +132,7 @@ describe('the Office page', () => {
     const create = vi.fn(async () => ({ ok: false as const, message: "Office can't create files in this protected folder." }));
     withOffice({ status: async () => READY, create });
     const { findByText, getByText, getByRole, queryByRole } = render(<OfficeView />);
-    await findByText(/show up here/i);
+    await findByText(/will show up here/i);
     fireEvent.click(getByText('Document'));
     expect(await findByText("Office can't create files in this protected folder.")).toBeTruthy();
     // Specific and known: Retry, and no bug report.
@@ -126,10 +145,10 @@ describe('the Office page', () => {
   it('says New failed without guessing why when the request itself fails, and offers a bug report', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     withOffice({ status: async () => READY, create: async () => { throw new Error('ipc gone'); } });
-    const { findByText, findByRole, getByText, getByRole } = render(<OfficeView />);
-    await findByText(/show up here/i);
+    const { findByText, getByText, getByRole } = render(<OfficeView />);
+    await findByText(/will show up here/i);
     fireEvent.click(getByText('Spreadsheet'));
-    expect(await findByRole('alert')).toBeTruthy();
+    expect(await findByText("Office couldn't create a new file.")).toBeTruthy();
     expect(getByRole('button', { name: /report/i })).toBeTruthy();
     expect(quiet).toHaveBeenCalled();
     quiet.mockRestore();
@@ -138,10 +157,10 @@ describe('the Office page', () => {
   it('says Open failed when the picker cannot be shown', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     withOffice({ status: async () => READY, pick: async () => { throw new Error('no window'); } });
-    const { findByText, findByRole, getByText, getByRole } = render(<OfficeView />);
-    await findByText(/show up here/i);
-    fireEvent.click(getByText('Open a file…'));
-    expect(await findByRole('alert')).toBeTruthy();
+    const { findByText, getByText, getByRole } = render(<OfficeView />);
+    await findByText(/will show up here/i);
+    fireEvent.click(getByText('Browse files'));
+    expect(await findByText("Office couldn't open the file picker.")).toBeTruthy();
     expect(getByRole('button', { name: /try again/i })).toBeTruthy();
     quiet.mockRestore();
   });

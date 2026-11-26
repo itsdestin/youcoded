@@ -8,6 +8,7 @@ import path from 'path';
 import type { SpaceSyncEvent, SyncSpace, SyncTransport } from './types';
 import { DEFAULT_IGNORED_DIR_NAMES } from './guards';
 import { REPO_CORRUPT_ERROR_CODE, REPO_REPAIR_FAILED_ERROR_CODE } from '../sync-error-classifier';
+import { formatBytes, formatMbWhole } from '../../shared/format-bytes';
 
 interface EngineOpts {
   debounceMs?: number;  // default 15s (spec §8)
@@ -391,7 +392,7 @@ export class SpaceSyncEngine {
               this.warnedLargeSpaces.add(space.id);
               // WHY MB/GB (Destin, 2026-11-01: "show mb/gb so it makes more sense to normal users"): "3775 MiB" read as jargon.
               // Decimal units, the way phones and file managers show sizes.
-              const shown = size >= 1e9 ? `${(size / 1e9).toFixed(1)} GB` : `${Math.round(size / 1e6)} MB`;
+              const shown = size >= 1e9 ? formatBytes(size) : formatMbWhole(size); // same 1000-based numbers, now from the shared helper (card #143)
               this.onEvent({ type: 'notice', spaceId: space.id, message: `Sync history for ${space.id} is large (${shown}). Sync still works normally.` });
             }
           }

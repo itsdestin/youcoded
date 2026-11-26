@@ -4,6 +4,7 @@ import { ChatState, ChatAction, createSessionChatState } from '../src/renderer/s
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import type { TranscriptEvent, DataOf } from '../src/shared/types';
 import { ev as mkEv } from './helpers/transcript-events';
+import { parseTranscriptLine } from '../src/main/transcript-watcher';
 
 const SESSION = 'test-session';
 
@@ -231,6 +232,81 @@ describe('TRANSCRIPT_* reducer actions', () => {
     if (userEntries[0].kind === 'user') {
       expect(userEntries[0].message.content).toBe('hello from remote');
     }
+  });
+});
+
+describe("Claude Code's resume placeholder after a crash", () => {
+  // WHY (Destin, 2026-11-23): a reply cut off by a PC restart, then a new message on resume.
+  // Claude Code writes "No response requested." before that message; the chat must show no bubble
+  // for it and mark the cut-off reply "Interrupted." instead. Line order is the real one: Claude Code
+  // also writes a hidden "Continue from where you left off." line just before the placeholder.
+  const userLine = (uuid: string, content: string) => ({ type: 'user', promptId: `p-${uuid}`, uuid, timestamp: '2026-11-23T19:00:00.000Z', message: { role: 'user', content } });
+  const cutOff = [
+    userLine('u1', 'check the deck'),
+    { type: 'assistant', uuid: 'a1', timestamp: '2026-11-23T19:00:01.000Z', message: { model: 'claude-opus-5-5', role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'text', text: 'Looking now.' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+  ];
+  const finished = [
+    userLine('u1', 'check the deck'),
+    { type: 'assistant', uuid: 'a1', timestamp: '2026-11-23T19:00:01.000Z', message: { model: 'claude-opus-5-5', role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'All done.' }] } },
+  ];
+  const hiddenContinue = { type: 'user', isMeta: true, uuid: 'meta', timestamp: '2026-11-23T19:44:00.000Z', message: { role: 'user', content: 'Continue from where you left off.' } };
+  const placeholder = { type: 'assistant', uuid: 'ph', timestamp: '2026-11-23T19:44:00.000Z', message: { model: '<synthetic>', role: 'assistant', stop_reason: 'stop_sequence', usage: { input_tokens: 0, output_tokens: 0 }, content: [{ type: 'text', text: 'No response requested.' }] } };
+  const NEW_PROMPT = 'pc crashed. please continue as you were';
+  const newPrompt = userLine('u2', NEW_PROMPT);
+
+  const eventsOf = (lines: object[]) => lines.flatMap((l) => parseTranscriptLine(JSON.stringify(l), SESSION) as TranscriptEvent[]);
+  const live = (state: ChatState, lines: object[]) => eventsOf(lines).reduce((s, e) => eventToAction(e, { live: true }).reduce(dispatch, s), state);
+  // A reopened chat: its history arrives as a page, merged into the (empty) live session.
+  const reopened = (lines: object[]) => dispatch(initState(), { type: 'HISTORY_PAGE_LOADED', sessionId: SESSION, events: eventsOf(lines), reconcileInterrupted: true, cursor: null, hasMore: false });
+  const firstReply = (state: ChatState) => {
+    const session = state.get(SESSION)!;
+    const entry = session.timeline.find((e) => e.kind === 'assistant-turn');
+    return entry?.kind === 'assistant-turn' ? session.assistantTurns.get(entry.turnId)! : null;
+  };
+
+  it('hides the placeholder and marks the cut-off reply Interrupted when all of it is history', () => {
+    let state = initState();
+    for (const event of eventsOf([...cutOff, hiddenContinue, placeholder, newPrompt])) {
+      for (const action of eventToAction(event, { live: false })) state = dispatch(state, action);
+    }
+    const session = state.get(SESSION)!;
+    expect(session.timeline.filter((e) => e.kind === 'assistant-turn')).toHaveLength(1);
+    expect(firstReply(state)!.stopReason).toBe('interrupted');
+    expect(firstReply(state)!.segments.flatMap((s) => (s.type === 'text' ? [s.content] : []))).not.toContain('No response requested.');
+    expect(session.timeline.filter((e) => e.kind === 'user')).toHaveLength(2);
+    expect(session.isThinking).toBe(true);
+  });
+
+  it('marks the cut-off reply when the placeholder arrives live after the chat is reopened', () => {
+    let state = reopened(cutOff);
+    expect(firstReply(state)!.stopReason).toBeNull();
+    state = live(state, [hiddenContinue, placeholder]);
+    expect(firstReply(state)!.stopReason).toBe('interrupted');
+    expect(state.get(SESSION)!.timeline.filter((e) => e.kind === 'assistant-turn')).toHaveLength(1);
+  });
+
+  it('marks it too when the new message was typed before the placeholder arrived, and keeps that message thinking', () => {
+    let state = reopened(cutOff);
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: NEW_PROMPT, timestamp: 5000 });
+    state = live(state, [hiddenContinue, placeholder, newPrompt]);
+    const session = state.get(SESSION)!;
+    expect(firstReply(state)!.stopReason).toBe('interrupted');
+    const users = session.timeline.filter((e) => e.kind === 'user');
+    expect(users).toHaveLength(2);
+    expect(users.every((e) => e.kind === 'user' && !e.pending)).toBe(true);
+    expect(session.isThinking).toBe(true);
+  });
+
+  it('leaves a reply that finished normally alone', () => {
+    const state = live(reopened(finished), [hiddenContinue, placeholder]);
+    expect(firstReply(state)!.stopReason).toBe('end_turn');
+  });
+
+  it('never marks an older reply when Stop is pressed before the next reply starts', () => {
+    let state = reopened(cutOff);
+    state = live(state, [newPrompt]);
+    state = dispatch(state, { type: 'TRANSCRIPT_INTERRUPT', sessionId: SESSION, uuid: 'esc', timestamp: 6000, kind: 'plain' });
+    expect(firstReply(state)!.stopReason).toBeNull();
   });
 });
 

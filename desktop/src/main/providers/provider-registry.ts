@@ -19,6 +19,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { ProviderConfig, ProviderStatus, ModelBinding } from '../../shared/provider-types';
 import type { LocalEngineHook } from '../engine/engine-manager';
+import { slotField } from '../engine/slot-pins';
 import { NativeHome } from '../native-home';
 import { SecretsStore } from './secrets-store';
 import type { ChatGptAuth } from './chatgpt-auth';
@@ -213,6 +214,8 @@ export class ProviderRegistry {
         baseUrl: nextBaseUrl,
         secretRef: nextSecretRef,
         enabled: input.enabled ?? existing?.enabled ?? true,
+        // A row edit must not forget how it was connected (unless its key was just dropped).
+        ...(existing?.connectedVia && nextSecretRef ? { connectedVia: existing.connectedVia } : {}),
       };
       if (existing) {
         file.providers = file.providers.map((p) => (p.id === id ? next : p));
@@ -255,7 +258,7 @@ export class ProviderRegistry {
 
   /** Save (or rotate) a provider's API key. Rotation reuses the existing
    *  secretRef so the providers.json pointer never needs rewriting. */
-  async setKey(id: string, plaintext: string): Promise<void> {
+  async setKey(id: string, plaintext: string, via: 'key' | 'browser' = 'key'): Promise<void> {
     if (VIRTUAL_IDS.has(id)) throw new Error(CHATGPT_NOT_A_KEY_MESSAGE);
     const entry = this.readAll().find((p) => p.id === id);
     if (!entry) {
@@ -276,6 +279,9 @@ export class ProviderRegistry {
       const live = file.providers.find((p) => p.id === id);
       if (live) {
         live.secretRef = ref;
+        // WHY (card #236): remember HOW it was connected so the sign-in card offers only that way back.
+        // Only OpenRouter has two ways in; other key rows are always pasted.
+        if (live.type === 'openrouter') live.connectedVia = via;
         found = true;
       }
       return file;
@@ -315,7 +321,7 @@ export class ProviderRegistry {
    *  models) and openai (prompt_cache_key) — see prompt-cache.ts. A caller without one gets none of them. */
   async languageModel(
     binding: ModelBinding,
-    opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
+    opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string; helper?: boolean },
   ): Promise<LanguageModel> {
     // WHY wrap only with a cacheKey: the registry's structural tests reach the
     // inner SDK model's `config` (metadataExtractor, transformRequestBody) on
@@ -364,6 +370,10 @@ export class ProviderRegistry {
         // prefill-progress.ts for why this rides a fetch wrapper rather than the
         // SDK's stream.
         const engine = this.localEngine;
+        // Each chat keeps its own engine slot, so chats stop re-reading each
+        // other's openings (engine/slot-pins.ts); no key = the shared spare slot.
+        // `helper`: a helper agent never takes a chat's slot (slot-pins.ts).
+        const slot = engine.slotFor?.(binding.modelId, opts?.cacheKey, opts?.helper);
         const localFetch = withPrefillProgress(
           engine.fetchImpl(),
           opts?.onPrefillProgress,
@@ -392,10 +402,10 @@ export class ProviderRegistry {
           // ONE transformRequestBody for BOTH hooks — the SDK accepts a single
           // function, so two `...(cond ? {transformRequestBody} : {})` spreads
           // would silently overwrite each other. Still attached only when
-          // something actually needs it: with neither flag set the request body
+          // something actually needs it: with none of them set (no slot = a fake engine) the request body
           // must stay byte-identical to the SDK's default (pinned by
           // provider-registry.test.ts).
-          ...(opts?.serialToolCalls || opts?.onPrefillProgress
+          ...(opts?.serialToolCalls || opts?.onPrefillProgress || slot !== undefined
             ? {
               transformRequestBody: (b: Record<string, any>) => ({
                 ...b,
@@ -408,6 +418,7 @@ export class ProviderRegistry {
                 // keys, so this degrades to "no progress reported" rather than
                 // failing the request.
                 ...(opts?.onPrefillProgress ? { return_progress: true } : {}),
+                ...slotField(slot),
               }),
             }
             : {}),

@@ -128,3 +128,47 @@ async function addNow(userData: string, file: OfficeFile, opts: RecentOptions): 
 export async function list(userData: string, opts: RecentOptions = {}): Promise<OfficeFile[]> {
   return stillThere((await read(userData)).files, opts);
 }
+
+/** Change the list under the same casWrite-with-retries pattern as add(). `change` gets what is on
+ *  disk and returns the new list, or null for "nothing to write". WHY not pruned with stillThere:
+ *  these edits (rename, forget) must be quick and touch only the entry the person acted on. */
+async function updateNow(userData: string, change: (files: OfficeFile[]) => OfficeFile[] | null): Promise<void> {
+  for (let i = 0; i < MAX_TRIES; i++) {
+    const { files, expect } = await read(userData);
+    const changed = change(files);
+    if (!changed) return;
+    const next: Stored = {
+      updatedAt: `${new Date().toISOString()}#${process.pid}.${Math.random().toString(36).slice(2, 10)}`,
+      files: changed,
+    };
+    const r = await casWrite(target(userData), expect, JSON.stringify(next, null, 2), extractUpdatedAt);
+    if (r.committed) return;
+  }
+  log('WARN', 'Office', 'Recent list could not be updated (kept being changed elsewhere)');
+}
+
+/** Take a file out of Recent. Matches any of `paths` (the real path, and the path as it was
+ *  stored, in case the file is gone and cannot be resolved). The file itself is never touched. */
+export function forget(userData: string, paths: string[]): Promise<void> {
+  const run = queue.then(() => updateNow(userData, (files) => {
+    const kept = files.filter((f) => !paths.includes(f.path));
+    return kept.length === files.length ? null : kept;
+  }));
+  queue = run.catch(() => {});
+  return run;
+}
+
+/** A renamed file keeps its place in Recent: the entry at `oldPaths` becomes `file`, same position
+ *  and same "opened" time. A file that was not in Recent is NOT added (rename is not an open). */
+export function replaceEntry(userData: string, oldPaths: string[], file: OfficeFile): Promise<void> {
+  const run = queue.then(() => updateNow(userData, (files) => {
+    const i = files.findIndex((f) => oldPaths.includes(f.path));
+    if (i < 0) return null;
+    // WHY the old `at` kept: Recent is ordered by when it was opened, and renaming is not opening.
+    const swapped = files.map((f, j) => (j === i ? { ...file, at: f.at } : f));
+    // Never two rows for one path (the new name could already have been listed).
+    return swapped.filter((f, j) => j === i || f.path !== file.path);
+  }));
+  queue = run.catch(() => {});
+  return run;
+}

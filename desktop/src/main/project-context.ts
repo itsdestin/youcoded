@@ -6,6 +6,7 @@ import { discoverContext, RuleEntry } from './project/context-discovery';
 import { ccProjectSlug } from './slug-encoding';
 import { RECOGNIZED_INSTRUCTION_FILES, ContextGroup, ContextFile } from '../shared/project-context-types';
 import { canonicalize } from '../shared/artifacts/canonicalize';
+import { formatBytes as formatBytesShared } from '../shared/format-bytes';
 
 const HOME = os.homedir();
 const CLAUDE_DIR = path.join(HOME, '.claude');
@@ -114,11 +115,8 @@ export async function listContext(projectPath: string, opts?: { refusePrivate?: 
   return groups;
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
+// 1000-based, shared (card #143, Destin 2026-11-12).
+const formatBytes = formatBytesShared;
 
 // First useful line of a context file → a plain-language description. Prefers a
 // frontmatter `description:` (common in rule files), else the first non-empty,

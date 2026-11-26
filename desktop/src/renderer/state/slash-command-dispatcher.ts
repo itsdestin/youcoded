@@ -20,6 +20,7 @@ import { buildCopyPayload } from '../utils/extract-copy-blocks';
 import { copyText } from '../components/context-menu/clipboard';
 import { claudeAliasForModelId, type ClaudeAlias } from '../../shared/model-ids';
 import { getCapabilities } from '../platform';
+import { reportFailure } from '../utils/report-failure';
 
 /** The host keeps a record and draws the shared lines itself (one-core R5-4a): this screen must not draw them as well. */
 const hostDraws = (): boolean => getCapabilities().sessionRecord;
@@ -255,12 +256,18 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       // Persist fast/effort local state (fire-and-forget) so chips update.
       const modesApi = (window as any).claude?.modes;
       if (cmd === '/fast' && modesApi) {
-        const on = /^on|true|1$/i.test(args.trim());
-        modesApi.set({ fast: on }).catch(() => {});
+        // WHY the group (R-1 review 2026-11-18): the old /^on|true|1$/i read as "starts with on, contains true, or
+        // ends with 1", so "/fast only" or "/fast version-1" turned Fast mode on. Only an exact on / true / 1 does.
+        const on = /^(on|true|1)$/i.test(args.trim());
+        // WHY a pop-up on failure (R-1, Destin H-1): the chip follows the saved value, so a failed save used to
+        // leave it silently out of step with what Claude Code was just told.
+        Promise.resolve(modesApi.set({ fast: on })).catch((cause: unknown) =>
+          reportFailure({ what: 'save Fast mode', cause, where: 'slash-command-dispatcher./fast', show: 'toast' }));
       } else if (cmd === '/effort' && modesApi) {
         const lvl = args.trim().toLowerCase();
         if (['low', 'medium', 'high', 'max', 'auto'].includes(lvl)) {
-          modesApi.set({ effort: lvl }).catch(() => {});
+          Promise.resolve(modesApi.set({ effort: lvl })).catch((cause: unknown) =>
+            reportFailure({ what: 'save the effort level', cause, where: 'slash-command-dispatcher./effort', show: 'toast' }));
         }
       }
       if (cmd === '/fast' || cmd === '/effort') {

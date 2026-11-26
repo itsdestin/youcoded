@@ -15,6 +15,8 @@
 // tabs are filled by later tasks. The project-deletion modal + project list stay
 // here (project-scoped). The "+ Add external file" affordance moved into
 // FilesTab (artifact-scoped) since it operates on the active project's artifacts.
+import { plainMessage, isUnsupportedHere } from '../../utils/ipc-error';
+import { announceFailed } from '../../utils/announce';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -38,7 +40,7 @@ import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
 import type { ResumeHandler } from '../ResumeOptions';
-import { ProjectHero, formatFileCount } from './ProjectHero';
+import { ProjectHero, formatFileCount, formatCount } from './ProjectHero';
 import { ProjectsEmptyCard } from './ProjectsEmptyCard';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
@@ -63,8 +65,8 @@ interface HeroStats {
   files: number | null;
   // Discovery hit a cap — render "N+" so a sample never poses as exact.
   filesTruncated?: boolean;
-  conversations: number;
-  contextFiles: number;
+  conversations: number | null;
+  contextFiles: number | null;
   activeLabel: string;
 }
 interface HeroRepo { webUrl?: string; owner?: string; name?: string }
@@ -86,11 +88,12 @@ function readStoredFileView(): FileViewMode {
     return localStorage.getItem(FILE_VIEW_KEY) === 'list' ? 'list' : 'grid';
   } catch { return 'grid'; } // storage blocked (some Android WebView configs)
 }
-import { Button, SearchFilterPill } from '../ui';
+import { Button, SearchFilterPill, ErrorState } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { readStoredShowHidden, storeShowHidden } from './hidden-files';
 import { getCapabilities } from '../../platform';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { Tooltip } from '../ui';
 
 interface ProjectViewProps {
   // cwd of the conversation that is focused RIGHT NOW (undefined on the welcome
@@ -217,6 +220,10 @@ export function ProjectView(props: ProjectViewProps) {
   // (ProjectsEmptyCard) would flash on every open for the beat before the
   // index answers. False until phase 1 of the load below resolves.
   const [indexLoaded, setIndexLoaded] = useState(false);
+  // Card #134 round 4: the first read of the project list failed (rejected or answered not-ok). Set only by the NEWEST open's
+  // first read, cleared by any successful read and on close; Try again bumps `indexTry` to re-run the open effect.
+  const [indexFailed, setIndexFailed] = useState(false);
+  const [indexTry, setIndexTry] = useState(0);
   const [activeProject, setActiveProject] = useState<CentralIndexProject | null>(null);
   // Latest focused-conversation cwd, held in a ref so the load effect can read
   // it WITHOUT depending on it. A dep would re-run the whole open-time load —
@@ -295,6 +302,8 @@ export function ProjectView(props: ProjectViewProps) {
   const [currentRelDir, setCurrentRelDir] = useState('');
   // WHY: FilesTab is memoised; inline closures here would defeat it on every render.
   const onFilesMutated = useCallback(() => setCountsKey((k) => k + 1), []);
+  // Try again for a failed conversations / context list: the same re-read a file change triggers.
+  const retryProjectLists = useCallback(() => setCountsKey((k) => k + 1), []);
   const onFilesClearSearch = useCallback(() => setArtifactSearch(''), []);
   // WHY: ProjectView is the ONE reader of the app-wide file state for this screen.
   // FilesTab is handed only the single value it shows, so any render of this
@@ -335,6 +344,11 @@ export function ProjectView(props: ProjectViewProps) {
   const prevHeroProjectRef = useRef<string | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[] | null>(null);
   const [context, setContext] = useState<ContextGroup[] | null>(null);
+  // WHY (error inventory 2026-09-10, Projects row 8): a failed read of a project's conversations or
+  // context files was turned into an empty list, so the tabs said "No conversations in this project
+  // yet." / "No context files found for this project." - false. The reason is kept and shown.
+  const [convError, setConvError] = useState<string | null>(null);
+  const [ctxError, setCtxError] = useState<string | null>(null);
 
   // Project switcher palette state (rendered at the bottom of this component).
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -405,10 +419,13 @@ export function ProjectView(props: ProjectViewProps) {
     // stale `true` from the last open would let the empty card render off the
     // previous list for a beat before this open's answer arrives.
     setIndexLoaded(false);
+    setIndexFailed(false);
     // Phase 1: fast list (sidecar-only counts) so the list/switcher appears
     // instantly and a project is selected without waiting on disk scans.
     (window.claude as any).artifacts.listProjectsIndex().then((res: any) => {
-      if (cancelled || !res?.ok) return;
+      if (cancelled) return;
+      // WHY: a refused read used to leave "Select a project" with no hint the list never arrived.
+      if (!res?.ok) { console.warn('[project-view] project list refused:', res?.error); setIndexFailed(true); return; }
       setProjects(res.projects);
       setIndexLoaded(true);
       // Every open re-homes to the focused conversation's project. Destin's
@@ -426,9 +443,13 @@ export function ProjectView(props: ProjectViewProps) {
         if (cancelled || !res2?.ok) return;
         setProjects(res2.projects);
       }).catch(() => { /* the fast list above already shows; reopening or a reconnect asks again */ });
-    }).catch(() => { /* reopening the view, or a remote reconnect (below), asks again */ });
+    }).catch((e: unknown) => {
+      // Reopening, Try again, or a remote reconnect (below) asks again.
+      // WHY (round-4 final review): an older computer that lacks this list answers "not available here"; that is not a failure.
+      if (!cancelled) { console.warn('[project-view] project list failed:', e); if (!isUnsupportedHere(e)) setIndexFailed(true); }
+    });
     return () => { cancelled = true; };
-  }, [projectViewOpen]);
+  }, [projectViewOpen, indexTry]);
 
   // After a remote reconnect, an open Project View asks again for its project list and
   // the chosen project's conversations and counts. WHY: each was read once per open, so a
@@ -444,6 +465,7 @@ export function ProjectView(props: ProjectViewProps) {
     ctxCache.current.clear();
     Promise.resolve((window.claude as any).artifacts.listProjectsIndex({ withCounts: true })).then((res: any) => {
       if (!res?.ok) return;
+      setIndexFailed(false);
       setProjects(res.projects);
       setIndexLoaded(true);
       setActiveProject((prev) => prev
@@ -483,6 +505,8 @@ export function ProjectView(props: ProjectViewProps) {
       setHeroRepo(null);
       setConversations(convCache.current.get(id) ?? null);
       setContext(ctxCache.current.get(id) ?? null);
+      setConvError(null);
+      setCtxError(null);
       // Filters describe ONE project's grid — a stale query/type from the last
       // project silently hiding the new project's files is a confusion trap.
       // Sort is a preference, not a filter, so it persists.
@@ -494,25 +518,41 @@ export function ProjectView(props: ProjectViewProps) {
     // Cache-or-fetch helpers — the cache makes re-selecting a project / toggling
     // tabs instant; the bounded head-read in listProjectConversations keeps the
     // first fetch cheap (no full-transcript parse per session).
+    // Whether THIS pass's read failed — the hero must say "—", not "0 conversations", beside the notice.
+    let convFailed = false;
+    let ctxFailed = false;
     const getConversations = async (): Promise<ConversationSummary[]> => {
       const cached = convCache.current.get(id);
       if (cached) return cached;
       try {
         const res = await (window.claude as any).project.listConversations(path);
-        const list: ConversationSummary[] = res?.ok ? (res.conversations ?? []) : [];
+        if (!res?.ok) throw new Error(typeof res?.error === 'string' ? res.error : 'the list was refused');
+        const list: ConversationSummary[] = res.conversations ?? [];
         convCache.current.set(id, list);
+        if (!cancelled) setConvError(null);
         return list;
-      } catch { return []; }
+      } catch (e) {
+        // Not cached: a failure must not stand for the whole open, so Try again really re-reads.
+        convFailed = true;
+        if (!cancelled) setConvError(plainMessage(e, 'the list did not come back'));
+        return [];
+      }
     };
     const getContext = async (): Promise<ContextGroup[]> => {
       const cached = ctxCache.current.get(id);
       if (cached) return cached;
       try {
         const res = await (window.claude as any).project.listContext(path);
-        const groups: ContextGroup[] = res?.ok ? (res.groups ?? []) : [];
+        if (!res?.ok) throw new Error(typeof res?.error === 'string' ? res.error : 'the list was refused');
+        const groups: ContextGroup[] = res.groups ?? [];
         ctxCache.current.set(id, groups);
+        if (!cancelled) setCtxError(null);
         return groups;
-      } catch { return []; }
+      } catch (e) {
+        ctxFailed = true;
+        if (!cancelled) setCtxError(plainMessage(e, 'the list did not come back'));
+        return [];
+      }
     };
     // 2026-07-23: the hero's separate "N artifacts" stat was dropped when the
     // Artifacts tab merged into Files, so the getArtifactCount() helper that fed
@@ -533,8 +573,8 @@ export function ProjectView(props: ProjectViewProps) {
         if (res?.gated) return { count: null, truncated: false };
         return res?.ok && Array.isArray(res.files)
           ? { count: res.files.length, truncated: !!res.truncated }
-          : { count: 0, truncated: false };
-      } catch { return { count: 0, truncated: false }; }
+          : { count: null, truncated: false };
+      } catch { return { count: null, truncated: false }; }
     };
 
     (async () => {
@@ -551,10 +591,11 @@ export function ProjectView(props: ProjectViewProps) {
       setContext(ctxGroups);
 
       // Hero counts (live — NOT the stale stored stats.artifactCount).
-      const conversationCount = convs.length;
+      const conversationCount = convFailed ? null : convs.length;
       const newest = convs[0]?.lastModified; // listPastSessions is newest-first
-      const activeLabel = typeof newest === 'number' ? formatRelativeTime(newest) : 'never';
-      const contextFiles = ctxGroups.reduce((acc, g) => acc + (g.files?.length ?? 0), 0);
+      // "never" would also be false when the read failed: say "—" (card #134).
+      const activeLabel = convFailed ? '—' : typeof newest === 'number' ? formatRelativeTime(newest) : 'never';
+      const contextFiles = ctxFailed ? null : ctxGroups.reduce((acc, g) => acc + (g.files?.length ?? 0), 0);
       const repo: HeroRepo | null = repoRes?.hasRepo && repoRes.webUrl
         ? { webUrl: repoRes.webUrl, owner: repoRes.owner, name: repoRes.name }
         : null;
@@ -671,9 +712,12 @@ export function ProjectView(props: ProjectViewProps) {
           (p: CentralIndexProject) => p.path.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase()
         );
         if (added) setActiveProject(added);
+      } else {
+        announceFailed('refresh the project list', res?.error);
       }
     } catch (err) {
-      console.warn('post-add project list refresh failed', err);
+      // The project WAS added; only the list on screen may be behind. Saying so is true; re-opening the view refreshes it.
+      announceFailed('refresh the project list', err);
     }
   };
 
@@ -761,8 +805,10 @@ export function ProjectView(props: ProjectViewProps) {
     if (!activeProject || !pendingImport) return;
     const destDir = importDestDir();
     const sources = pendingImport.sources;
+    // Card #134 round 4: one file's call REJECTING used to abort the whole batch silently (dialog stuck, nothing said). It is now
+    // that file's own line in the result dialog, with the real message; the other files' outcomes still show.
     const results = await Promise.all(sources.map((p) =>
-      (window.claude as any).artifacts.importFile(activeProject.path, p, destDir, {
+      Promise.resolve((window.claude as any).artifacts.importFile(activeProject.path, p, destDir, {
         mode,
         onCollision,
         // Forward the EXACT collision list the dialog named. Main applies
@@ -771,7 +817,7 @@ export function ProjectView(props: ProjectViewProps) {
         // back to keep-both instead of silently overwriting a file the user was
         // never shown. See artifacts/import-file.ts.
         disclosedCollisions: pendingImport.collisions,
-      })));
+      })).catch((e: unknown) => ({ ok: false, error: plainMessage(e, 'The import did not complete') }))));
     // Surface the REAL failure (code + path) — never a guessed cause. See
     // describeImportFailure above for the two codes that need human wording.
     // Results are index-aligned with `sources` (Promise.all preserves order),
@@ -803,12 +849,12 @@ export function ProjectView(props: ProjectViewProps) {
   // merge; see the file-merge spec).
   const SEGMENTS: { id: TabId; label: string; icon: React.ReactNode; count: string }[] = [
     { id: 'files', label: 'Files', icon: <FolderIcon />, count: formatFileCount(heroStats.files, heroStats.filesTruncated) },
-    { id: 'conversations', label: 'Conversations', icon: <ChatIcon />, count: String(heroStats.conversations) },
+    { id: 'conversations', label: 'Conversations', icon: <ChatIcon />, count: formatCount(heroStats.conversations) },
     // WHY "Instructions & memories" (not "Context", which it was built as): the
     // tab surfaces the files that tell the assistant HOW to behave — instructions
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
-    { id: 'context', label: 'Instructions & memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
+    { id: 'context', label: 'Instructions & memories', icon: <DocIcon />, count: formatCount(heroStats.contextFiles) },
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
@@ -920,9 +966,11 @@ export function ProjectView(props: ProjectViewProps) {
                         (p: CentralIndexProject) => p.path.replace(/\\/g, '/').toLowerCase() === activeProject.path.replace(/\\/g, '/').toLowerCase()
                       );
                       if (cur) setActiveProject(cur);
+                    } else {
+                      announceFailed('refresh the project list', res?.error);
                     }
                   } catch (err) {
-                    console.warn('post-rename project list refresh failed', err);
+                    announceFailed('refresh the project list', err);
                   }
                 }}
                 // WHY every project now (backlog row 10: "there's no way to delete some
@@ -933,7 +981,11 @@ export function ProjectView(props: ProjectViewProps) {
                 onRemove={() => setDeletingProject(activeProject)}
               />
             ) : (
-              <div className="text-sm text-fg-muted">Select a project to view its artifacts.</div>
+              indexFailed ? (
+                <ErrorState variant="inline" message="Couldn't load your projects." onRetry={() => setIndexTry((n) => n + 1)} />
+              ) : (
+                <div className="text-sm text-fg-muted">Select a project to view its artifacts.</div>
+              )
             )}
 
             {/* Seg-row: unified segmented control (left) + the active tab's
@@ -962,34 +1014,34 @@ export function ProjectView(props: ProjectViewProps) {
                 {SEGMENTS.map((s) => {
                   const active = tab === s.id;
                   return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      // Active segment absorbs the leftover width on narrow so
-                      // the pill spans the screen exactly; inactive ones stay
-                      // at their icon width. title= carries the label for the
-                      // icon-only state (aria-label does the same for AT).
-                      className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-control text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
-                        active
-                          ? 'bg-accent text-on-accent'
-                          : 'text-fg-2 hover:text-fg hover:bg-inset'
-                      }`}
-                      onClick={() => setTab(s.id)}
-                      title={s.label}
-                      aria-label={s.label}
-                      // The first-run tour's Files stop rings the Files tab.
-                      data-guide-anchor={s.id === 'files' ? 'files-tab' : undefined}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      <span className="shrink-0 inline-flex">{s.icon}</span>
-                      {/* Label + count collapse to nothing on an inactive
-                          segment below 640px — that's what buys the room for
-                          all three to fit without scrolling. */}
-                      <span className={`truncate ${active ? '' : 'max-sm:hidden'}`}>{s.label}</span>
-                      <span className={`text-2xs shrink-0 ${active ? 'opacity-80' : 'text-fg-muted max-sm:hidden'}`}>
-                        {s.count}
-                      </span>
-                    </button>
+                    <Tooltip key={s.id} text={s.label}>
+                      <button
+                        type="button"
+                        // Active segment absorbs the leftover width on narrow so
+                        // the pill spans the screen exactly; inactive ones stay
+                        // at their icon width. title= carries the label for the
+                        // icon-only state (aria-label does the same for AT).
+                        className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-control text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
+                          active
+                            ? 'bg-accent text-on-accent'
+                            : 'text-fg-2 hover:text-fg hover:bg-inset'
+                        }`}
+                        onClick={() => setTab(s.id)}
+                        aria-label={s.label}
+                        // The first-run tour's Files stop rings the Files tab.
+                        data-guide-anchor={s.id === 'files' ? 'files-tab' : undefined}
+                        aria-current={active ? 'page' : undefined}
+                      >
+                        <span className="shrink-0 inline-flex">{s.icon}</span>
+                        {/* Label + count collapse to nothing on an inactive
+                            segment below 640px — that's what buys the room for
+                            all three to fit without scrolling. */}
+                        <span className={`truncate ${active ? '' : 'max-sm:hidden'}`}>{s.label}</span>
+                        <span className={`text-2xs shrink-0 ${active ? 'opacity-80' : 'text-fg-muted max-sm:hidden'}`}>
+                          {s.count}
+                        </span>
+                      </button>
+                    </Tooltip>
                   );
                 })}
               </div>
@@ -1088,7 +1140,7 @@ export function ProjectView(props: ProjectViewProps) {
             {/* Keyed by project so a switch starts a fresh 50-card window at the
                 top, instead of keeping the last project's scroll depth. */}
             {activeProject && tab === 'conversations' && (
-              <ConversationsTab key={activeProject.id} conversations={conversations} onOpenPreview={setPreviewSession} />
+              <ConversationsTab key={activeProject.id} conversations={conversations} onOpenPreview={setPreviewSession} loadError={convError} onRetry={retryProjectLists} />
             )}
             {previewSession && activeProject && (
               <ConversationPreview
@@ -1109,6 +1161,8 @@ export function ProjectView(props: ProjectViewProps) {
             {activeProject && tab === 'context' && (
               <ContextTab
                 groups={context}
+                loadError={ctxError}
+                onRetry={retryProjectLists}
                 onEditFile={setEditingContext}
                 onOpenInfo={setInfoScope}
               />

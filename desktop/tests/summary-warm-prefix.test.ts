@@ -19,6 +19,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { makeSession, scriptModel, drainTurn, HARNESS, type ScriptStep } from './helpers/harness-fakes';
 import { transformParams } from '../src/main/providers/chatgpt-model';
 import { markAppGenerated } from '../src/main/harness/compaction';
+import { FAKE_SUMMARY } from './helpers/harness-fakes';
 
 /** A scripted model that records every call's full options. */
 function optionsCapturingModel(steps: ScriptStep[], calls: any[]) {
@@ -37,7 +38,7 @@ describe('compaction summary request', () => {
     // legacy trigger; the former 13k/16k case could not fit both requests.
     const session = makeSession({
       contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
-      model: optionsCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], calls),
+      model: optionsCapturingModel([{ text: FAKE_SUMMARY }, { text: 'answer' }], calls),
     });
     const before = session.acceptedHistory().messages;
     await drainTurn(session, 'continue');
@@ -76,7 +77,7 @@ describe('compaction summary request', () => {
     const calls: any[] = []; const events: any[] = [];
     const session = makeSession({
       contextLength: 32_768, onEvent: (e) => events.push(e),
-      model: optionsCapturingModel([{ text: 'SUMMARY 2.' }, { text: 'answer' }], calls),
+      model: optionsCapturingModel([{ text: FAKE_SUMMARY }, { text: 'answer' }], calls),
     });
     const bulk = Array.from({ length: 12 }, (_, i) => ([
       { role: 'user', content: `question ${i} ${'x'.repeat(4_000)}` },
@@ -110,7 +111,7 @@ describe('compaction summary request', () => {
       contextLength: 16_384, harness: { ...HARNESS, limits: { maxTokens: 16_000 } }, onEvent: (e) => events.push(e),
       model: optionsCapturingModel([
         { text: 'a', usage: { inputTokens: 13_000 } },   // turn 1 (cut is 0, no summary)
-        { text: 'SUMMARY.' },                             // turn 2's summary call
+        { text: FAKE_SUMMARY },                             // turn 2's summary call
         { text: 'b' },                                    // turn 2's reply
       ], calls),
     });
@@ -137,7 +138,7 @@ describe('compaction summary request', () => {
     const session = makeSession({
       // WHY: use a feasible over-trigger history with separate summary headroom.
       contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
-      model: scriptModel([{ text: 'SUMMARY.', usage: { inputTokens: 4321, outputTokens: 55 } }, { text: 'answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY, usage: { inputTokens: 4321, outputTokens: 55 } }, { text: 'answer' }]),
     });
     await drainTurn(session, 'continue');
     const [compaction] = events.filter((e) => e.type === 'compact-summary');

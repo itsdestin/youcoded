@@ -1,4 +1,5 @@
 import React from 'react';
+import { Tooltip } from './Tooltip';
 
 /**
  * The one button. Every button in the app goes through this — never hand-roll
@@ -13,7 +14,7 @@ import React from 'react';
  * don't get reintroduced as "improvements".
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'raised' | 'toggle';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'on-accent-outline' | 'on-accent-solid' | 'raised' | 'toggle';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
@@ -94,6 +95,14 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   // black-on-black. Both roles derive from --on-accent instead, so the whole
   // control tracks whatever a theme pack sets the accent to.
   'on-accent': 'text-on-accent/80 hover:text-on-accent hover:bg-on-accent/15 active:bg-on-accent/25',
+  // The outlined and filled pair for a notice box INSIDE a sent message bubble (Callout
+  // surface="on-accent": Dismiss/Discard + Send again). WHY (Destin, pinned-bubbles-review-7#V-3,
+  // and review-2#N-1 "dark send again on the right side with light dismiss on left"): secondary and
+  // primary are drawn from the page's colours, so primary's accent fill vanishes into an accent
+  // bubble. These take the bubble's own text colour instead: outlined = a thin on-accent border,
+  // filled = an on-accent fill with accent words, always the opposite of the bubble so it stands out.
+  'on-accent-outline': 'border border-on-accent/45 text-on-accent hover:bg-on-accent/15 active:bg-on-accent/25',
+  'on-accent-solid': 'border border-transparent bg-on-accent text-accent hover:bg-on-accent/90 active:bg-on-accent/80',
   // A small control that sits ON a picture or chip (the × on an attachment
   // thumbnail): a solid panel fill and outline so it stays visible over any image.
   // Added 2026-09-16 — the attachment chip hand-restyled a ghost button into this.
@@ -247,9 +256,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   ref,
 ) {
   const size = (rest as { size?: ButtonSize }).size ?? 'md';
-  const { size: _omit, ...domProps } = rest as NativeButtonProps & { size?: ButtonSize };
+  const { size: _omit, title, ...domProps } = rest as NativeButtonProps & { size?: ButtonSize };
 
-  return (
+  const button = (
     <button
       ref={ref}
       // Default to "button" so a Button inside a <form> can't accidentally submit it.
@@ -259,4 +268,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       {...domProps}
     />
   );
+  // WHY: a `title` on a shared Button used to reach the DOM as the browser's own grey hover
+  // bubble, which no theme can style (card #135, design guide: hints are the app's own).
+  // Tooltip clones the button, so the DOM and layout are unchanged; no title means no wrapper.
+  // Always wrapped, with empty text meaning no hint: a title that appears or disappears (a disabled
+  // button's reason) must not swap the element type, or React would rebuild the button mid-use.
+  return <Tooltip text={title ?? ''}>{button}</Tooltip>;
 });

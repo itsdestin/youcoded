@@ -6,7 +6,7 @@
 // same, so they are one entry each now. A paired phone reaches this: the prototype-pollution
 // refusal lives in getJsonPath/setJsonPath, NOT here, so no door can skip it.
 import { IPC } from '../../shared/backend-contract';
-import { getField, setField } from '../claude-settings';
+import { getField, setField, takeSettingsRepairNotice } from '../claude-settings';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 export const settingsChannels: MainChannelDef[] = [
@@ -21,5 +21,12 @@ export const settingsChannels: MainChannelDef[] = [
     name: IPC.SETTINGS_SET, kind: 'handle',
     // setField answers false (never throws) for an unsafe path or a locked file.
     handler: (payload) => setField(payload?.field ?? '', payload?.value),
+  }),
+  // Card #11 a. WHY open to a phone (Destin, overnight deck C-1, 2026-11-13: "Yes, phones too"): the Android app does the
+  // same repair, and that is where a silent reset is most likely to go unnoticed. The answer is only the kept file's
+  // location; the notice is handed out once in total, so whichever window asks first (the computer's own, at launch) gets it.
+  defineChannel({
+    name: IPC.SETTINGS_REPAIR_NOTICE, kind: 'handle',
+    handler: (_p, ctx) => takeSettingsRepairNotice(ctx.remote ? 'remote' : 'window'),
   }),
 ];

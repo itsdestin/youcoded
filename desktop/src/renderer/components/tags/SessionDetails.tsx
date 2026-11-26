@@ -19,6 +19,7 @@ import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, InputGroup,
 import { ChipAction, TagWord, mix } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
+import { Tooltip } from '../ui';
 
 type Props = {
   /** The session's name, shown large and renamed on click; omit where the surface's own
@@ -148,10 +149,12 @@ function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: strin
           onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(note); setEditing(false); } }}
           onBlur={commit} />
       ) : note ? (
-        <button type="button" onClick={() => { setDraft(note); setEditing(true); }} title="Edit note"
-          className={`${top} block w-full text-left rounded-lg border border-transparent ${ml} px-2.5 py-1.5 hover:bg-inset transition-colors`}>
-          <span className="text-sm italic text-fg-dim whitespace-pre-wrap break-words">“{note}”</span>
-        </button>
+        <Tooltip text="Edit note">
+          <button type="button" onClick={() => { setDraft(note); setEditing(true); }}
+            className={`${top} block w-full text-left rounded-lg border border-transparent ${ml} px-2.5 py-1.5 hover:bg-inset transition-colors`}>
+            <span className="text-sm italic text-fg-dim whitespace-pre-wrap break-words">“{note}”</span>
+          </button>
+        </Tooltip>
       ) : (
         // Its own line under the name. WHY full width (Destin, close-session-1#CS-1: "the add a
         // note button should be full width with matching left/right margins"): it was a small

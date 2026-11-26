@@ -155,16 +155,16 @@
    "sha256": "7ef451f4dcdc065aa872c2f3c78b9d9bb4348caa5bcc70dee0c9e1fcf8e4c1fd"
   },
   "nodejs": {
-   "version": "24.22.1-r1",
-   "sha256": "d22660024a36d9d3de74a8957daa386e75e9a39a0460fafd7597bef637fc9e15"
+   "version": "24.22.3-r0",
+   "sha256": "e5d0dc9749acedadb08ddd48fab57c1c842e0361dc49e7206269bdd2751e29fc"
   },
   "nodejs-dev": {
-   "version": "24.22.1-r1",
-   "sha256": "07ab863bdbef129df1804d3e1c8c9f80048d896b1d422c85474cdb5c0d2d2f5d"
+   "version": "24.22.3-r0",
+   "sha256": "7f108def942d67c93827eb030a8c39ec1253c361a368af2fb8eb2acadc705a0d"
   },
   "nodejs-libs": {
-   "version": "24.22.1-r1",
-   "sha256": "7a753cf8c8d18e29901d8a3ca9a4028bfb2aef26b8d591150f354220d68aa9fb"
+   "version": "24.22.3-r0",
+   "sha256": "c06c7239c37c16c7f14b00fa67e7d52196e7289659dce45d791a872a08a81ce9"
   },
   "pcre2": {
    "version": "10.49-r0",

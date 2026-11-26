@@ -7,7 +7,7 @@ import { SubagentIndex } from './subagent-index';
 import { SubagentWatcher } from './subagent-watcher';
 import { ccProjectSlug } from './slug-encoding';
 import { parseQueueWire } from '../shared/claude-queue-wire';
-import { claudeAliasForModelId } from '../shared/model-ids';
+import { claudeAliasForModelId, isPlaceholderModelId } from '../shared/model-ids';
 
 // ---------------------------------------------------------------------------
 // parseTranscriptLine
@@ -286,6 +286,24 @@ export function parseTranscriptLine(
   // --- Assistant messages ---
   const content = message.content;
   const messageModel: string | undefined = message.model;
+  // WHY (card #236): CC's own error replies ("Login expired · Please run /login") carry a
+  // stable label beside the words. Passed through so the chat can offer the fix as a
+  // button; the words themselves change between CC versions and are never matched.
+  const apiError: string | undefined = parsed.isApiErrorMessage === true && typeof parsed.error === 'string' ? parsed.error : undefined;
+  // WHY (Destin, 2026-11-23: after a PC restart, resuming a chat showed a "No response requested."
+  // bubble with "Response stopped at a configured stop sequence."): when a resumed transcript ends
+  // without a reply, Claude Code writes this placeholder reply itself (model `<synthetic>`, zero
+  // tokens) so the next prompt can be sent. Nobody wrote it, so it is read as what it means — the
+  // previous turn was cut off — and becomes the same `user-interrupt` ESC produces: no bubble, and
+  // "Interrupted." lands on the last real reply (a no-op when that turn already ended). The exact
+  // words are matched on purpose: on 2026-11-23, 94 of this computer's 592 `<synthetic>` lines were
+  // this text, and 2 others were real-looking replies with the same shape that must stay visible.
+  // If Claude Code rewords it, the line falls back to showing as before — nothing is lost.
+  if (!apiError && typeof messageModel === 'string' && isPlaceholderModelId(messageModel)
+    && assistantPlainText(content) === CC_RESUME_PLACEHOLDER_TEXT) {
+    events.push({ type: 'user-interrupt', sessionId, uuid, timestamp, data: { kind: 'plain' } });
+    return events;
+  }
   if (Array.isArray(content)) {
     for (const block of content) {
       switch (block.type) {
@@ -297,7 +315,7 @@ export function parseTranscriptLine(
             sessionId,
             uuid,
             timestamp,
-            data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}) },
+            data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}), ...(apiError ? { apiError } : {}) },
           });
           break;
         }
@@ -343,7 +361,7 @@ export function parseTranscriptLine(
         sessionId,
         uuid,
         timestamp,
-        data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}) },
+        data: { text: cleaned, ...(messageModel ? { model: messageModel } : {}), ...(apiError ? { apiError } : {}) },
       });
     }
   }
@@ -404,6 +422,22 @@ export function parseTranscriptLine(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** The placeholder reply Claude Code writes when a resumed chat's last turn got no answer (see the
+ *  `user-interrupt` branch in the assistant section). */
+const CC_RESUME_PLACEHOLDER_TEXT = 'No response requested.';
+
+/** An assistant message's text when it is ONLY text (a string, or text blocks alone); null otherwise. */
+function assistantPlainText(content: unknown): string | null {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content) || content.length === 0) return null;
+  let text = '';
+  for (const block of content) {
+    if (!block || block.type !== 'text' || typeof block.text !== 'string') return null;
+    text += block.text;
+  }
+  return text.trim();
+}
 
 /**
  * The text of a queued message a person typed; '' for a queued line that must stay hidden; null for

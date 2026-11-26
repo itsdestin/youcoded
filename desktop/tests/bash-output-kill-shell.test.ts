@@ -148,6 +148,23 @@ describe.skipIf(!posix)('commands restored after a restart', () => {
     expect(r.text).toContain('/tmp/old.log');
     expect(r.text).not.toMatch(/^No background command/);
   });
+  // Card #220 item 3: asked in the first moment after reopening, before the saved list finished loading.
+  it('BashOutput and KillShell wait for the saved list to load before answering', async () => {
+    let release!: () => void;
+    reg.restoreReady = new Promise<void>((r) => { release = r; }).then(() => reg.restoreFrom([rec({})])).then(() => undefined);
+    let answered = false;
+    const pending = BashOutputTool.execute({ shell_id: 'sh-old1' }, ctx()).then((r) => { answered = true; return r; });
+    const pendingKill = KillShellTool.execute({ shell_id: 'sh-old1' }, ctx());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(answered).toBe(false); // still waiting, not saying "No background command"
+    release();
+    const r = await pending;
+    expect(r.text).toContain('last words');
+    expect(r.text).not.toMatch(/^No background command/);
+    const k = await pendingKill;
+    expect(k.text).toContain('is not running');
+    expect(k.text).not.toMatch(/^No background command/);
+  });
   it('BashOutput list mode includes pre-restart commands', async () => {
     await reg.restoreFrom([rec({})]);
     const r = await BashOutputTool.execute({}, ctx());

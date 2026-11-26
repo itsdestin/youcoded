@@ -63,6 +63,11 @@ export interface TranscriptUsage {
    *  honestly. Diagnostic: main compares them and logs a gap; nothing in
    *  the UI reads this. */
   providerCostUsd?: number;
+  /** Native runtime, OpenRouter only (card #69): the distinct companies OpenRouter reported
+   *  serving this turn's requests, in order (normally one). Recorded so cache misses can be
+   *  matched to a change of serving company. Absent for every other provider. Diagnostic:
+   *  nothing in the UI reads it, and it holds no chat content. */
+  servedBy?: string[];
 }
 
 /** A portable compaction checkpoint (see `compact-summary`): references cite persisted parts, never copied text. */
@@ -180,6 +185,12 @@ interface AssistantTextData extends SubagentStamp, StreamPart {
   text: string;
   /** Model ID that wrote it (CC and Kotlin; the native runtime puts it on turn-complete). */
   model?: string;
+  /** Claude Code only: the error label CC stamps on a reply it wrote ITSELF instead of a
+   *  model (`isApiErrorMessage` lines) — 'authentication_failed', 'rate_limit',
+   *  'server_error', … Every "Please run /login" reply carries 'authentication_failed'
+   *  whatever its wording, so the chat draws a sign-in card from this, never from the
+   *  text (card #236; 13 of 13 local samples, 2026-11-17). */
+  apiError?: string;
 }
 
 interface ToolUseData extends SubagentStamp {

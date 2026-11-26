@@ -12,7 +12,7 @@ import { BashTool } from '../src/main/harness/tools/bash';
 import { WebFetchTool } from '../src/main/harness/tools/web-fetch';
 import type { ToolContext } from '../src/main/harness/tools/types';
 import { canonicalize } from '../src/main/harness/tools/guards';
-import { makeSession, scriptModel } from './helpers/harness-fakes';
+import { makeSession, scriptModel, FAKE_SUMMARY } from './helpers/harness-fakes';
 
 // WHY the registry is read through canonicalize(): the tools key it by the
 // canonical form (forward slashes, lower-case on Windows), so looking it up by
@@ -397,11 +397,11 @@ describe('servedReads and servedSkills are forgotten wherever history is discard
   });
 
   it('automatic compaction clears it when a complete summary retires old history', async () => {
-    const s = seededSession(makeSession({ contextLength: 32_768, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
+    const s = seededSession(makeSession({ contextLength: 32_768, model: scriptModel([{ text: FAKE_SUMMARY }]) }) as any);
     // WHY: 30k reported input crosses the legacy trigger in a window that
     // still has room for the summary request and its output allowance.
     s.abort = new AbortController(); // normally owned by send() around maybeCompact
-    try { await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 30_000, {}); }
+    try { await s.maybeCompact(scriptModel([{ text: FAKE_SUMMARY }]), 30_000, {}); }
     finally { s.abort = null; }
     expect(s.servedReads.size).toBe(0);
     expect(s.servedSkills.size).toBe(0);
@@ -409,13 +409,13 @@ describe('servedReads and servedSkills are forgotten wherever history is discard
 
   it('automatic compaction leaves it alone when nothing needs compacting', async () => {
     const s = seededSession(makeSession({ contextLength: 4096 }) as any);
-    await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 10);
+    await s.maybeCompact(scriptModel([{ text: FAKE_SUMMARY }]), 10);
     expect(s.servedReads.size).toBe(1);
     expect(s.servedSkills.size).toBe(1);
   });
 
   it('manual compaction (compactNow) clears it', async () => {
-    const s = seededSession(makeSession({ contextLength: 32_768, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
+    const s = seededSession(makeSession({ contextLength: 32_768, model: scriptModel([{ text: FAKE_SUMMARY }]) }) as any);
     expect(await s.compactNow()).toEqual({ ok: true });
     expect(s.servedReads.size).toBe(0);
     expect(s.servedSkills.size).toBe(0);

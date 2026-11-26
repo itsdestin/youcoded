@@ -328,21 +328,27 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
                       // whatever room is left after the name.
                       <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
                         <span className="text-xs shrink-0">{shown}</span>
-                        <span className="text-3xs text-fg-muted truncate" title={f.path}>{f.path}</span>
+                        <Tooltip text={f.path}>
+                          <span className="text-3xs text-fg-muted truncate">{f.path}</span>
+                        </Tooltip>
                       </div>
                     ) : (
                       <div className="flex-1 min-w-0">
                         <div className="text-xs truncate">{shown}</div>
-                        <div className="text-3xs text-fg-muted truncate" title={f.path}>
-                          {f.path}
-                        </div>
+                        <Tooltip text={f.path}>
+                          <div className="text-3xs text-fg-muted truncate">
+                            {f.path}
+                          </div>
+                        </Tooltip>
                       </div>
                     )}
 
                     {/* Stale warning. The amber "Folder missing" pill's job, said as a tinted pill
                         (decisions "Project switcher: rows" — amber); not red words (small-fixes-3#SF3-10). */}
                     {!f.exists && (
-                      <span title="Directory not found" className="shrink-0"><Pill tone="warning">Missing</Pill></span>
+                      <Tooltip text="Directory not found">
+                        <span className="shrink-0"><Pill tone="warning">Missing</Pill></span>
+                      </Tooltip>
                     )}
 
                     {/* Selected check */}

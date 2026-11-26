@@ -6,7 +6,7 @@
 // emitted by main/providers/provider-registry.ts) AND a handler is wired.
 
 import React from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { beforeEach, describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 
 import AttentionBanner from '../src/renderer/components/AttentionBanner';
@@ -197,12 +197,46 @@ describe('AttentionBanner — errorCode picks the action', () => {
   const button = (c: HTMLElement, label: string) =>
     Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.trim() === label) ?? null;
 
-  it.each(['openrouter-key-rejected', 'openrouter-key-expired', 'chatgpt-signin-expired', 'chatgpt-signin-required'])(
-    '%s offers Open settings', (code) => {
+  // Card #236 (round 2 Q-chat-button "match Claude"): the fix itself is on the card now,
+  // where "Open settings" used to send people to find it.
+  // A computer (it can open the browser); a phone visiting it is asked to sign in there instead.
+  beforeEach(() => { (window as any).claude = { ...(window as any).claude, capabilities: { openExternal: true } }; });
+  afterEach(() => { if ((window as any).claude) delete (window as any).claude.capabilities; });
+  it.each(['chatgpt-signin-expired', 'chatgpt-signin-required'])(
+    '%s offers Sign in, not Open settings', (code) => {
       const { container } = render(
         <AttentionBanner state="error" errorMessage="x" errorCode={code} onOpenProviderSettings={vi.fn()} />,
       );
-      expect(openSettingsButton(container)).not.toBeNull();
+      expect(button(container, 'Sign in')).not.toBeNull();
+      expect(openSettingsButton(container)).toBeNull();
+    });
+
+  it.each(['openrouter-key-rejected', 'openrouter-key-expired'])(
+    '%s offers both ways back: Paste a new key (the key window) and Sign in with OpenRouter', (code) => {
+      const onOpen = vi.fn();
+      const { container } = render(
+        <AttentionBanner state="error" errorMessage="x" errorCode={code} onOpenProviderSettings={onOpen} />,
+      );
+      expect(button(container, 'Sign in with OpenRouter')).not.toBeNull();
+      fireEvent.click(button(container, 'Paste a new key')!);
+      expect(onOpen).toHaveBeenCalledOnce();
+    });
+
+  it('a ChatGPT that was never connected says to sign in, not that a sign-in expired', () => {
+    const { container } = render(<AttentionBanner state="error" errorMessage="x" errorCode="chatgpt-signin-required" onOpenProviderSettings={vi.fn()} />);
+    expect(container.textContent).toContain('Sign in to ChatGPT to use this model.');
+    expect(button(container, 'Sign in')).not.toBeNull();
+  });
+
+  it.each([['key', 'Paste a new key', 'Sign in with OpenRouter'], ['browser', 'Sign in with OpenRouter', 'Paste a new key']])(
+    'an OpenRouter connection made by %s offers only that way back', async (via, shown, hidden) => {
+      (window as any).claude.providers = { list: async () => [{ id: 'openrouter', type: 'openrouter', connectedVia: via }] };
+      const { container } = render(
+        <AttentionBanner state="error" errorMessage="x" errorCode="openrouter-key-rejected" onOpenProviderSettings={vi.fn()} />,
+      );
+      await vi.waitFor(() => expect(button(container, hidden)).toBeNull());
+      expect(button(container, shown)).not.toBeNull();
+      delete (window as any).claude.providers;
     });
 
   it('not enough credit offers Add credit, and not Settings', () => {

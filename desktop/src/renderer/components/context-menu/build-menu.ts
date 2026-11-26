@@ -1,6 +1,7 @@
 import { getCapabilities } from '../../platform';
 import { getSheetSelectionText } from '../artifact-views/artifact-find-bridge';
-import { copyText, readText } from './clipboard';
+import { copyText, readText, canCopyImageHere, copyImageFromPage } from './clipboard';
+import { announce } from '../../utils/announce';
 import { chipPathOf, selectionTextWithChipPaths } from './chip-copy';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
@@ -216,6 +217,34 @@ function textBasics(bubble: Element | null): MenuEntry[] {
   ];
 }
 
+// Input types whose text can be selected and pasted into through the selection
+// API (setSelectionRange throws on email/number, so those stay native-only).
+const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'url', 'tel', 'password']);
+
+// Any other typing box in the app's own window: API key fields, search boxes,
+// rename fields, settings. WHY (issue #728, "Can not paste api keys"): Electron
+// shows no right-click menu of its own, and this menu used to cover only the
+// composer, the file editor and comment boxes — right-clicking an API key box
+// did nothing, so mouse users could not paste a key at all.
+// Gated on the computer's own window (nativeWindows): a remote browser and the
+// Android WebView already draw their own cut/copy/paste menu or long-press bar
+// for these boxes, and their clipboard read is often unavailable (plain-http
+// remote access), so taking over there would REPLACE a working native Paste
+// with one that can silently do nothing.
+// The terminal is excluded: xterm moves its hidden helper textarea under the
+// pointer on right-click, and its right-click belongs to the terminal.
+function plainTextField(target: HTMLElement): HTMLInputElement | HTMLTextAreaElement | null {
+  if (!getCapabilities().nativeWindows) return null;
+  if (target.closest('.xterm')) return null;
+  const el = target.closest('input, textarea');
+  if (el instanceof HTMLTextAreaElement) return el.readOnly || el.disabled ? null : el;
+  if (el instanceof HTMLInputElement) {
+    if (el.readOnly || el.disabled) return null;
+    return TEXT_INPUT_TYPES.has(el.getAttribute('type')?.toLowerCase() ?? '') ? el : null;
+  }
+  return null;
+}
+
 function editableMenu(el: HTMLTextAreaElement | HTMLInputElement, canAttachClipboardImage = false): MenuEntry[] {
   // Capture the selection NOW (at right-click), because auto-focusing the menu
   // blurs the textarea; we restore this range before each op so cut/copy/paste
@@ -228,11 +257,18 @@ function editableMenu(el: HTMLTextAreaElement | HTMLInputElement, canAttachClipb
     el.focus();
     el.setSelectionRange(selStart, selEnd);
   };
+  // WHY no Cut/Copy on a hidden-text box (an API key, a password): the box
+  // shows dots, so copying would put a secret on the clipboard the user never
+  // saw. Chromium's own menu greys them out there for the same reason.
+  const secret = el instanceof HTMLInputElement && el.type === 'password';
+  const clipboardOut: MenuEntry[] = secret ? [] : [
+    { type: 'item', id: 'cut', label: 'Cut', icon: 'cut', kbd: mod('X'), disabled: !hasSelection, run: () => { restore(); document.execCommand('cut'); } },
+    { type: 'item', id: 'copy', label: 'Copy', icon: 'copy', kbd: mod('C'), disabled: !hasSelection, run: () => { restore(); document.execCommand('copy'); } },
+  ];
   return [
     // execCommand cut/paste fire the native 'input' event, so React's controlled
     // onChange stays in sync — a manual value set would not.
-    { type: 'item', id: 'cut', label: 'Cut', icon: 'cut', kbd: mod('X'), disabled: !hasSelection, run: () => { restore(); document.execCommand('cut'); } },
-    { type: 'item', id: 'copy', label: 'Copy', icon: 'copy', kbd: mod('C'), disabled: !hasSelection, run: () => { restore(); document.execCommand('copy'); } },
+    ...clipboardOut,
     { type: 'item', id: 'paste', label: 'Paste', icon: 'paste', kbd: mod('V'), run: async () => {
       restore();
       const t = await readText();
@@ -302,6 +338,45 @@ function filePillMenu(el: HTMLElement): MenuEntry[] {
     { type: 'item', id: 'copy-name', label: 'Copy file name', icon: 'copy', run: () => void copyText(name) },
     { type: 'item', id: 'copy-path', label: 'Copy as path', icon: 'path', run: () => void copyText(abs) },
   );
+  return entries;
+}
+
+// Card #143 a (deck C-2, Destin 2026-11-13: the four items): right-click on a picture in a chat.
+// Copy image / Save image as (the computer's own windows only: a phone cannot choose a place on the computer, as for file
+// chips) / Copy image address (website pictures only) / Ask about this.
+// WHY the words claim no cause on failure (docs/error-message-standards.md): the picture may be gone, blocked or too big.
+function imageMenu(img: HTMLImageElement, target: HTMLElement): MenuEntry[] {
+  const src = img.currentSrc || img.src || '';
+  const alt = (img.getAttribute('alt') || '').trim();
+  const onWeb = /^https?:\/\//i.test(src);
+  const desktop = getCapabilities().openInOs && typeof shell()?.pictureAction === 'function';
+  const entries: MenuEntry[] = [];
+  const attempt = async (action: 'copy' | 'save') => {
+    let ok = false;
+    if (desktop) {
+      const r = await shell().pictureAction(action, src).catch(() => null);
+      ok = !!r?.ok;
+    } else if (action === 'copy') {
+      ok = await copyImageFromPage(src);
+    }
+    if (!ok) announce(action === 'copy' ? "Couldn't copy that picture." : "Couldn't save that picture.");
+  };
+  // WHY only a website address gets Copy and Save: the computer refuses every other kind (picture-actions.ts), so offering them
+  // would be a button that always fails.
+  if (onWeb && (desktop || canCopyImageHere())) {
+    entries.push({ type: 'item', id: 'copy-image', label: 'Copy image', icon: 'copy', disabled: !src, run: () => attempt('copy') });
+  }
+  if (onWeb && desktop) entries.push({ type: 'item', id: 'save-image', label: 'Save image as\u2026', icon: 'save', disabled: !src, run: () => attempt('save') });
+  if (onWeb) entries.push({ type: 'item', id: 'copy-image-address', label: 'Copy image address', icon: 'link', run: () => void copyText(src) });
+  if (entries.length) entries.push({ type: 'sep' });
+  const name = alt || baseName(src.split(/[?#]/)[0]) || 'picture';
+  const ref: ComposeRef = {
+    id: genRefId(), kind: 'chat', label: `picture \u00b7 \u201c${truncateQuote(name, 24)}\u201d`,
+    // The words the assistant gets: the picture's description and where it came from, so it can find it again.
+    quote: `Picture${alt ? `: ${alt}` : ''}${src ? ` (${src})` : ''}`.slice(0, 2000),
+    entryKey: entryKeyOf(target),
+  };
+  entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(ref) });
   return entries;
 }
 
@@ -566,6 +641,10 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   if (cmEditable instanceof HTMLElement) {
     return finalize(cmEditableMenu(cmEditable));
   }
+  // Every other plain typing box (see plainTextField). After the named
+  // surfaces above, so the composer keeps its image-paste behaviour.
+  const field = plainTextField(target);
+  if (field) return finalize(editableMenu(field));
 
   // Artifact viewer (SessionDrawer / ProjectView file tab) lives outside
   // .chat-scroll, so it's checked before that gate.
@@ -588,6 +667,11 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // preview the whole menu without borrowing chat-composer CSS.
   if (!target.closest('.chat-scroll') && !target.closest('[data-conversation-id]')) return null;
 
+  // A picture (before the link check: a picture inside a link gets the picture's menu). Chrome (a button, an icon) has none.
+  const picture = target.closest('img');
+  if (picture instanceof HTMLImageElement && !isChrome(picture) && (picture.currentSrc || picture.src)) {
+    return finalize(imageMenu(picture, target));
+  }
   const filePill = target.closest('[data-file-path]');
   if (filePill instanceof HTMLElement && filePill.getAttribute('data-file-path')) {
     return finalize(filePillMenu(filePill));

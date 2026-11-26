@@ -2,6 +2,7 @@ import type { ArtifactViewProps } from './types';
 import { getCapabilities } from '../../platform';
 import { Button } from '../ui';
 import { READ_BINARY_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
+import { formatBytes } from '../../../shared/format-bytes';
 
 export function BinaryFallback({ path, absolutePath, contentInfo, sniffedBinaryTextFile }: ArtifactViewProps) {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
@@ -11,7 +12,7 @@ export function BinaryFallback({ path, absolutePath, contentInfo, sniffedBinaryT
   // large" about a 2.3 MB PNG is the bug that started all this (spec §4.5).
   const message = size !== undefined && size > READ_BINARY_MAX_BYTES
     // Size is the reason.
-    ? `This file is ${(size / (1024 * 1024)).toFixed(1)} MB — larger than YouCoded can display.`
+    ? `This file is ${formatBytes(size)} — larger than YouCoded can display.`
     : sniffedBinaryTextFile
       // The FORMAT is supported; this particular file isn't text. Saying
       // "can't display .md files" here would be plainly false.

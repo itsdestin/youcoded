@@ -1025,7 +1025,8 @@ describe('ChatGptAuth: accessToken', () => {
       await expect(auth.accessToken()).rejects.toThrow(CHATGPT_SIGN_IN_EXPIRED_MESSAGE);
       expect(h.secrets.has(ref)).toBe(false);
       expect(fs.existsSync(h.file)).toBe(false);
-      expect(auth.status()).toEqual({ state: 'signed-out' });
+      // Card #236: a refused renewal reads "expired", not plain "Not signed in".
+      expect(auth.status()).toEqual({ state: 'signed-out', expired: true });
       expect(h.clock.intervals()).toHaveLength(0);
       await auth.dispose();
     }
@@ -1276,6 +1277,13 @@ describe('ChatGptAuth: fetch()', () => {
     expect(refreshCalls()).toHaveLength(1);
     expect(h.secrets.has(ref)).toBe(false);
     expect(fs.existsSync(h.file)).toBe(false);
+    expect(auth.status()).toEqual({ state: 'signed-out', expired: true });
+  });
+
+  it('a deliberate sign-out reads plain signed-out, never expired', async () => {
+    await h.seedSignedIn();
+    const auth = h.build();
+    await auth.signOut();
     expect(auth.status()).toEqual({ state: 'signed-out' });
   });
 

@@ -75,12 +75,13 @@ describe('GitReviewView', () => {
     expect(within(secondCard).queryByText('+', { exact: false })).not.toBeInTheDocument();
   });
 
-  it('the expanded diff sits in a scroll container, separate from the uncommitted card action row', async () => {
+  it('the expanded diff sits in a height-capped scroll container, separate from the uncommitted card action row', async () => {
     mountWith();
     await waitFor(() => expect(screen.getByText('Uncommitted changes')).toBeInTheDocument());
     const diffText = screen.getByText('old line');
     const scrollContainer = diffText.closest('.overflow-y-auto');
     expect(scrollContainer).not.toBeNull();
+    expect(scrollContainer?.className).toContain('scroll-box-cap');
     // The action row (staged checkbox) must NOT be inside that scroll cap.
     const actionRow = screen.getByText('Include in commit');
     expect(scrollContainer?.contains(actionRow)).toBe(false);
@@ -123,7 +124,7 @@ describe('GitReviewView', () => {
     await waitFor(() =>
       expect(git.commitFileDiff).toHaveBeenCalledWith('/proj', 'c'.repeat(40), 'src/f.ts', 'old-name.ts'));
     await waitFor(() =>
-      expect(screen.getByText(/old-name\.ts/)).toBeInTheDocument());
+      expect(screen.getByText('Moved from “old-name.ts” — no content changes in this commit.')).toBeInTheDocument());
     expect(screen.queryByText(/no direct changes/i)).not.toBeInTheDocument();
   });
 
@@ -243,7 +244,7 @@ describe('GitReviewView', () => {
     git.commitFileDiff.mockResolvedValueOnce({ ok: false, error: 'fatal: bad object', hunks: [], binary: false });
     await waitFor(() => screen.getByText('fix: first'));
     fireEvent.click(screen.getByText('fix: first'));
-    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('This commit’s changes couldn’t be loaded.')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText('fatal: bad object')).toBeInTheDocument();
     expect(screen.queryByText(/no direct changes/i)).not.toBeInTheDocument();
@@ -394,5 +395,86 @@ describe('GitReviewView', () => {
     expect(git.stage).toHaveBeenCalledTimes(1);
     resolveStage({ ok: true });
     await waitFor(() => expect(git.stage).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('GitReviewCard highlight', () => {
+  it('lights the whole card when its header is pointed at, never a header band', async () => {
+    // Destin, submit-ticket-5#ST5-Q2 (the ST4-2 sweep): the header tint ran edge to edge and
+    // stopped in a hard line above the opened changes.
+    const { GitReviewCard } = await import('./GitReviewCard');
+    render(<GitReviewCard expanded onToggle={() => {}} headerLeft={<span>abc fix</span>}><p>diff</p></GitReviewCard>);
+    const header = screen.getByRole('button', { name: /abc fix/ });
+    expect(header.className).not.toMatch(/hover:bg-/);
+    expect(header.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
+  });
+});
+
+// Card #134 round 4: a failed read says so; a stale review gets the thin strip; nothing false while a read is merely slow.
+describe('GitReviewView failed reads', () => {
+  const mountFailing = (fileReview: ReturnType<typeof vi.fn>) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude = { git: { fileReview, commitFileDiff: vi.fn(), stage: vi.fn(), unstage: vi.fn(), commit: vi.fn(), onChanged: vi.fn(() => () => {}) } };
+    render(<GitReviewView projectRoot="/proj" relPath="src/f.ts" fileName="f.ts" onBack={() => {}} onRequestDiscard={() => {}} />);
+  };
+
+  it('first read fails: "Couldn\'t load this file\'s changes." with Try again, which recovers', async () => {
+    const fileReview = vi.fn().mockRejectedValueOnce(new Error('git not found')).mockResolvedValue(review);
+    mountFailing(fileReview);
+    expect(await screen.findByText("Couldn't load this file's changes.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.getByText('Uncommitted changes')).toBeInTheDocument());
+    expect(screen.queryByText(/Couldn't load this file/)).toBeNull();
+  });
+
+  it('shows nothing while the first read is only slow', async () => {
+    mountFailing(vi.fn(() => new Promise(() => {})));
+    // settle: a slow read must not raise an error
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByText(/Couldn't/)).toBeNull();
+  });
+
+  it('a later refresh that fails over an older review shows the thin strip, and the next good read clears it', async () => {
+    let changed: () => void = () => {};
+    const fileReview = vi.fn().mockResolvedValueOnce(review).mockRejectedValueOnce(new Error('locked')).mockResolvedValue(review);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude = { git: { fileReview, commitFileDiff: vi.fn(), stage: vi.fn(), unstage: vi.fn(), commit: vi.fn(), onChanged: vi.fn((cb: () => void) => { changed = cb; return () => {}; }) } };
+    render(<GitReviewView projectRoot="/proj" relPath="src/f.ts" fileName="f.ts" onBack={() => {}} onRequestDiscard={() => {}} />);
+    await screen.findByText('Uncommitted changes');
+    changed();
+    expect(await screen.findByText("Couldn't refresh this file's changes, so what's shown may be out of date.")).toBeInTheDocument();
+    expect(screen.getByText('Uncommitted changes')).toBeInTheDocument(); // older content stays
+    changed();
+    await waitFor(() => expect(screen.queryByText(/Couldn't refresh/)).toBeNull());
+  });
+
+  it('Show more that fails says "Couldn\'t load more history." with Try again', async () => {
+    const fileReview = vi.fn().mockResolvedValueOnce({ ...review, hasMore: true }).mockRejectedValueOnce(new Error('x')).mockResolvedValue({ ...review, hasMore: false });
+    mountFailing(fileReview);
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText("Couldn't load more history.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByText(/Couldn't load more/)).toBeNull());
+  });
+
+  // Card #134 round 4 review: the Show more notice clears when it is moot, not only via its own Try again.
+  it('the Show more notice clears when a later refresh succeeds, and when another file is opened', async () => {
+    let changed: () => void = () => {};
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fileReview = vi.fn()
+      .mockResolvedValueOnce({ ...review, hasMore: true }).mockRejectedValueOnce(new Error('x')).mockResolvedValue({ ...review, hasMore: true });
+    (window as any).claude = { git: { fileReview, commitFileDiff: vi.fn(), stage: vi.fn(), unstage: vi.fn(), commit: vi.fn(), onChanged: vi.fn((cb: () => void) => { changed = cb; return () => {}; }) } };
+    const ui = (rel: string) => <GitReviewView projectRoot="/proj" relPath={rel} fileName="f.ts" onBack={() => {}} onRequestDiscard={() => {}} />;
+    const view = render(ui('src/f.ts'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText("Couldn't load more history.")).toBeInTheDocument();
+    changed(); // a successful refresh
+    await waitFor(() => expect(screen.queryByText("Couldn't load more history.")).toBeNull());
+    // and a different file: fail again, then switch
+    fileReview.mockRejectedValueOnce(new Error('y'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText("Couldn't load more history.")).toBeInTheDocument();
+    view.rerender(ui('src/other.ts'));
+    await waitFor(() => expect(screen.queryByText("Couldn't load more history.")).toBeNull());
   });
 });

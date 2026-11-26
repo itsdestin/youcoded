@@ -29,6 +29,7 @@ import { ProjectView } from '../src/renderer/components/project-view/ProjectView
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 import { isRemoteMode } from '../src/renderer/platform';
 import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
+import { findByHint, queryByHint } from './helpers/hint-queries';
 
 // WHY the counter lives on useProjectWatch: FilesTab calls it unconditionally
 // at the top of its body, so every call is one render of the REAL component.
@@ -136,7 +137,7 @@ function Harness() {
 describe('hidden FilesTab does not re-render', () => {
   it('stays still while other tabs are clicked', async () => {
     const view = render(<Harness />);
-    await view.findByTitle('notes.md');
+    await findByHint(view.container, 'notes.md');
     fireEvent.click(view.getByRole('button', { name: 'Conversations' }));
     // Switching away flips `hidden`, which is a real prop change — one render
     // is expected there. Measure from after that commit.
@@ -148,7 +149,7 @@ describe('hidden FilesTab does not re-render', () => {
 
   it('stays still when another session writes a file', async () => {
     const view = render(<Harness />);
-    await view.findByTitle('notes.md');
+    await findByHint(view.container, 'notes.md');
     fireEvent.click(view.getByRole('button', { name: 'Conversations' }));
     const before = probe.filesTabRenders;
     // What another session's file write looks like from here: a new state
@@ -165,8 +166,8 @@ describe('hidden FilesTab does not re-render', () => {
 
 describe('Files tab survives a tab switch', () => {
   it('hides on `hidden` without refetching the file list', async () => {
-    const { container, rerender, findByTitle } = renderTab(false);
-    await findByTitle('notes.md');
+    const { container, rerender } = renderTab(false);
+    await findByHint(container, 'notes.md');
     expect(listFolder).toHaveBeenCalledTimes(1);
     // Browsing never waits on the whole-project walk.
     expect(listAllFiles).not.toHaveBeenCalled();
@@ -183,7 +184,7 @@ describe('Files tab survives a tab switch', () => {
     // Hidden means display:none, NOT gone: the rows are still in the DOM, so the
     // watcher subscription and the loaded list are still alive.
     expect(container.firstElementChild?.className).toBe('hidden');
-    expect(container.querySelector('button[title="notes.md"]')).not.toBeNull();
+    expect(container.querySelector('button[data-hint="notes.md"]')).not.toBeNull();
 
     rerender(shown(false));   // → back to Files
     await waitFor(() => expect(container.firstElementChild?.className).not.toBe('hidden'));
@@ -197,14 +198,14 @@ describe('opening a file from the Files tab', () => {
     // FilesTab no longer reads the app-wide file state itself: Project View hands
     // it the open file's id and the dispatch. Both ends of that hand-off, together.
     const view = render(<Harness />);
-    fireEvent.click(await view.findByTitle('notes.md'));
+    fireEvent.click(await findByHint(view.container, 'notes.md'));
     expect(harnessDispatch).toHaveBeenCalledWith({ type: 'ACTIVE_ARTIFACT_SET', sessionId: 'project-view', artifactId: 'f1' });
-    expect(view.queryByTitle('Open with the default app')).toBeNull();
+    expect(queryByHint(view.container, 'Open with the default app')).toBeNull();
     // What App's reducer does with that action.
     act(() => {
       setArtifactState((st: any) => ({ ...st, activeArtifactBySession: { ...st.activeArtifactBySession, 'project-view': 'f1' } }));
     });
-    expect(await view.findByTitle('Open with the default app')).toBeTruthy();
+    expect(await findByHint(view.container, 'Open with the default app')).toBeTruthy();
   });
 });
 
@@ -215,13 +216,13 @@ describe('"+ Add file" is offered on the computer only', () => {
   it('shows on the desktop and is absent over remote access', async () => {
     const { setConnectionMode } = await import('../src/renderer/platform');
     const desk = render(<Harness />);
-    await desk.findByTitle('notes.md');
+    await findByHint(desk.container, 'notes.md');
     expect(desk.queryByRole('button', { name: '+ Add file' })).not.toBeNull();
     desk.unmount();
     setConnectionMode('remote');
     try {
       const phone = render(<Harness />);
-      await phone.findByTitle('notes.md');
+      await findByHint(phone.container, 'notes.md');
       expect(phone.queryByRole('button', { name: '+ Add file' })).toBeNull();
     } finally {
       setConnectionMode('local');
@@ -245,9 +246,9 @@ describe('Project View after a remote reconnect', () => {
     (window as any).claude.artifacts.listProjectsIndex = index;
     const view = render(<Harness />);
     await waitFor(() => expect(index).toHaveBeenCalledTimes(1));
-    expect(view.queryByTitle('notes.md')).toBeNull();
+    expect(queryByHint(view.container, 'notes.md')).toBeNull();
     await reconnect();
-    expect(await view.findByTitle('notes.md')).toBeTruthy();
+    expect(await findByHint(view.container, 'notes.md')).toBeTruthy();
   });
 
   it('a conversation list that failed to load is read again', async () => {
@@ -256,7 +257,7 @@ describe('Project View after a remote reconnect', () => {
       .mockResolvedValue({ ok: true, conversations: [{ sessionId: 'c1', name: 'Plan', lastModified: Date.now(), projectSlug: 'x', size: 1 }] });
     (window as any).claude.project.listConversations = conversations;
     const view = render(<Harness />);
-    await view.findByTitle('notes.md');
+    await findByHint(view.container, 'notes.md');
     await waitFor(() => expect(conversations).toHaveBeenCalledTimes(1));
     await reconnect();
     await waitFor(() => expect(conversations).toHaveBeenCalledTimes(2));

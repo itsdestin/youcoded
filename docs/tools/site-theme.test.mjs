@@ -21,7 +21,10 @@ test('website default uses the actual lavender YouCoded Light theme, not the leg
   assert.equal(actual.opacity, theme.background['panels-opacity']);
   assert.match(site, /var currentTheme = 'youcoded';/);
   assert.match(site, /applyTheme\("youcoded"\);/);
-  assert.match(site, /theme: 'youcoded',\s+at: 2080/);
+  // WHY changed (2026-11-12): the intro's steps no longer carry their own
+  // times (they sit on one even beat now), so the old "at: 2080" text is gone.
+  // What this guards is unchanged: the intro's LAST step rests on YouCoded Light.
+  assert.match(site, /\{ theme: 'youcoded' \}[^\n]*\n\s*\];/);
   assert.match(site, /applyTheme\('youcoded'\);/);
 });
 
@@ -50,4 +53,58 @@ test('default poster, wallpaper and mascot are generated assets for YouCoded Lig
   assert.equal(picker[1], theme.tokens.accent);
   assert.ok(themes.youcoded.wall);
   readFileSync(fileURLToPath(new URL(`../${themes.youcoded.wall}`, import.meta.url)));
+});
+
+// WHY (2026-11-13, traced): the end of the opening intro hitched because of two
+// kinds of rule keyed on <body>'s intro class. Both made the browser re-style
+// hundreds of invisible elements in the instant the page content starts to rise.
+test('ending the intro does not re-style the whole page', () => {
+  // Comments are dropped first: several of them quote the old rules.
+  const css = site.slice(site.indexOf('<style'), site.lastIndexOf('</style>')).replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = css.match(/[^{}]*body\.intro-mode[^{}]*\{[^{}]*\}/g) || [];
+  assert.ok(rules.length > 5, 'the intro rules were found');
+  for (const rule of rules) {
+    const [selectors, body] = rule.split('{');
+    // 1. A selector ending in `*` under body.intro-mode re-checks every element.
+    for (const sel of selectors.split(',')) {
+      if (!/body\.intro-mode/.test(sel)) continue;
+      assert.doesNotMatch(sel.trim(), /\*\s*$/, `no "body.intro-mode ... *" rule: ${sel.trim()}`);
+      // 2. pointer-events is inherited: on a big section it re-styles everything inside.
+      if (/>\s*(section|footer)\s*$/.test(sel.trim())) {
+        assert.doesNotMatch(body, /pointer-events:\s*none/, `no pointer-events:none on the hidden sections: ${sel.trim()}`);
+      }
+    }
+  }
+  // The intro's word steps colour only what is on screen, not the page's root.
+  assert.match(site, /else applyTheme\(step\.theme, true\);/);
+  assert.match(site, /querySelectorAll\('\.nav, \.flankrow > \*'\)/);
+});
+
+// WHY: the phone demo page (demo.html) paints its top strip in the visitor's
+// look before anything else loads, so it carries its own small copy of each
+// look's colours. This keeps that copy equal to the landing page's tables.
+test('the demo page wears the same colours as the landing page, look for look', () => {
+  const demo = readFileSync(new URL('../demo.html', import.meta.url), 'utf8');
+  const looksSource = demo.match(/var LOOKS = (\{[^\n]+\});/);
+  assert.ok(looksSource, 'the demo page has its table of looks');
+  const looks = JSON.parse(looksSource[1]);
+  const brandSource = site.match(/var BRAND = (\{[\s\S]*?\n\});/);
+  assert.ok(brandSource);
+  const brand = vm.runInNewContext(`(${brandSource[1]})`);
+  assert.deepEqual(Object.keys(looks).sort(), Object.keys(themes).sort(), 'every look the page offers is known to the demo page');
+  for (const [slug, t] of Object.entries(themes)) {
+    const look = looks[slug], b = brand[slug] || brand.youcoded;
+    for (const key of ['canvas', 'panel', 'fg', 'dim', 'edge']) assert.equal(look[key], t[key], `${slug} ${key}`);
+    assert.equal(look.you, b.a, `${slug} wordmark colour`);
+    assert.equal(look.ink, t.dark ? t.fg : (b.ink || t.fg), `${slug} wordmark ink`);
+    assert.equal(look.wall, t.wall && !t.gradient ? `url("${t.wall}")` : 'none', `${slug} wallpaper`);
+  }
+  // Destin's trimmed design (2026-11-13): arrow + wordmark is the way back, a
+  // "Demo" tag on the right, no download button and no app icon in the strip.
+  assert.match(demo, /<a class="back" href="\.\/"[^>]*>[\s\S]*?<span class="wm"><i>you<\/i>coded<\/span><\/a>/);
+  assert.match(demo, /<span class="tag">Demo<\/span>/);
+  assert.doesNotMatch(demo, /#download|<img/);
+  // The live app's box must never be clipped or rounded (Chrome smears its glass).
+  const stage = demo.match(/\.stage\{[^}]*\}/)[0].replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.doesNotMatch(stage, /overflow|border-radius|clip-path/);
 });

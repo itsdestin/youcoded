@@ -1,6 +1,8 @@
 // ActiveArtifactView — shared component for viewing and editing a single artifact.
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
+import { announceFailed } from '../../utils/announce';
+import { plainMessage } from '../../utils/ipc-error';
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
 import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer, isCommentableBinaryViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
@@ -50,6 +52,7 @@ import { isOfficeEditable } from '../office/office-files';
 import { useOfficeAvailable } from '../office/office-availability';
 import { flushOffice } from '../office/office-store';
 import { holdUnsavedEditor } from '../../state/unsaved-editors';
+import { formatBytes } from '../../../shared/format-bytes';
 // Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
 // so the editor code loads only when someone presses Edit on one.
 const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
@@ -452,7 +455,10 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           if (onDiskRead) onDiskRead(res);
           else if (disk !== content) onContentChange(disk);
         }
-      });
+      // WHY silent: a background refresh after another program changed the file. The text on screen is still what was last
+      // read, and the next change event or a Save (which re-checks the file on disk) catches up, so a failed refresh needs no
+      // notice; without this catch it would only become an unhandled rejection.
+      }).catch(() => {});
     });
     return typeof unsubFn === 'function' ? unsubFn : undefined;
   }, [artifact.id, projectRoot, artifact.path, onDiskRead]);
@@ -517,7 +523,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     if (!canEditArtifact(contentInfo, content, tier)) {
       // Never a silent no-op: the button would otherwise do nothing at all.
       // Specific and accurate — this is the ONE reason this branch fires.
-      setSaveError(`YouCoded is only showing part of this file (it is over ${(EDIT_MAX_BYTES / (1024 * 1024)).toFixed(1)} MB), so saving would overwrite the rest. Copy your changes out before closing.`);
+      setSaveError(`YouCoded is only showing part of this file (it is over ${formatBytes(EDIT_MAX_BYTES)}), so saving would overwrite the rest. Copy your changes out before closing.`);
       return false;
     }
     // WHY a save never goes out without a token (error inventory 2026-09-10, false
@@ -549,9 +555,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     const saveOpts: { baseMtimeMs?: number; confirmed?: boolean } = {};
     if (!opts?.force && mtimeRef.current !== null) saveOpts.baseMtimeMs = mtimeRef.current;
     if (tier === 'needs-confirm') saveOpts.confirmed = true; // dialog shown at startEdit
-    const res = await (window.claude as any).artifacts.save(
-      projectRoot, projectId, projectName, artifact.id, draft, sessionId, saveOpts
-    );
+    // A REJECTED save (the handler rethrows write errors) used to do nothing: the editor stayed open and no banner appeared (card #134).
+    // It is a failed save like an answered one - the same "Save failed: <real reason>" banner, and the editor and draft stay as they are.
+    let res: any;
+    try {
+      res = await (window.claude as any).artifacts.save(
+        projectRoot, projectId, projectName, artifact.id, draft, sessionId, saveOpts
+      );
+    } catch (e) { res = { ok: false, error: plainMessage(e, 'the file could not be written') }; }
     if (res && res.ok) {
       if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
       clearDraft(draftKey(projectRoot, artifact.id));
@@ -604,7 +615,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       setSaveError('This file changed while you had it open, so the checkbox wasn\'t saved. It now shows the latest version.');
       return;
     }
-    const res = await (window.claude as any).artifacts.save(projectRoot, projectId, projectName, artifact.id, next, sessionId, { baseMtimeMs: disk.mtimeMs });
+    let res: any;
+    try { res = await (window.claude as any).artifacts.save(projectRoot, projectId, projectName, artifact.id, next, sessionId, { baseMtimeMs: disk.mtimeMs }); }
+    catch (e) { res = { ok: false, error: plainMessage(e, 'the file could not be written') }; } // same as above: a rejection is a failed save
     if (res && res.ok) {
       if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
       setSaveError(null);
@@ -675,8 +688,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // conditionally-called hook (React error + a lint failure).
   const loadFull = useCallback(() => {
     const scope = readScope.current;
-    (window.claude as any).artifacts.get(projectRoot, artifact.id, { full: true })
-      .then((res: any) => { if (scope.active && onDiskRead) onDiskRead(res); });
+    // Card #134 round 4: a refused or rejected read used to do nothing at all (the banner just stayed). Only the current file's
+    // read speaks (scope.active), and a deliberate "file moved" answer (orphan) is not a failure.
+    Promise.resolve((window.claude as any).artifacts.get(projectRoot, artifact.id, { full: true }))
+      .then((res: any) => {
+        if (!scope.active) return;
+        if (res && res.ok === false && !res.orphan) { announceFailed('load the whole file', res.error); return; }
+        if (onDiskRead) onDiskRead(res);
+      }, (e: unknown) => { if (scope.active) announceFailed('load the whole file', e); });
   }, [projectRoot, artifact.id, onDiskRead]);
 
   // Expose edit control to the host header (SessionDrawer).

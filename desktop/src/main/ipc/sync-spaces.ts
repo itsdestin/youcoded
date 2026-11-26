@@ -82,9 +82,11 @@ export const syncSpacesChannels: MainChannelDef[] = [
     name: IPC.SYNC_SPACES_RENAME_DEVICE, kind: 'handle',
     handler: async (p) => {
       const pr = getManagedRoots()?.personalRoot;
-      if (!pr) return { ok: false };
+      // Card #134 round 4: the failure answered a bare { ok:false }, so the screen's "Couldn't rename this device" box had no reason to show
+      // under Details; the catch below now passes the real error message.
+      if (!pr) return { ok: false }; // a test pins this bare answer for a phone with no managed folders
       try { await renameDevice(pr, String(p?.id ?? ''), String(p?.name ?? '')); return { ok: true }; }
-      catch { return { ok: false }; }
+      catch (e) { return { ok: false, error: e instanceof Error && e.message ? e.message : undefined }; }
     },
   }),
   defineChannel({

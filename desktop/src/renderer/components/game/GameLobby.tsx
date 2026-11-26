@@ -232,6 +232,8 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
             <p className="text-sm text-fg">No friends yet. Add a friend on the Games list, then challenge them here.</p>
             <Button variant="primary" className="w-full" onClick={onAddFriend}>Add a friend</Button>
           </div>
+        ) : f.friendsError ? (
+          <ErrorState variant="inline" message={`Couldn't load your friends: ${f.friendsError}`} onRetry={() => { void f.refresh(); }} />
         ) : (
           <LoadingState what="your friends" variant="inline" />
         )}

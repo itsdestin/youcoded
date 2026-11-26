@@ -12,7 +12,7 @@ Desktop and Android render the **same React UI**. This is the most important arc
 
 - Source of truth: `youcoded/desktop/src/renderer/` (React app)
 - Desktop: Electron hosts the React app natively
-- Android: `ui/AppWebView.kt` loads the React build from bundled assets (`file:///android_asset/web/index.html`). The React bundle is generated from the desktop source via `scripts/build-web-ui.sh`.
+- Android: `ui/AppWebView.kt` loads the React build from bundled assets through WebViewAssetLoader at `https://appassets.androidplatform.net/assets/web/index.html` (file access is off). The React bundle is generated from the desktop source via `scripts/build-web-ui.sh`.
 - Android runs the desktop backend headlessly in a bundled Node process. Its page uses `remote-shim.ts` to connect to that backend over a loopback WebSocket with a per-run token and the port supplied by the shell. Desktop uses Electron IPC directly. See [Android runtime](android-runtime.md).
 - Both platforms communicate via the **same JSON protocol** — the WebSocket transport and Electron IPC carry identical message shapes.
 

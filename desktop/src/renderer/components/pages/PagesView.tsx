@@ -164,7 +164,9 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
           <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-5 h-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
+          <Tooltip text={page.name}>
+            <div className="text-sm font-medium text-fg truncate">{page.name}</div>
+          </Tooltip>
           <div className="text-xs text-fg-muted line-clamp-2">{page.description}</div>
         </div>
         {/* A built-in page is part of the app: nothing to edit in chat. */}

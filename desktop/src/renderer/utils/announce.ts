@@ -1,3 +1,4 @@
+import { isUnsupportedHere } from './ipc-error';
 // A one-line notice from anywhere in the renderer to the app's one <Toast>.
 //
 // WHY: App.tsx owns the toast state, and the components that most need to say
@@ -22,4 +23,16 @@ export interface AppNoticeDetail {
 export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action']): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action } }));
+}
+
+/**
+ * "Couldn't <what>." in the app's toast, for a button whose action failed and which has no notice of its own on screen (card #134).
+ * WHY a toast and not an invented cause: the sentence states only the plain fact; the real reason goes to the console, so nothing
+ * is guessed on screen and nothing is lost for whoever investigates (docs/error-message-standards.md).
+ */
+export function announceFailed(what: string, cause?: unknown): void {
+  // An "unsupported here" answer is not a failure: the remote shim has already said so in its own notice (card #134 round 4).
+  if (isUnsupportedHere(cause)) { console.warn(`[app] ${what}: not available on this client`); return; }
+  console.warn(`[app] couldn't ${what}:`, cause instanceof Error ? cause.message : cause);
+  announce(`Couldn't ${what}.`);
 }

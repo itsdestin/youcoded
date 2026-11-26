@@ -7,6 +7,9 @@ const mp = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['ma
 export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/skills', 'view'),
   mp('marketplace/themes', 'view'),
+  // Destin N4: a refresh fails while the first list is still on screen.
+  { ...mp('marketplace/refresh-failed', 'view', 'error-state'), params: { mpRefresh: 'fail' }, mark: 'marketplace/skills', waitMs: 2500, newIn: 'after' as const },
+  { ...mp('marketplace/skills#counts-failed', 'view', 'error-state'), params: { statsFail: '1' } },
   mp('marketplace/search', 'view'),
   mp('marketplace/detail', 'dialog'),
   // The account chip's small menu, opened by clicking the chip (signed in as the practice "you").
@@ -58,6 +61,8 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('library/themes', 'view'),
   { ...mp('library#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
   { ...mp('library#load-failed', 'view', 'error-state'), params: { fail: 'skills.list' } },
+  // Card #134 batch 2: the update check refused — the Library says so instead of every Update badge vanishing.
+  { ...mp('library#update-check-failed', 'view', 'error-state'), params: { fail: 'marketplace.getPackages' } },
   // Nothing loaded at all: the full-screen error (gt-r1#B-3).
   { ...mp('marketplace#load-failed', 'view', 'error-state'), params: { marketplace: 'empty', fail: 'skills.list' } },
   { ...mp('library/themes#load-failed', 'view', 'error-state'), params: { fail: 'theme.marketplace.list' } },

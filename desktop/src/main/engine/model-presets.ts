@@ -385,7 +385,31 @@ export interface PresetFileInput {
    *  An empty array means "this model had no section": it gets none, which is
    *  the same file it had. A Map, not an object: model ids are filenames. */
   preserve?: ReadonlyMap<string, readonly string[]>;
+  /** Ids whose GGUF carries its own next-token heads (`<arch>.nextn_predict_layers`
+   *  > 0) — they get MTP drafting in their own section (see MTP_ENTRIES). */
+  mtpModelIds?: ReadonlySet<string>;
+  /** The "Speculative decoding" switch (`engine.speed.speculative`). Off → no MTP
+   *  either: it is the same feature, just a better guesser. */
+  speculative?: boolean;
 }
+
+/** MTP drafting: the model guesses its next few tokens with heads trained into
+ *  its own file, and checks them in one pass.
+ *
+ *  WHY per model and not on the command line: `--spec-type draft-mtp` makes a
+ *  model WITHOUT those heads refuse to load ("context type MTP requested but
+ *  model doesn't contain MTP layers" — measured on Gemma 4 E2B, 2026-07-14), and
+ *  the router applies its command line to every model.
+ *  WHY it rides beside the command line's `--spec-default`: the child gets both
+ *  (probed b10665: `--spec-default --spec-draft-n-max 3 --spec-type draft-mtp`),
+ *  so file rewrites keep the n-gram guesser's win and ordinary replies get MTP's.
+ *  Measured 2026-11-08, Qwen3.8-27B Q8 on Strix Halo: replies 6.7 → 11-15 t/s,
+ *  reading unchanged. History: found 2026-07-14 (+25% on Qwen3.6-35B-A3B), then
+ *  lost when its to-do list was deleted — docs/engine-dependencies.md. */
+const MTP_ENTRIES: readonly PresetEntry[] = [
+  { key: 'spec-type', value: 'draft-mtp' },
+  { key: 'spec-draft-n-max', value: '3' },
+];
 
 /** The `[*]` section's value for one key in a preset file we wrote earlier, or
  *  null when the file has no such line.
@@ -457,7 +481,7 @@ export function renderPresetFile(input: PresetFileInput): string {
     const held = input.preserve?.get(id);
     const body = held !== undefined
       ? [...held]
-      : modelSectionEntries(lookupSettings(input.settings, id)).map((e) => `${e.key} = ${e.value}`);
+      : withMtp(modelSectionEntries(lookupSettings(input.settings, id)), input, id).map((e) => `${e.key} = ${e.value}`);
     // WHY a model on all defaults gets NO section rather than an empty one: the
     // mere presence of a section flips that model's `source` to `preset` in
     // GET /models and marks it a custom preset in the engine's own log (probed).
@@ -470,6 +494,15 @@ export function renderPresetFile(input: PresetFileInput): string {
   }
 
   return lines.join('\n');
+}
+
+/** A model's entries plus MTP drafting when its file supports it and the switch
+ *  is on. A user who typed their own `spec-*` option in Extra engine options
+ *  keeps it: theirs is a deliberate choice, ours a default. */
+function withMtp(entries: PresetEntry[], input: PresetFileInput, id: string): PresetEntry[] {
+  if (input.speculative === false || !input.mtpModelIds?.has(id)) return entries;
+  if (entries.some((e) => e.key.startsWith('spec-'))) return entries;
+  return [...entries, ...MTP_ENTRIES];
 }
 
 /** Write the file the way `download-manifest.ts` writes: temp file, then rename.

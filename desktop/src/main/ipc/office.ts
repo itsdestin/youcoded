@@ -1,4 +1,4 @@
-// office.ts — Office's channels (office:status / create / pick / open / invoke / close / versions / restore / save-copy, and the
+// office.ts — Office's channels (office:status / create / pick / open / invoke / close / versions / restore / save-copy / rename / duplicate / forget-recent, and the
 // window's answers to main's pushes: journal-done / other-unsaved / proceed / dismiss / comments-answer / comments-changed).
 // The computer's own windows only.
 //
@@ -62,6 +62,10 @@ export const officeChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.OFFICE_VERSIONS, kind: 'handle', desktopOnly: true, handler: ({ path }, ctx) => ask(IPC.OFFICE_VERSIONS, { sender: ctx.sender }, path) as any }),
   defineChannel({ name: IPC.OFFICE_RESTORE, kind: 'handle', desktopOnly: true, handler: ({ path, versionId }, ctx) => ask(IPC.OFFICE_RESTORE, { sender: ctx.sender }, path, versionId) as any }),
   defineChannel({ name: IPC.OFFICE_SAVE_COPY, kind: 'handle', desktopOnly: true, handler: ({ token, mode, data }, ctx) => ask(IPC.OFFICE_SAVE_COPY, { sender: ctx.sender }, token, mode, data) as any }),
+  // Office Home's row actions (card #143).
+  defineChannel({ name: IPC.OFFICE_RENAME, kind: 'handle', desktopOnly: true, handler: ({ path, newName }, ctx) => ask(IPC.OFFICE_RENAME, { sender: ctx.sender }, path, newName) as any }),
+  defineChannel({ name: IPC.OFFICE_DUPLICATE, kind: 'handle', desktopOnly: true, handler: ({ path }, ctx) => ask(IPC.OFFICE_DUPLICATE, { sender: ctx.sender }, path) as any }),
+  defineChannel({ name: IPC.OFFICE_FORGET_RECENT, kind: 'handle', desktopOnly: true, handler: ({ path }, ctx) => ask(IPC.OFFICE_FORGET_RECENT, { sender: ctx.sender }, path) as any }),
   // The window's answers to main's pushes. `on`: fire-and-forget, nothing comes back.
   defineChannel({ name: IPC.OFFICE_JOURNAL_DONE, kind: 'on', desktopOnly: true, handler: ({ id }, ctx) => tell(IPC.OFFICE_JOURNAL_DONE, { sender: ctx.sender }, id) }),
   defineChannel({ name: IPC.OFFICE_OTHER_UNSAVED, kind: 'on', desktopOnly: true, handler: ({ names }, ctx) => tell(IPC.OFFICE_OTHER_UNSAVED, { sender: ctx.sender }, names) }),

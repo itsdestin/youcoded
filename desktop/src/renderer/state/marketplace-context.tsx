@@ -27,6 +27,8 @@ import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 // window.claude is typed for skills but not for theme.marketplace — cast via any
 const claude = () => (window as any).claude;
+/** Marks a failed read of the installed-packages map, so it is told apart from a real empty one. */
+const PACKAGES_UNREAD = Symbol('packages-unread');
 
 // WHY: isNewerVersion moved to src/shared so the Electron main process can use the
 // SAME comparison when deciding whether a bundled plugin needs upgrading at launch.
@@ -79,9 +81,16 @@ interface MarketplaceState {
   // Loading/error state
   loading: boolean;
   error: string | null;
+  /** Why the marketplace's OWN catalog read failed, or null. WHY separate from `error` (review of the N4 strip): `error` also folds in
+   *  a failed read of the INSTALLED skills (skillsLoadError), and a strip saying "couldn't refresh the marketplace" for that is false. */
+  registryError: string | null;
   /** Why the installed-theme list alone failed to load, or null. Only the Library's
    *  Themes tab reports it — the rest of the marketplace loaded fine. */
   themesError: string | null;
+  /** Why the check for plugin and theme updates could not be read, or null. WHY: a failed read used
+   *  to look like "everything is up to date" - update badges just vanished (error inventory
+   *  2026-09-10, Marketplace row 10). */
+  packagesError: string | null;
 }
 
 interface MarketplaceActions {
@@ -244,6 +253,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // the plugins — so it was caught to [] and the Library's Themes tab said "No themes
   // installed yet." to someone with themes. Kept apart so only the Themes tab reports it.
   const [themesError, setThemesError] = useState<string | null>(null);
+  // Why the installed-packages map (the source of every Update badge) could not be read, or null.
+  const [packagesError, setPackagesError] = useState<string | null>(null);
 
   // Fetch all marketplace data in parallel — on first demand, and after every mutation.
   const fetchAll = useCallback(async () => {
@@ -274,7 +285,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             return [];
           }),
         claude().appearance.getFavoriteThemes().catch(() => []),
-        marketplaceApi?.getPackages?.().catch(() => ({})) ?? Promise.resolve({}),
+        // WHY the failure is kept (error inventory 2026-09-10, Marketplace row 10): swallowing it as {}
+        // made every Update badge vanish, which reads as "everything is up to date". A failed read
+        // leaves the packages already known in place and is reported by the Library.
+        marketplaceApi?.getPackages?.()
+          .then((p: unknown) => { if (gen === fetchGeneration.current) setPackagesError(null); return p; })
+          .catch((err: any) => {
+            if (gen === fetchGeneration.current) setPackagesError(err?.message || 'the update check did not answer');
+            return PACKAGES_UNREAD;
+          }) ?? Promise.resolve({}),
         featuredCall,
       ]);
 
@@ -300,7 +319,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       );
       setThemeEntries(arr(themes));
       setThemeFavoritesState(arr(themeFavs));
-      setPackages((pkgs as Record<string, PackageInfo>) || {});
+      if (pkgs !== PACKAGES_UNREAD) setPackages((pkgs as Record<string, PackageInfo>) || {});
       setFeatured((feat && typeof feat === 'object') ? feat : { hero: [], rails: [] });
     } catch (err: any) {
       if (gen !== fetchGeneration.current) return;
@@ -666,7 +685,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     // load" exactly as it did when this context fetched that list itself.
     loading: loading || skillsLoading,
     error: error ?? skillsLoadError,
+    registryError: error,
     themesError,
+    packagesError,
     installSkill,
     uninstallSkill,
     installTheme,
@@ -680,7 +701,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   }), [
     skillEntries, themeEntriesWithBuiltins, featured, packages, updateAvailable, installedSkills,
     favorites, themeFavorites, installingIds, installOps, installError, dismissInstallError, loading, skillsLoading,
-    error, skillsLoadError, themesError,
+    error, skillsLoadError, themesError, packagesError,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
     setFavorite, favoriteTheme, refresh, publishSkill, ensureLoaded,
   ]);

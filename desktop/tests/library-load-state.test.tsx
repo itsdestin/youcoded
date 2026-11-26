@@ -131,4 +131,20 @@ describe('LibraryScreen — a load that did not finish is not "nothing installed
     expect(await screen.findByText(/loading/i)).toBeInTheDocument();
     expect(screen.queryByText('Nothing installed yet.')).toBeNull();
   });
+
+  // WHY (error inventory 2026-09-10, Marketplace row 10): the update check failing used to swallow
+  // to {}, so every Update badge vanished - "everything is up to date" - with nothing said.
+  it('a failed update check says so, with the reason and Try again, and Try again asks again', async () => {
+    setupWindowClaude(() => Promise.resolve([]));
+    const getPackages = vi.fn()
+      .mockRejectedValueOnce(new Error('update service unreachable'))
+      .mockResolvedValue({});
+    (window as any).claude.marketplace.getPackages = getPackages;
+    await renderLibrary();
+
+    expect(await screen.findByText(/Couldn.t check for updates: .*update service unreachable/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Try again' })); });
+    expect(screen.queryByText(/Couldn.t check for updates/)).toBeNull();
+    expect(getPackages).toHaveBeenCalledTimes(2);
+  });
 });

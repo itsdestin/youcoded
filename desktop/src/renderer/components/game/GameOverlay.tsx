@@ -88,7 +88,9 @@ export default function GameOverlay({ connection, screen }: Props) {
             className="w-full"
           >
             {/* Sentence case (decisions "Feature names in Title Case" → sentence case). */}
-            {state.rematchRequested ? 'Rematch requested' : 'Rematch'}
+            {/* WHY three labels: when the opponent asked first, this player must see a live
+                "Accept rematch" (pressing it starts the game), not a disabled "requested". */}
+            {state.rematchRequested ? 'Rematch requested' : state.opponentWantsRematch ? 'Accept rematch' : 'Rematch'}
           </Button>
           {/* Filled-grey (`bg-inset`) was a second, unofficial secondary style —
               it collapses into the primitive's outlined `secondary`. */}

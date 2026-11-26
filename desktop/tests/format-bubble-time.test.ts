@@ -1,5 +1,34 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { formatBubbleTime } from '../src/renderer/utils/format-time';
+import { formatBubbleTime, formatFullDateTime } from '../src/renderer/utils/format-time';
+
+describe('formatFullDateTime', () => {
+  const full = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+
+  it('gives the full local date and time for epoch-ms and for an ISO string', () => {
+    const ms = new Date(2026, 10, 11, 14, 34).getTime();
+    expect(formatFullDateTime(ms)).toBe(full(ms));
+    expect(formatFullDateTime(new Date(ms).toISOString())).toBe(full(ms));
+    expect(formatFullDateTime(ms)).toContain('2026');
+  });
+
+  it('gives an empty string, never "Invalid Date", for a missing or unreadable time', () => {
+    for (const bad of [undefined, null, '', 0, NaN, Infinity, 'not a date', 8.64e15 + 1]) {
+      expect(formatFullDateTime(bad as any)).toBe('');
+    }
+  });
+
+  it('follows a change of time zone', () => {
+    const prev = process.env.TZ;
+    try {
+      const ms = Date.UTC(2026, 10, 11, 12, 0);
+      process.env.TZ = 'America/New_York';
+      const ny = formatFullDateTime(ms);
+      process.env.TZ = 'Asia/Tokyo';
+      const tokyo = formatFullDateTime(ms);
+      expect(ny).not.toBe(tokyo);
+    } finally { process.env.TZ = prev; }
+  });
+});
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 

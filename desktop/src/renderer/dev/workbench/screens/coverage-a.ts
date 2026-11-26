@@ -14,7 +14,8 @@ const scroll = (times: number) => ({ do: 'scroll', dir: 'down', times }) as cons
 const CLAUDE_STATES = ['signed-out', 'not-installed', 'unknown', 'apikey'] as const;
 // The model picker only differs for signed-out and not-installed (a greyed row with a hint); unknown and API-key draw it exactly as signed-in.
 const CLAUDE_CODE: readonly ScreenEntry[] = CLAUDE_STATES.flatMap((c) => [
-  { ...settings(`settings/assistant/cloud#claude-${c}`, 'dialog', 'sign-in'), params: { claudeCode: c } },
+  // WHY signed-out is skipped here: master lists `settings/assistant/cloud#claude-signed-out` itself (settings.ts); two entries of one name fail the list's own check
+  ...(c === 'signed-out' ? [] : [{ ...settings(`settings/assistant/cloud#claude-${c}`, 'dialog', 'sign-in'), params: { claudeCode: c } }]),
   ...(c === 'signed-out' || c === 'not-installed' ? [{ ...chat(`chat/model-picker#claude-${c}`, 'dialog', 'sign-in'), params: { claudeCode: c } }] : []),
 ]);
 
@@ -111,7 +112,8 @@ const PHONE_APP: readonly ScreenEntry[] = [
 const END = scroll(30);
 const SCROLLED: readonly ScreenEntry[] = [
   ...['settings/assistant/general', 'settings/assistant/local', 'settings/sound', 'settings/remote', 'settings/help', 'settings/shortcuts', 'settings/assistant/permissions']
-    .map((n) => ({ ...settings(`${n}#bottom`, 'dialog'), mark: n, open: [END] })),
+    // WHY sameAs on Help: master photographs that page's end itself (`settings/help#updates`); the two pictures are identical
+    .map((n) => ({ ...settings(`${n}#bottom`, 'dialog'), mark: n, open: [END], ...(n === 'settings/help' ? { sameAs: { name: 'settings/help#updates', why: 'both scroll Help to its end' } } : {}) })),
   { ...settings('settings/assistant/local#middle', 'dialog'), mark: 'settings/assistant/local', open: [scroll(4)] },
   { ...settings('settings/assistant/permissions#middle', 'dialog'), mark: 'settings/assistant/permissions', open: [scroll(5)] },
 ];
