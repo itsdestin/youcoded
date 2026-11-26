@@ -445,15 +445,18 @@ export class Replicator {
         const busy = run.pull && now - run.pull.at < (this.#o.stallMs ?? DEFAULT_STALL_MS) && cand.some((p) => p.hex === run.pull?.peer) && run.pull.haveLines === (from ?? head.lines);
         if (!busy) await this.want(wire, cand[0]);
       } else if (run.refill && v.desc.writer.equals(ctx.crypto.self)) await this.writerRefill(wire, v.local, run);
-      // children waiting for this version as their parent
-      for (const w of this.#directory.list()) {
-        const d = this.#directory.describe(w);
-        if (d?.parent?.equals(wire) && !this.#adopting.has(w.toString('hex')) && !(await ctx.ids.current(w).then((c) => c.registered, () => true))) { this.#adopting.add(w.toString('hex')); void this.adopt(w).finally(() => this.#adopting.delete(w.toString('hex'))); } // F6: one adoption in flight per child
-      }
+      await this.adoptWaitingChildren(wire);
     } catch (e) {
       if (e instanceof StoreError && e.code === 'damaged') { await this.queue(wire, () => retireAndRecopy(ctx, wire, 'store-damaged')); return; }
       run.stuck = e instanceof StoreError ? e.code : 'reconsider-failed';
       reportFailure({ what: 'compare chat copies with the other devices', cause: e, where: 'mesh.replicator' });
+    }
+  }
+  /** Children waiting for this version as their parent: one adoption in flight per child (F6). */
+  private async adoptWaitingChildren(wire: Buffer): Promise<void> {
+    for (const w of this.#directory.list()) {
+      const d = this.#directory.describe(w);
+      if (d?.parent?.equals(wire) && !this.#adopting.has(w.toString('hex')) && !(await this.#ctx.ids.current(w).then((c) => c.registered, () => true))) { this.#adopting.add(w.toString('hex')); void this.adopt(w).finally(() => this.#adopting.delete(w.toString('hex'))); }
     }
   }
   /** I am the writer and my copy lost lines no peer has: only my own chat file can supply them (an adapter); otherwise say so, loudly. */
