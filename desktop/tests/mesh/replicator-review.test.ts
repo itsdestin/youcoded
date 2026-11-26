@@ -52,6 +52,19 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     expect(((await world.localOf('B', V)) as Buffer).equals(incarnationId(V, 0))).toBe(true); // B never set its copy aside
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
   });
+  it('a writer that restarted after its copy was set aside, with nobody to compare with yet, refuses appendLocal by name until a peer has confirmed it holds nothing more', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f1f');
+    await world.create('A', V); const six = lineSet(6); await world.devs.A.rep.appendLocal(V, six);
+    await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(6)); await world.settle();
+    world.devs.B.carrier.setOnline(false);
+    await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
+    await world.restart('A'); // a new process: it remembers no peer claim at all
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-recopy-not-confirmed/);
+    world.devs.B.carrier.setOnline(true);
+    await world.elapse(120_000, 10_000);
+    expect(await world.readAll('A', V)).toEqual(six);
+    await world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6));
+  });
   it('a writer whose whole store folder was put back refuses appendLocal while a peer holds more of its chain, recovers its lines, and then appends', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000, stallMs: 10_000 }); const world = w; const V = wireId('f1b');
     await world.create('A', V);
@@ -113,6 +126,7 @@ describe('F2 an ack is a statement about a copy that still exists', () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f2a');
     await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5));
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(5)); await world.settle();
+    world.hub.holdFilter = () => 'drop'; // B cannot refill, so only B SAYING what it holds can retract the ack
     await world.devs.B.store.setAsideDamaged((await world.localOf('B', V)) as Buffer);
     await world.devs.B.rep.reportCorrupt(V);
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines ?? 0).not.toBe(5));
@@ -339,14 +353,15 @@ describe('F6/F8 a child waiting for its parent is not adopted again for every me
     world.hub.holdFilter = () => 'drop';
     await world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4)); await world.settle();
     const hash = (await headOf(world, 'A', V)); void hash;
-    const forkHash = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 3)) as string, 'hex');
-    const token = 'wait'; const child = (await import('../../src/main/mesh/store')).deriveForkId(V, 3, forkHash.toString('hex'), token);
-    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 3, forkHash, token });
+    const forkHash = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 5)) as string, 'hex');
+    const token = 'wait'; const child = (await import('../../src/main/mesh/store')).deriveForkId(V, 5, forkHash.toString('hex'), token);
+    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 5, forkHash, token }); // B holds 4 lines of the parent: the child must wait for line 5
     await world.settle();
     let syncs = 0; const link = world.devs.B.link as unknown as { sync: (g: string) => Promise<void> }; const orig = link.sync.bind(link);
     link.sync = (g: string) => { syncs++; return orig(g); };
     for (let i = 0; i < 200; i++) sendLive(world, KIND_NAK, nakBodyOf({ version: V, at: 0, why: 'unavailable', hashAtYourCount: null }), 'B');
     await world.settle();
+    expect(world.devs.B.rep.counters()['fork-local'] ?? 0).toBe(0); // it really was waiting
     expect(syncs).toBeLessThanOrEqual(20);
     expect(world.devs.B.rep.stateSizes().queues).toBe(0);
   });
