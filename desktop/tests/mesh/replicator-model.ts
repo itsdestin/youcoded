@@ -24,6 +24,7 @@ export const EXCUSE_LIMITS: Record<string, string> = {
   'state:refilling': 'a rolled-back or rotted copy still repairing when the run ended (inventory rules iii-v): named, never in-sync',
   'state:pulling': 'a request outstanding to a peer that answered nothing (plan: receiver-driven, re-asked on a timer)',
   'state:comparing': 'no peer has said anything about the version since the last restart',
+  'state:all-copies-damaged': 'every device that held the lines is itself repairing or retired, so nothing can refill anything (inventory limit 1); loud on every device, never in-sync',
   'state:faulted': 'a hostile announcement of an existing version id contradicted the real one: named, sticky, durable (review 1, F4)',
   'state:stale': 'no peer has spoken in ten virtual minutes (review 1, F7)',
   'state:peer-repairing': 'a peer said it was repairing and has not said otherwise yet (F7)',
@@ -212,7 +213,10 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           if (h.lines !== O.length || readable !== h.lines) fail(`${n} says in-sync but holds ${h.lines}/${O.length} lines, readable ${readable} (P2)`);
           if (dmg !== Infinity) fail(`${n} says in-sync while the store reports a refill (P4)`);
         } else {
-          const key = `state:${st.state}`; excuses.push(`${n}:${v.toString('hex').slice(0, 6)}:${st.state}:${st.reason ?? ''}`);
+          // every device that held the lines is itself repairing or retired: all copies were damaged one fault at a time, each fault harmless alone (inventory limit 1: a fault that destroys the ONLY copy destroys it). Loud on every device, never in-sync.
+          const others = await Promise.all(NAMES.filter((x) => x !== n).map((x) => world.devs[x].rep.status(v)));
+          const allDamaged = (st.state === 'retired-recopy' || st.state === 'refilling') && others.every((x) => ['refilling', 'retired-recopy', 'stuck', 'faulted', 'peer-repairing'].includes(x.state));
+          const key = allDamaged ? 'state:all-copies-damaged' : `state:${st.state}`; excuses.push(`${n}:${v.toString('hex').slice(0, 6)}:${st.state}:${st.reason ?? ''}`);
           if (!EXCUSE_LIMITS[key] && st.state !== 'stuck') fail(`${n} ends ${st.state} (${st.reason}) with no documented limit that explains it; version #${vs.indexOf(v)} writer ${writer.get(v.toString('hex'))} oracle ${O.length} lines, ${n} holds ${h.lines} (inc ${st.incarnation}) counters ${JSON.stringify(dev.rep.counters())} peers ${JSON.stringify(dev.rep.peerView(v))}`);
           if (st.state === 'stuck') fail(`${n} ends stuck (${st.reason})`);
         }

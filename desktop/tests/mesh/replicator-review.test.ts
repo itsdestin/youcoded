@@ -84,6 +84,18 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await world.devs.A.rep.reportCorrupt(V); await world.settle();
     await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 4))).rejects.toThrow(/writer-recopy-not-confirmed/);
   });
+  it('a writer that holds fewer lines than its own record says it signed is never in-sync, even when every peer it can hear claims nothing (fuzz seed 505206)', async () => {
+    w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1i');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
+    await world.devs.A.rep.reportCorrupt(V);
+    const seedHash = Buffer.from((await headOf(world, 'A', V)).hash, 'hex');
+    sendLive(world, KIND_HEADS, headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 0, hash: seedHash, conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }), 'A');
+    await world.settle();
+    const s = await world.devs.A.rep.status(V);
+    expect(s.state).not.toBe('in-sync');
+    expect(`${s.state}(${s.reason})`).toMatch(/behind-own-signed-head/);
+  });
   it('a writer whose whole store folder was put back refuses appendLocal while a peer holds more of its chain, recovers its lines, and then appends', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000, stallMs: 10_000 }); const world = w; const V = wireId('f1b');
     await world.create('A', V);

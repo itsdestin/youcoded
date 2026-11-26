@@ -566,6 +566,9 @@ export class Replicator {
     if (run.diverged) return mk('diverged', run.diverged);
     if (refilling || run.refill) return mk('refilling');
     if (run.retiredRecopy) return mk('retired-recopy');
+    // the writer's own record says it signed more lines than this copy holds (review 1 / fuzz 505206): never `in-sync`, whatever the peers claim (they may have lost the lines too)
+    const desc = this.#directory.describe(wire);
+    if (desc && desc.writer.equals(ctx.crypto.self)) { const own = await this.ownHead(wire); if (own && lines < own.lines) return mk('refilling', 'behind-own-signed-head'); }
     if (run.pull) return mk('pulling', run.skip.size > 0 ? 'peers-not-answering' : null);
     if ([...ctx.sessions.values()].some((s) => s.wire.equals(wire))) return mk('serving', run.serveWait ? 'waiting-for-read-memory' : null);
     const wk = wire.toString('hex'); const now = ctx.clock.now();
