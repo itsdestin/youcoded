@@ -119,6 +119,7 @@ describe('a copy that differs from the writer\'s', () => {
     const b = await world.restart('B');
     await world.settle();
     expect(((await world.localOf('B', V)) as Buffer).equals(local)).toBe(true);
+    expect((await b.rep.localId(V)).equals(local)).toBe(true); // the REPLICATOR also still uses the new incarnation, not the retired id
     expect(await world.readAll('B', V)).toEqual(good);
     expect((await b.rep.status(V)).state).toBe('in-sync');
   });
