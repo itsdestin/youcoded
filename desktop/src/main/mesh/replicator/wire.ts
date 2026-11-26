@@ -53,7 +53,8 @@ export interface IntroBody {
 export interface WantBody { version: Buffer; haveLines: number; haveHash: Buffer; through: number | null; intro: boolean }
 export interface AckBody { version: Buffer; lines: number; hash: Buffer; sig: Buffer }
 export interface NakBody { version: Buffer; at: number; why: NakWhy; hashAtYourCount: Buffer | null }
-export interface SumBody { count: number; digest: Buffer }
+/** `ask`: please answer with yours (a hello); the answer carries ask = false, so two devices exchange one pair and never loop. */
+export interface SumBody { count: number; digest: Buffer; ask: boolean }
 
 const ver = (v: unknown): Buffer => { const b = asBytes(v, 'version'); if (b.length < 1 || b.length > MAX_VERSION_ID_BYTES) throw new RangeError('version id size'); return b; };
 const hash = (v: unknown, what: string): Buffer => asBytes(v, what, 32);
@@ -93,9 +94,13 @@ export function parseLinesBody(body: unknown): LinesBody {
 }
 
 // ---- sum / heads ----
-export const sumBody = (b: SumBody): CborValue => ({ count: b.count, digest: b.digest });
+export const sumBody = (b: SumBody): CborValue => ({ count: b.count, digest: b.digest, ask: b.ask });
 export function parseSumBody(body: unknown): SumBody {
-  return guard(() => { const m = asMap(body, 'sum body'); onlyKeys(m, ['count', 'digest'], 'sum body'); return { count: asUint(m.count, 'count', 1 << 24), digest: hash(m.digest, 'digest') }; });
+  return guard(() => {
+    const m = asMap(body, 'sum body'); onlyKeys(m, ['count', 'digest', 'ask'], 'sum body');
+    if (typeof m.ask !== 'boolean') throw new RangeError('ask flag');
+    return { count: asUint(m.count, 'count', 1 << 24), digest: hash(m.digest, 'digest'), ask: m.ask };
+  });
 }
 export const headsBodyOf = (b: HeadsBody): CborValue => ({
   page: b.page, of: b.of, ask: b.ask,

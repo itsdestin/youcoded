@@ -148,6 +148,9 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   }
   // 'not-a-prefix' under a VALID writer signature: the lines I hold at those positions differ from the writer's. Find out whether my own bytes are damaged.
   ctx.bump('not-a-prefix');
+  // the writer's SIGNED batch is evidence that the sender holds at least this much: it is what the recopy asks for
+  const nk = wire.toString('hex'); const pv = peer.heads.get(nk);
+  if (!pv || pv.lines <= b.head.lines) peer.heads.set(nk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });
   const dmg = await scrubAll(ctx, v.local);
   if (dmg !== null || !iAmWriter) { reportFailure({ what: 'keep a chat copy that differs from its writer (set aside, recopied)', where: 'mesh.replicator' }); await retireAndRecopy(ctx, wire, dmg !== null ? 'damaged-bytes' : 'diverged-from-writer'); return; }
   // I am the writer, my bytes are fine, and a signed-by-me history says otherwise: never retire on a peer's word; say so

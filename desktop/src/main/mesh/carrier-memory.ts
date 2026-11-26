@@ -29,7 +29,7 @@ export class MemoryCarrier implements Carrier {
   #conn: Array<() => void> = [];
   #pass: Array<(g: string, from: string, frame: Buffer) => void> = [];
   /** Test hook for the live lane (the world in tests/mesh/replicator-world.ts): decide what happens to each passed frame. Default: deliver now. */
-  passFilter: ((g: string, to: string, frame: Buffer) => 'deliver' | 'drop') | null = null;
+  passFilter: ((g: string, to: string, frame: Buffer) => 'deliver' | 'drop' | 'dup' | number) | null = null; // a number = deliver that many ms late (so frames can arrive out of order)
   /** Live frames this carrier handed over, for tests that count traffic. */
   passed = 0;
   readonly receivedThrough = new Map<string, number>();
@@ -75,13 +75,14 @@ export class MemoryCarrier implements Carrier {
   pass(group: string, to: string, frame: Uint8Array): boolean {
     if (!this.online) return false;
     const copy = Buffer.from(frame);
-    if (this.passFilter && this.passFilter(group, to, copy) === 'drop') return true; // WHY true: the relay does not tell the sender about a lost pass either
+    const verdict = this.passFilter ? this.passFilter(group, to, copy) : 'deliver';
+    if (verdict === 'drop') return true; // WHY true: the relay does not tell the sender about a lost pass either
     this.passed++;
     for (const [dev, c] of this.hub.members) {
       if (dev === this.dev || !c.online) continue;
       if (to !== 'all' && c.deviceHex !== to) continue;
       // WHY a macrotask: a real pass arrives on another socket, never inside the sender's own call stack.
-      setTimeout(() => c.#pass.forEach((cb) => cb(group, this.deviceHex ?? this.dev, Buffer.from(copy))), 0);
+      for (let i = 0; i < (verdict === 'dup' ? 2 : 1); i++) setTimeout(() => { if (c.online) c.#pass.forEach((cb) => cb(group, this.deviceHex ?? this.dev, Buffer.from(copy))); }, typeof verdict === 'number' ? verdict : 0);
     }
     return true;
   }

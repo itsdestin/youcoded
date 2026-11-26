@@ -24,7 +24,7 @@ describe('replicator wire: round trips', () => {
     expect(parseAckBody(via(ackBodyOf(a)))).toEqual(a);
     const n = { version: v, at: 4, why: 'not-a-prefix' as const, hashAtYourCount: h32(6) };
     expect(parseNakBody(via(nakBodyOf(n)))).toEqual(n);
-    expect(parseSumBody(via(sumBody({ count: 3, digest: h32(8) })))).toEqual({ count: 3, digest: h32(8) });
+    expect(parseSumBody(via(sumBody({ count: 3, digest: h32(8), ask: true })))).toEqual({ count: 3, digest: h32(8), ask: true });
     const intro = { version: v, chatId: 'chat-1', runtime: 'native' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: Buffer.alloc(16, 9), sig };
     expect(parseIntroBody(via(introBodyOf(intro)))).toEqual(intro);
   });
@@ -95,7 +95,8 @@ describe('replicator wire: the other parsers refuse hostile shapes', () => {
     refuses(() => parseAckBody(via({ v, lines: 1, hash: h32(), sig: Buffer.alloc(10) })));
     refuses(() => parseNakBody(via({ v, at: 1, why: 'because', mine: null })));
     refuses(() => parseNakBody(via({ v, at: 1, why: 'gap', mine: Buffer.alloc(3) })));
-    refuses(() => parseSumBody(via({ count: 2 ** 30, digest: h32() })));
+    refuses(() => parseSumBody(via({ count: 2 ** 30, digest: h32(), ask: false })));
+    refuses(() => parseSumBody(via({ count: 1, digest: h32() })));
     refuses(() => parseSumBody(via('text')));
     refuses(() => parseSumBody(via(null)));
   });

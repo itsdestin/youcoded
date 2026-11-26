@@ -192,7 +192,7 @@ export class Replicator {
   }
   private async sendSum(): Promise<void> {
     const entries = await this.myEntries();
-    this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries) }));
+    this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries), ask: true }));
   }
   private async sendHeads(to: PeerInfo | null, ask: boolean): Promise<void> {
     const entries = await this.myEntries();
@@ -210,7 +210,7 @@ export class Replicator {
     if (f.header.kind === KIND_LINES) { await receiveLines(this.#ctx, peer, parseLinesBody(f.body)); return; }
     try {
       switch (f.header.kind) {
-        case KIND_SUM: await this.onSum(peer, parseSumBody(f.body).digest); return;
+        case KIND_SUM: { const sb = parseSumBody(f.body); await this.onSum(peer, sb.digest, sb.ask); return; }
         case KIND_HEADS: await this.onHeads(peer, parseHeadsBody(f.body)); return;
         case KIND_WANT: await onWant(this.#ctx, peer, parseWantBody(f.body)); return;
         case KIND_ACK: await onAck(this.#ctx, peer, parseAckBody(f.body)); return;
@@ -224,9 +224,16 @@ export class Replicator {
     }
   }
 
-  private async onSum(peer: PeerInfo, digest: Buffer): Promise<void> {
-    const mine = digestOf(await this.myEntries());
-    if (mine.equals(digest)) { this.#ctx.bump('sum-equal'); return; }
+  private async onSum(peer: PeerInfo, digest: Buffer, ask: boolean): Promise<void> {
+    const entries = await this.myEntries();
+    if (ask) this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries), ask: false }), peer.id); // answer a hello with mine, once
+    if (digestOf(entries).equals(digest)) {
+      // the digest covers every (version, count, chain value, state): equal means this peer holds exactly what I hold, for every version
+      this.#ctx.bump('sum-equal');
+      const now = this.#ctx.clock.now();
+      for (const e of entries) peer.heads.set(e.version.toString('hex'), { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
+      return;
+    }
     await this.sendHeads(peer, true); // the summaries differ: say what I hold and ask for theirs
   }
   private async onHeads(peer: PeerInfo, b: HeadsBody): Promise<void> {
@@ -424,6 +431,13 @@ export class Replicator {
     const h = await this.#o.store.head(v.local);
     if (h.lines === 0) return 'present';
     return (await this.#o.store.read(v.local, 0, h.lines - 1, h.lines)) === 'evicted' ? 'evicted' : 'present';
+  }
+  /** What this device tells its peers it holds, per version (the point it can vouch for while repairing). */
+  advertised(): Promise<HeadEntry[]> { return this.myEntries(); }
+  /** What each peer last said about a version (claims, not proof), for status and tests. */
+  peerView(wire: Buffer): Array<{ peer: string; lines: number; hash: string; state: AdvertisedState }> {
+    const wk = wire.toString('hex');
+    return [...this.#ctx.peers.values()].flatMap((p) => { const h = p.heads.get(wk); return h ? [{ peer: p.hex, lines: h.lines, hash: h.hash, state: h.state }] : []; });
   }
   /** Version ids (wire) this device knows. */
   versions(): Buffer[] { return this.#directory.list(); }
