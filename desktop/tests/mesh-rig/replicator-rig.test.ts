@@ -68,6 +68,7 @@ describe.skipIf(!enabled || !avail.ok)('replicator rig: two jailed backends and 
     }
     await Promise.race([watcher, sleep(30_000).then(() => { throw new Error('B did not reach 50 lines in 30 s'); })]);
     const lat = sentAt.map((t, i) => seenAt[i] - t);
+    if (process.env.MESH_RIG_REPORT) fs.appendFileSync(process.env.MESH_RIG_REPORT, `latency ms p50=${[...lat].sort((a, b) => a - b)[Math.floor(lat.length / 2)]} p95=${p95(lat)} max=${Math.max(...lat)} n=${lat.length}\n`);
     expect(p95(lat), `latencies ms: ${lat.join(',')}`).toBeLessThan(2000);
   }, 120_000);
 
