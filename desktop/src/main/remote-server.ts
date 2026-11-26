@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto';
 import { proxyHttpToVite, proxyUpgradesToVite } from './remote-dev-proxy';
 import { describePhoneTimings, describeAnswer } from './remote-timings';
 import { localTokenMatches, ownerDesktopServices, type LocalModeOptions } from './remote-local';
+import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
 import { readFirstFrames, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
@@ -379,6 +380,32 @@ export class RemoteServer {
   start(): Promise<void> {
     this.starting ??= this.startOnce().finally(() => { this.starting = null; });
     return this.starting;
+  }
+
+  /**
+   * Local mode only: make sure the page's door is really open, and reopen it if it is not. True when it had to be reopened.
+   *
+   * WHY (2026-11-25, iPhone app, card #89): iOS suspends an app that is off screen, and when it has been suspended for a
+   * while it can take the app's listening sockets away. The backend's objects all still exist and `running` still says
+   * true, but nothing can connect any more: the app comes back showing a page that can never reach its backend. The
+   * only honest test is to knock on our own door; if nobody answers, close what is left and listen again on the same
+   * port (the page reconnects by itself). Android never needs this (a foreground service is not suspended).
+   */
+  async reviveLocalListener(): Promise<boolean> {
+    if (!this.local || !this.running) return false;
+    const port = this.local.port;
+    const answers = await new Promise<boolean>((resolve) => {
+      const probe = net.connect({ host: '127.0.0.1', port });
+      const done = (ok: boolean) => { probe.destroy(); resolve(ok); };
+      probe.setTimeout(1500, () => done(false));
+      probe.once('connect', () => done(true));
+      probe.once('error', () => done(false));
+    });
+    if (answers) return false;
+    console.log('[RemoteServer] the local door stopped answering (the app was suspended); reopening it');
+    this.stop();
+    await this.start();
+    return true;
   }
 
   private async startOnce(): Promise<void> {

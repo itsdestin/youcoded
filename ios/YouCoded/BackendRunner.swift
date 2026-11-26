@@ -29,6 +29,7 @@ final class BackendRunner {
     private var token = ""
     private var port = 0
     private var logHandle: FileHandle?
+    private var timedOut = false
     /// Long enough for a cold first launch on an old phone (the JIT-less engine parses ~12 MB of JavaScript);
     /// short enough that a backend that will never answer does not leave the loading screen up for good.
     private let readyTimeout: TimeInterval = 90
@@ -102,6 +103,7 @@ final class BackendRunner {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + readyTimeout) { [weak self] in
             guard let self, case .starting = self.state else { return }
+            self.timedOut = true
             self.setState(.failed("The assistant did not start. Close YouCoded and open it again."))
         }
     }
@@ -150,7 +152,7 @@ final class BackendRunner {
         logHandle = try? FileHandle(forWritingTo: AppPaths.backendLog)
         _ = try? logHandle?.seekToEnd()
         let stamp = ISO8601DateFormatter().string(from: Date())
-        logHandle?.write(Data("\n--- YouCoded \(AppPaths.appVersion) (\(AppPaths.buildNumber)) started \(stamp) ---\n".utf8))
+        try? logHandle?.write(contentsOf: Data("\n--- YouCoded \(AppPaths.appVersion) (\(AppPaths.buildNumber)) started \(stamp) ---\n".utf8))
     }
 
     /// Point stdout and stderr at a pipe, and copy what arrives to the log while watching for the ready line.
@@ -171,7 +173,8 @@ final class BackendRunner {
                 let count = read(readEnd, &chunk, chunk.count)
                 if count <= 0 { break }
                 let data = Data(chunk[0..<count])
-                self?.logHandle?.write(data)
+                // `try?`: a full disk must cost a log line, not the app (the non-throwing write raises an exception).
+                try? self?.logHandle?.write(contentsOf: data)
                 pending.append(data)
                 while let newline = pending.firstIndex(of: 0x0A) {
                     let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
@@ -217,8 +220,12 @@ final class BackendRunner {
 
     private func setState(_ next: State) {
         dispatchPrecondition(condition: .onQueue(.main))
-        // "ready" and "failed" are both final for this launch, except that a ready backend can still stop.
-        if case .failed = state { return }
+        // "failed" is final for this launch, with one exception: a slow first start that only LOOKED failed (the
+        // wait ran out) and then became ready is ready — the screen comes back to the app.
+        if case .failed = state {
+            guard timedOut, case .ready = next else { return }
+            timedOut = false
+        }
         state = next
         onState?(next)
     }

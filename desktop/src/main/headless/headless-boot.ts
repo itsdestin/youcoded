@@ -237,7 +237,13 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
       watched: (id) => windowRegistry.getSocketWatchers(id).length > 0,
       send: (status) => hostNotify('status', status as unknown as Record<string, unknown>),
     });
-    onHostEvent((event, params) => { if (event === 'foreground') bg.setForeground(!!(params as { on?: boolean } | null)?.on); });
+    onHostEvent((event, params) => {
+      if (event !== 'foreground') return;
+      const on = !!(params as { on?: boolean } | null)?.on;
+      bg.setForeground(on);
+      // Back on screen: iOS may have taken the page's door away while the app was suspended (reviveLocalListener).
+      if (on) void remoteServer.reviveLocalListener().catch((e) => log('ERROR', 'Headless', 'Could not reopen the local door', { error: String(e) }));
+    });
   }
 
   // First run: the same two paths as main.ts — a fresh install runs the wizard; an existing one checks sign-in lazily.

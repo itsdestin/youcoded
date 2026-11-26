@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Apple's privacy manifest: required for every upload since May 2024. It declares that the app does not track
+  people, what it collects (nothing leaves the phone through this shell), and WHY it uses the handful of system
+  calls Apple asks a reason for. Those calls are made by the bundled Node.js and by the app's own file handling:
+    - file timestamps: showing and sorting the person's own files, sweeping week-old attachment copies (C617.1)
+    - free disk space: checking there is room before setup writes anything (E174.1)
+    - system boot time: Node.js measures elapsed time with it (35F9.1)
+  If Apple's upload check names another category, add it here with its reason.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSPrivacyTracking</key>
+  <false/>
+  <key>NSPrivacyTrackingDomains</key>
+  <array/>
+  <key>NSPrivacyCollectedDataTypes</key>
+  <array/>
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array><string>C617.1</string></array>
+    </dict>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array><string>E174.1</string></array>
+    </dict>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array><string>35F9.1</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>

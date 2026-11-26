@@ -95,6 +95,10 @@ function connect(): Promise<net.Socket | null> {
       for (const p of pending.values()) p.reject(new Error('The app stopped answering.'));
       pending.clear();
       resolve(null);
+      // WHY reconnect when someone is listening for the app's events (2026-11-25, iPhone app): iOS can cut this
+      // line while the app is suspended. A call would reconnect by itself, but the event that matters most arrives
+      // exactly then — "the app is back on screen" — and nobody would be connected to hear it.
+      if (eventListeners.size > 0) { const t = setTimeout(() => { void connect(); }, 1000); t.unref?.(); }
     };
     s.on('error', fail);
     s.on('close', fail);

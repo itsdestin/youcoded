@@ -74,6 +74,8 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
     }
 
     private func startCamera() {
+        // The person may have cancelled while iOS was still asking about the camera: nothing to start then.
+        guard !finished else { return }
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input) else {
             message.text = "This device has no camera YouCoded can use. Type the computer's address instead."

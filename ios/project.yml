@@ -81,6 +81,12 @@ targets:
           # A paired computer is reached without TLS, over Tailscale only (which encrypts the link itself); the
           # Tailscale-only rule is enforced in code (CleartextPolicy in UrlPolicy.swift, and the page's own check).
           NSAllowsArbitraryLoadsInWebContent: true
+          # The app itself (not the page) fetches a paired computer's download link; by Tailscale machine name that is
+          # plain http to *.ts.net, which the rule above does not cover. Tailscale encrypts that link itself.
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
   YouCodedTests:
     type: bundle.unit-test
     platform: iOS

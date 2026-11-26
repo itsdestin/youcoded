@@ -121,8 +121,10 @@ enum AppWebView {
 private class FolderSchemeHandler: NSObject, WKURLSchemeHandler {
     let root: URL
     private let queue = DispatchQueue(label: "com.youcoded.scheme-files", qos: .userInitiated)
-    /// Tasks WebKit has stopped; answering one of those raises an exception, so each is checked before use.
-    private var stopped = Set<ObjectIdentifier>()
+    /// Tasks still waiting for their answer. WebKit raises an exception if a task is answered after it was stopped,
+    /// so a task is answered only while it is in here. WHY the live ones are tracked (not the stopped ones): a
+    /// stopped task's memory address can be reused by a later task, which a "stopped" list would then wrongly refuse.
+    private var live = Set<ObjectIdentifier>()
     private let lock = NSLock()
 
     init(root: URL) {
@@ -133,7 +135,8 @@ private class FolderSchemeHandler: NSObject, WKURLSchemeHandler {
     func relativePath(for url: URL) -> String? { nil }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
-        guard let url = task.request.url else { fail(task, 400); return }
+        lock.lock(); live.insert(ObjectIdentifier(task)); lock.unlock()
+        guard let url = task.request.url else { task.didFailWithError(URLError(.badURL)); forget(task); return }
         guard let relative = relativePath(for: url), !relative.contains(".."), !relative.contains("\\") else {
             fail(task, 404); return
         }
@@ -149,35 +152,63 @@ private class FolderSchemeHandler: NSObject, WKURLSchemeHandler {
                   let data = try? Data(contentsOf: URL(fileURLWithPath: resolved), options: .mappedIfSafe) else {
                 self.fail(task, 404); return
             }
-            let headers = [
+            var headers = [
                 "Content-Type": AppWebView.mimeType(forExtension: file.pathExtension),
-                "Content-Length": String(data.count),
                 // The files only change with an app update, and the address of every script carries its own hash.
                 "Cache-Control": "no-cache",
                 "Access-Control-Allow-Origin": AppWebView.pageOrigin,
+                "Accept-Ranges": "bytes",
             ]
-            guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers) else {
+            // Sounds and video are asked for in pieces ("Range: bytes=0-1"); WebKit will not play media from an
+            // address that cannot answer a piece.
+            var body = data
+            var status = 200
+            if let range = Self.byteRange(task.request.value(forHTTPHeaderField: "Range"), total: data.count) {
+                body = data.subdata(in: range)
+                status = 206
+                headers["Content-Range"] = "bytes \(range.lowerBound)-\(range.upperBound - 1)/\(data.count)"
+            }
+            headers["Content-Length"] = String(body.count)
+            guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers) else {
                 self.fail(task, 500); return
             }
             self.finish(task) {
                 task.didReceive(response)
-                task.didReceive(data)
+                task.didReceive(body)
                 task.didFinish()
             }
         }
     }
 
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-        lock.lock(); stopped.insert(ObjectIdentifier(task)); lock.unlock()
+        forget(task)
+    }
+
+    private func forget(_ task: WKURLSchemeTask) {
+        lock.lock(); live.remove(ObjectIdentifier(task)); lock.unlock()
     }
 
     private func finish(_ task: WKURLSchemeTask, _ body: @escaping () -> Void) {
         DispatchQueue.main.async {
             self.lock.lock()
-            let wasStopped = self.stopped.remove(ObjectIdentifier(task)) != nil
+            let stillWanted = self.live.remove(ObjectIdentifier(task)) != nil
             self.lock.unlock()
-            if !wasStopped { body() }
+            if stillWanted { body() }
         }
+    }
+
+    /// "bytes=START-END", "bytes=START-" or "bytes=-LAST" as a range inside `total`, or nil for none/unusable.
+    static func byteRange(_ header: String?, total: Int) -> Range<Int>? {
+        guard let header, header.hasPrefix("bytes="), total > 0 else { return nil }
+        let spec = header.dropFirst("bytes=".count)
+        guard !spec.contains(","), let dash = spec.firstIndex(of: "-") else { return nil }
+        let first = Int(spec[..<dash]), last = Int(spec[spec.index(after: dash)...])
+        if let first {
+            guard first < total else { return nil }
+            return first..<(min(last ?? (total - 1), total - 1) + 1)
+        }
+        guard let last, last > 0 else { return nil }
+        return max(0, total - last)..<total
     }
 
     private func fail(_ task: WKURLSchemeTask, _ status: Int) {
@@ -234,7 +265,7 @@ final class PageLog: NSObject, WKScriptMessageHandler {
             handle = try? FileHandle(forWritingTo: url)
             _ = try? handle?.seekToEnd()
         }
-        handle?.write(Data("\(ISO8601DateFormatter().string(from: Date())) \(text)\n".utf8))
+        try? handle?.write(contentsOf: Data("\(ISO8601DateFormatter().string(from: Date())) \(text)\n".utf8))
     }
 }
 

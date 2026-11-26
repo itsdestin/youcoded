@@ -1,3 +1,4 @@
+import Network
 import PhotosUI
 import QuickLook
 import SafariServices
@@ -88,6 +89,8 @@ final class RootViewController: UIViewController {
             guard let self else { reply(.failure(HostSocketServer.HostError(message: "The app is closing."))); return }
             self.handleHostCall(method, params, reply)
         }
+        // The backend may connect (or reconnect, after iOS suspended the app) at any time: tell it where things stand.
+        hostSocket.onBackendConnected = { [weak self] in self?.tellForeground() }
         guard let hostPort = hostSocket.start() else {
             show(failure: "The app could not open a local connection for the assistant.")
             return
@@ -256,9 +259,59 @@ final class RootViewController: UIViewController {
     @objc private func didBecomeActive() {
         endBackgroundTask()
         Notifier.shared.cancelNeeds()
+        // iOS may have closed the app's own listening sockets while it was suspended (see HostSocketServer and the
+        // backend's reviveLocalListener): reopen this side, tell the backend the app is visible (which makes it check
+        // its side), and a few seconds later make sure the page can actually reach it.
+        hostSocket.reopenIfNeeded()
         tellForeground()
+        checkBackendAnswers(attemptsLeft: 4)
         // A page whose connection iOS cut while the app slept reconnects itself; this only nudges it to look now.
         webView?.evaluateJavaScript("window.dispatchEvent(new Event('online'));document.dispatchEvent(new Event('visibilitychange'))", completionHandler: nil)
+    }
+
+    /// Knock on the backend's door. If nobody answers after it has had time to reopen it, say so plainly rather
+    /// than leave a page that looks alive and can do nothing.
+    private func checkBackendAnswers(attemptsLeft: Int) {
+        guard case .ready(let port, _) = BackendRunner.shared.state, pageShown, failedView == nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, UIApplication.shared.applicationState == .active else { return }
+            Self.canConnect(port: port) { answered in
+                DispatchQueue.main.async {
+                    if answered {
+                        // The page reconnects by itself; this only makes it look right away.
+                        self.webView?.evaluateJavaScript("window.dispatchEvent(new Event('online'))", completionHandler: nil)
+                    } else if attemptsLeft > 1 {
+                        self.tellForeground()
+                        self.checkBackendAnswers(attemptsLeft: attemptsLeft - 1)
+                    } else {
+                        self.show(failure: "iOS paused YouCoded for too long and its assistant could not carry on. Close YouCoded and open it again; your conversations are saved.")
+                    }
+                }
+            }
+        }
+    }
+
+    private static func canConnect(port: Int, _ done: @escaping (Bool) -> Void) {
+        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { done(false); return }
+        let connection = NWConnection(host: .ipv4(.loopback), port: nwPort, using: .tcp)
+        let queue = DispatchQueue(label: "com.youcoded.backend-probe")
+        var finished = false
+        let finish: (Bool) -> Void = { ok in
+            guard !finished else { return }
+            finished = true
+            connection.cancel()
+            done(ok)
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready: finish(true)
+            case .failed, .cancelled: finish(false)
+            case .waiting: finish(false)
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 2) { finish(false) }
     }
 
     @objc private func willResignActive() {

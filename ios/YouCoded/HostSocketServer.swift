@@ -12,10 +12,15 @@ final class HostSocketServer {
     typealias Reply = (Result<Any?, Error>) -> Void
     /// Called on the main queue for each backend request.
     var handler: ((_ method: String, _ params: [String: Any], _ reply: @escaping Reply) -> Void)?
+    /// Called on the main queue each time the backend (re)connects and has proved who it is: the moment to tell it
+    /// the things it may have missed while no line was open (is the app on screen?).
+    var onBackendConnected: (() -> Void)?
 
     private let token: String
     private let queue = DispatchQueue(label: "com.youcoded.host-socket")
     private var listener: NWListener?
+    private var port: UInt16 = 0
+    private var listenerDead = false
     private var clients: [ObjectIdentifier: Client] = [:]
 
     private final class Client {
@@ -36,20 +41,39 @@ final class HostSocketServer {
 
     /// Starts listening on 127.0.0.1 and returns the port, or nil when the phone refused.
     func start() -> UInt16? {
+        guard let found = listen(on: .any) else { return nil }
+        port = found
+        return found
+    }
+
+    /// The app is back on screen. iOS can take a suspended app's listening socket away; the backend was told this
+    /// port once, at launch, so the listener is reopened on the SAME port and the backend's next call finds it.
+    func reopenIfNeeded() {
+        var dead = false
+        queue.sync { dead = listenerDead }
+        guard dead, port != 0, let wanted = NWEndpoint.Port(rawValue: port) else { return }
+        listener?.cancel()
+        _ = listen(on: wanted)
+    }
+
+    private func listen(on wanted: NWEndpoint.Port) -> UInt16? {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: .any)
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: wanted)
         parameters.allowLocalEndpointReuse = true
         guard let listener = try? NWListener(using: parameters) else { return nil }
         self.listener = listener
+        queue.sync { listenerDead = false }
 
         let ready = DispatchSemaphore(value: 0)
         var port: UInt16?
-        listener.stateUpdateHandler = { state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             switch state {
             case .ready:
-                port = listener.port?.rawValue
+                port = listener?.port?.rawValue
                 ready.signal()
             case .failed, .cancelled:
+                // Only the CURRENT listener's death counts (cancelling the old one during a reopen must not).
+                if let self, let listener, self.listener === listener { self.listenerDead = true }
                 ready.signal()
             default:
                 break
@@ -119,6 +143,7 @@ final class HostSocketServer {
             // Constant-time: a neighbouring app must learn nothing from how fast a wrong token is refused.
             if Self.constantTimeEquals(hello, token) {
                 client.authenticated = true
+                DispatchQueue.main.async { [weak self] in self?.onBackendConnected?() }
             } else {
                 client.connection.cancel()
             }
@@ -134,7 +159,10 @@ final class HostSocketServer {
                 self.queue.async {
                     switch result {
                     case .success(let value):
-                        self.send(["id": id, "result": value ?? NSNull()], to: client)
+                        // A value that cannot be written as JSON must still be answered, or the backend waits a minute for nothing.
+                        let reply: [String: Any] = ["id": id, "result": value ?? NSNull()]
+                        if JSONSerialization.isValidJSONObject(reply) { self.send(reply, to: client) }
+                        else { self.send(["id": id, "error": "The phone's answer could not be sent."], to: client) }
                     case .failure(let error):
                         self.send(["id": id, "error": error.localizedDescription], to: client)
                     }

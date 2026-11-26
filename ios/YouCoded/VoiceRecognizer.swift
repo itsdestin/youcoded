@@ -28,6 +28,8 @@ final class VoiceRecognizer {
     private var heard = ""
     private var deadline: DispatchWorkItem?
     private var lastLevelSent = Date.distantPast
+    /// Counts turns, so a finished turn's late callbacks can be told from the current one's.
+    private var turn = 0
 
     init(emit: @escaping ([String: Any]) -> Void) {
         self.emit = emit
@@ -85,7 +87,9 @@ final class VoiceRecognizer {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+            // No options: `.record` already silences other audio, and `.duckOthers` belongs to the playback
+            // categories (asking for it here makes the phone refuse the whole request).
+            try session.setCategory(.record, mode: .measurement)
             try session.setActive(true, options: .notifyOthersOnDeactivation)
 
             let request = SFSpeechAudioBufferRecognitionRequest()
@@ -96,6 +100,10 @@ final class VoiceRecognizer {
 
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
+            // WHY checked first: during a phone call or while the audio route is changing the microphone reports
+            // "0 Hz, 0 channels", and installing a tap with that format raises an exception Swift cannot catch — the
+            // app would close. It is reported as "could not be started" instead.
+            guard format.sampleRate > 0, format.channelCount > 0 else { throw NSError(domain: "YouCoded.voice", code: 1) }
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 request.append(buffer)
@@ -104,8 +112,16 @@ final class VoiceRecognizer {
             audioEngine.prepare()
             try audioEngine.start()
 
+            // WHY the turn number: a cancelled turn's recogniser still reports "cancelled" a moment later. If the
+            // person has already tapped the mic again, that late report must not be taken for the NEW turn's (it
+            // used to end the new turn at once with nothing heard).
+            turn += 1
+            let thisTurn = turn
             task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                DispatchQueue.main.async { self?.handle(result: result, error: error) }
+                DispatchQueue.main.async {
+                    guard let self, self.turn == thisTurn else { return }
+                    self.handle(result: result, error: error)
+                }
             }
         } catch {
             // The microphone could not be opened (a phone call in progress, another app holding it).
@@ -138,6 +154,7 @@ final class VoiceRecognizer {
         listening = false
         finalSent = true
         heard = ""
+        turn += 1 // whatever this turn's recogniser still reports belongs to nobody
         stopAudio()
         task?.cancel()
         task = nil
