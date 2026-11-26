@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
-import type { AttentionState } from '../state/chat-types';
+import type { AttentionState, SessionChatState } from '../state/chat-types';
 
 // Attention states that mean THE TURN IS OVER. Nothing is generating, so there
 // is nothing left to stop and the button must not appear.
@@ -39,6 +39,15 @@ import type { AttentionState } from '../state/chat-types';
 // the sole gate.
 const TURN_IS_OVER = new Set<AttentionState>(['session-died', 'error']);
 
+/**
+ * "A reply is still being written", as a plain function of the chat state. One definition for the Stop button's
+ * gate (below) and for notices that must leave when the reply ends (waiting-notice T1). WHY not raw `isThinking`:
+ * it stays true forever in the lost-message state, so a notice keyed to it would never go away.
+ */
+export function isTurnBusy(session: Pick<SessionChatState, 'isThinking' | 'attentionState'>): boolean {
+  return session.isThinking && !TURN_IS_OVER.has(session.attentionState);
+}
+
 // Cached per-session selector, same idiom as useSessionAttention.ts (subscribe
 // to the store, derive a value in getSnapshot, let useSyncExternalStore gate
 // re-renders on the RETURNED value rather than on every dispatch).
@@ -59,8 +68,7 @@ export function useStreamingGate(sessionId: string): boolean {
   const store = useChatStore();
 
   const getSnapshot = useCallback((): boolean => {
-    const session = store.getSession(sessionId);
-    return session.isThinking && !TURN_IS_OVER.has(session.attentionState);
+    return isTurnBusy(store.getSession(sessionId));
   }, [store, sessionId]);
 
   const subscribe = useCallback(

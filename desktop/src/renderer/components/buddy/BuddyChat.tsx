@@ -146,6 +146,9 @@ export function BuddyChat({ tools = 'summary', shown = true, opened = 0 }: { too
     chatState: chatStateRef,
     showToast: setToast,
     openTerminal: () => { void window.claude.buddy?.openMain?.(); },
+    // The buddy shows one chat, so held back goes to its strip; any other chat gets the floating notice naming it.
+    isChatVisible: (sid) => sid === viewedSession,
+    chatName: (sid) => sessions.find((x) => x.id === sid)?.name,
   });
   const onSendBlocked = useCallback((retry: () => void, block: Parameters<typeof showBlockedSend>[1]) => {
     if (viewedSession) showBlockedSend(viewedSession, block, retry);

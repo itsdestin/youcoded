@@ -1155,7 +1155,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           models, Q-4/Q-7): the same thin band, above the box. */}
       <NativeStartupNotice sessionId={sessionId} enabled={provider === 'native'} />
       {/* This chat's own notice (held-back send, can't do that here, a command that failed): chat-notice-store.ts. */}
-      <ChatNoticeStrip sessionId={sessionId} />
+      <ChatNoticeStrip sessionId={sessionId} chatVisible={view !== 'terminal'} />
       {!minimal && <LocalModelDownloadStrip sessionId={sessionId} />}
       {/* Feedback B: the app's thin status band, above the box, while listening. */}
       {voiceListening && voiceStyle.feedback === 'strip' && (

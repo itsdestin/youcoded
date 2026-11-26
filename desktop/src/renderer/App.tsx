@@ -807,7 +807,11 @@ function AppInner() {
 
   // Refused sends and their toast (pending cards, then the live screen).
   const { showBlockedSend, notifyIfPtyBlocked } = useBlockedSend({ chatState: chatStateMapRef,
-    showToast: setToast, openTerminal: (sid) => setViewModes((prev) => new Map(prev).set(sid, 'terminal')) });
+    showToast: setToast, openTerminal: (sid) => setViewModes((prev) => new Map(prev).set(sid, 'terminal')),
+    // WHY: held back now shows in the strip of ITS chat; for a chat not on screen (or in terminal view, where the
+    // message box is hidden) a short floating notice naming the chat is raised too, so a refusal is never invisible.
+    isChatVisible: (sid) => sid === sessionId && (viewModes.get(sid) || 'chat') === 'chat',
+    chatName: (sid) => sessions.find((x) => x.id === sid)?.name });
 
   // Guarded PTY send for command-shaped writes triggered by UI actions
   // (command drawer, skill runs, /sync, /config, /model, Settings sends).

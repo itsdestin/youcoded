@@ -45,6 +45,7 @@ vi.mock('../src/renderer/components/SessionStrip', async (importOriginal) => (aw
 vi.mock('../src/renderer/components/HeaderBar', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'HeaderBar' }));
 vi.mock('../src/renderer/components/StatusBar', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'StatusBar' }));
 vi.mock('../src/renderer/components/InputBar', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'InputBar' }));
+vi.mock('../src/renderer/components/ChatNoticeStrip', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { ChatNoticeStrip: 'ChatNoticeStrip' }));
 vi.mock('../src/renderer/components/VoiceButton', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { VoiceButton: 'VoiceButton' }));
 vi.mock('../src/renderer/components/ui/Tooltip', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { Tooltip: 'Tooltip' }));
 vi.mock('../src/renderer/components/ui/Dialog', async (importOriginal) => {
@@ -146,6 +147,22 @@ describe('eight tabs open: a reply streaming', () => {
     await app.resetCounts();
     await reply.words(WORDS - 1);
     expect(app.shellRenders()).toBe(BUDGET.shellPerStreamedWord * (WORDS - 1));
+    await reply.end();
+  });
+});
+
+describe('eight tabs open: the notice strip', () => {
+  // waiting-notice T1: the strip above the message box watches the chat only to take a notice away when its
+  // reason is gone. With no notice showing it must watch nothing, or every streamed word would redraw the
+  // message box area. Met by: the strip reads only its own notice store, and listens to the chat only while a
+  // notice with a "still true" test is up.
+  it('a streamed reply into the visible tab never redraws it while no notice is showing', async () => {
+    const reply = await app.beginReply(app.visibleId());
+    await reply.words(1);
+    expect(app.namedRenders('ChatNoticeStrip')).toBeGreaterThan(0); // control: the probe can see the strip at all
+    await app.resetCounts();
+    await reply.words(WORDS - 1);
+    expect(app.namedRenders('ChatNoticeStrip')).toBe(0);
     await reply.end();
   });
 });

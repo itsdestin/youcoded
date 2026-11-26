@@ -124,3 +124,63 @@ describe('InputBar while Claude Code shows a pop-up', () => {
     await waitFor(() => expect(sendInput).toHaveBeenCalledWith('sess-1', 'hi\r', undefined, expect.any(String)));
   });
 });
+
+// ── The refusal now shows in the chat's own strip (waiting-notice T1) ─────────────────────────────────────────────────────────────────────────────
+import { renderHook } from '@testing-library/react';
+import { useBlockedSend } from '../src/renderer/hooks/useBlockedSend';
+import { ChatNoticeStrip } from '../src/renderer/components/ChatNoticeStrip';
+import { getChatNotice, clearChatNotice } from '../src/renderer/state/chat-notice-store';
+
+describe('held back, shown in the strip', () => {
+  const POPUP_BLOCK: InputBlock = { kind: 'popup', heading: 'Switch model?' };
+  const setup = (visible: (sid: string) => boolean = () => true) => {
+    (window as any).claude = { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true } };
+    (window as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    const showToast = vi.fn();
+    const chatState = { current: new Map() };
+    const hook = renderHook(() => useBlockedSend({ showToast, openTerminal: vi.fn(), chatState, isChatVisible: visible, chatName: () => 'Taxes' }),
+      { wrapper: ({ children }) => <ChatProvider>{children}</ChatProvider> });
+    return { ...hook, showToast };
+  };
+  afterEach(() => { cleanup(); clearScreenInputBlocks(); clearChatNotice('c1'); clearChatNotice('c2'); delete (window as any).claude; });
+
+  it('goes to the strip of the chat it belongs to and not to the floating toast', () => {
+    const { result, showToast } = setup();
+    setScreenInputBlock('c1', POPUP_BLOCK);
+    expect(result.current.notifyIfPtyBlocked('c1')).toBe(true);
+    expect(getChatNotice('c1')).toMatchObject({ key: 'held', tone: 'warn', text: 'Claude Code is waiting on something — answer it first.' });
+    expect(getChatNotice('c2')).toBeUndefined();
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it('leaves by itself once the pop-up is gone, without any send', () => {
+    const { result } = setup();
+    setScreenInputBlock('c1', POPUP_BLOCK);
+    result.current.notifyIfPtyBlocked('c1');
+    render(<ChatProvider><ChatNoticeStrip sessionId="c1" /></ChatProvider>);
+    expect(screen.getByText(/waiting on something/)).toBeInTheDocument();
+    act(() => setScreenInputBlock('c1', null));
+    expect(getChatNotice('c1')).toBeUndefined();
+  });
+
+  it('offers Dismiss, then Open terminal, then the filled Send anyway when there is something to retry', () => {
+    const { result } = setup();
+    setScreenInputBlock('c1', POPUP_BLOCK);
+    const retry = vi.fn();
+    result.current.showBlockedSend('c1', { kind: 'screen', screen: POPUP_BLOCK }, retry);
+    render(<ChatProvider><ChatNoticeStrip sessionId="c1" /></ChatProvider>);
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Dismiss', 'Open terminal', 'Send anyway']);
+    fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(getChatNotice('c1')).toBeUndefined();
+  });
+
+  it('a chat that is not on screen gets its strip AND a short floating notice naming it', () => {
+    const { result, showToast } = setup((sid) => sid !== 'c2');
+    setScreenInputBlock('c2', POPUP_BLOCK);
+    result.current.notifyIfPtyBlocked('c2');
+    expect(getChatNotice('c2')).toBeDefined();
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast.mock.calls[0][0].message).toContain('"Taxes"');
+  });
+});

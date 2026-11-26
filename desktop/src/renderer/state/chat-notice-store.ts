@@ -10,6 +10,9 @@
 // on screen reads it (performance rule 3, subscribe to a slice), and the code that raises a
 // notice (send gates, command handlers) has no prop path to the input bar.
 
+import type { SessionChatState } from './chat-types';
+import { isTurnBusy } from '../hooks/useStreamingGate';
+
 interface ChatNoticeAction {
   label: string;
   onClick: () => void;
@@ -31,7 +34,33 @@ export interface ChatNotice {
   leave: 'resolved' | 'next-action';
   /** Buttons after Dismiss, outlined first, the filled main one last (Destin, K-7 note). */
   actions?: ChatNoticeAction[];
+  /**
+   * Is the reason for this notice still true? (waiting-notice T1, review B3 — "derived, not stored hopes".)
+   * The strip asks whenever the chat or its pop-up changes, and takes the notice away the moment this says
+   * false — so "Claude Code is waiting on something" disappears by itself once you answer it, instead of
+   * waiting for you to find the Dismiss button. A plain function of current state; never a React hook.
+   */
+  stillTrue?: () => boolean;
+  /**
+   * Also ask once a second while it is showing in the chat you are looking at — but ONLY on a host that reads
+   * the terminal's text itself (the Android app's own runtime), where nothing announces that a pop-up closed
+   * (review 2, S1). Everywhere else the published reading already tells us, so no timer runs.
+   */
+  recheckEverySecond?: boolean;
 }
+
+// The three "reason is gone" tests every notice of a kind shares, so each call site states WHAT it waits on in
+// one line and cannot get the test subtly different (T2 wires most of these).
+
+/** Still busy: a reply is being written (same test as the Stop button, so the lost-message state cannot trap it). */
+export const stillBusy = (getSession: () => SessionChatState | undefined) => (): boolean => {
+  const session = getSession();
+  return !!session && isTurnBusy(session);
+};
+/** Still not live: the chat is not running right now (`isLive` is the caller's own "it is running" test). */
+export const stillNotLive = (isLive: () => boolean) => (): boolean => !isLive();
+/** Still moving: a finish-the-transfer step has not completed (`inProgress` is the caller's own test). */
+export const stillTransferring = (inProgress: () => boolean) => (): boolean => inProgress();
 
 const notices = new Map<string, ChatNotice>();
 const listeners = new Map<string, Set<() => void>>();
@@ -65,6 +94,17 @@ export function clearChatNotice(sessionId: string, key?: string): void {
   if (!current || (key && current.key !== key)) return;
   notices.delete(sessionId);
   notify(sessionId);
+}
+
+/**
+ * Asks the chat's notice whether its reason still holds; takes it away when not. Called by the strip on chat and
+ * pop-up changes. Returns true when it cleared one.
+ */
+export function recheckChatNotice(sessionId: string): boolean {
+  const notice = notices.get(sessionId);
+  if (!notice?.stillTrue || notice.stillTrue()) return false;
+  clearChatNotice(sessionId, notice.key);
+  return true;
 }
 
 /** Your next action in this chat (typing, sending, switching away): next-action notices leave. */

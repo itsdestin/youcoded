@@ -9,11 +9,29 @@
 import type { InputBlock } from '../../shared/cc-input-focus';
 
 const blocks = new Map<string, InputBlock>();
+const listeners = new Set<() => void>();
+const notify = () => { for (const listener of [...listeners]) listener(); };
+
+/**
+ * Tells you when a session's reading CHANGES (waiting-notice T1): the "held back" notice in a chat's strip
+ * leaves the moment the pop-up that caused it closes, and nothing else tells it. WHY change-only: the computer
+ * publishes a reading on every `session:live` message, mostly unchanged; waking every listener for each one would
+ * make an open notice re-check itself for no reason.
+ */
+export function subscribeScreenInputBlocks(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+const same = (a: InputBlock | undefined, b: InputBlock | null): boolean =>
+  !a || !b ? !a && !b : JSON.stringify(a) === JSON.stringify(b);
 
 /** Record the computer's latest reading for a session (`null` = Claude Code's message box is live). */
 export function setScreenInputBlock(sessionId: string, block: InputBlock | null): void {
+  if (same(blocks.get(sessionId), block)) return;
   if (block) blocks.set(sessionId, block);
   else blocks.delete(sessionId);
+  notify();
 }
 
 /** What holds the session's keyboard right now, or null (message box live, or the computer has not said). */
@@ -22,4 +40,9 @@ export function getScreenInputBlock(sessionId: string): InputBlock | null {
 }
 
 /** Forget everything (tests; and a reconnect that is about to be re-told the current facts). */
-export function clearScreenInputBlocks(): void { blocks.clear(); }
+export function clearScreenInputBlocks(): void {
+  const hadAny = blocks.size > 0;
+  blocks.clear();
+  // WHY notify on clear too: a reconnect forgets every pop-up, so notices waiting on one must re-check.
+  if (hadAny) notify();
+}
