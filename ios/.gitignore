@@ -1,0 +1,5 @@
+build/
+YouCoded.xcodeproj/
+project.stamped.yml
+*.xcresult
+DerivedData/

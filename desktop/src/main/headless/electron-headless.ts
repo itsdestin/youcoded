@@ -188,6 +188,11 @@ export const nativeImage = {
 };
 // WHY: mirrors Electron 44's async clipboard (read/readText/writeText return promises); the phone has
 // no desktop clipboard, so reads are empty. The removed sync readImage is gone from the real module too.
+/** WHY exported (2026-11-25, iPhone bundle): picture-actions.ts imports the class by name. Android's runtime module
+ *  hook tolerated a missing export (it reads as undefined); a bundler refuses to build without it. */
+export class ClipboardItem {
+  constructor(public readonly items: Record<string, unknown> = {}) {}
+}
 export const clipboard = {
   read: async (): Promise<never[]> => [],
   readText: async (): Promise<string> => '',

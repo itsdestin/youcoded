@@ -1,0 +1,93 @@
+name: iOS CI
+
+# The iPhone app: builds it on a Mac, runs its unit tests and starts the whole app in an iPhone simulator
+# (ios/YouCodedUITests). WHY its own workflow, not a job inside Desktop CI yet: the iPhone app is new and unreleased
+# (card #89); while it is being built it runs only where its own files change, so a problem here cannot hold up a
+# desktop or Android change. Fold it into ci-policy.mjs routing when the app ships.
+on:
+  push:
+    branches: [master, 'session/89-iphone-app']
+    paths:
+      - 'ios/**'
+      - 'desktop/src/main/headless/**'
+      - 'desktop/src/shared/android-page-origin.ts'
+      - 'desktop/src/shared/capabilities.ts'
+      - 'desktop/src/renderer/android-page.ts'
+      - 'desktop/package-lock.json'
+      - '.github/workflows/ios-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    name: Build and start in a simulator
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      YOUCODED_IOS_BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            ios/runtime/package-lock.json
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available | grep -E "iPhone" | head -20
+      - name: Build the page, the backend bundle and the Xcode project
+        run: bash ios/build-resources.sh
+      - name: Pick a simulator
+        id: sim
+        run: |
+          # The newest "Pro Max" the runner has (the owner's phone is an iPhone 15 Pro Max); any iPhone otherwise.
+          NAME="$(xcrun simctl list devices available | grep -oE 'iPhone [0-9]+ Pro Max' | sort -V | tail -1)"
+          [ -n "$NAME" ] || NAME="$(xcrun simctl list devices available | grep -oE 'iPhone [0-9A-Za-z ]+' | head -1 | sed 's/ *$//')"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: $NAME"
+      - name: Build, unit-test and start the app
+        run: |
+          mkdir -p "$RUNNER_TEMP/ios-shots"
+          set -o pipefail
+          TEST_RUNNER_SCREENSHOT_DIR="$RUNNER_TEMP/ios-shots" xcodebuild test \
+            -project ios/YouCoded.xcodeproj -scheme YouCoded \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -resultBundlePath "$RUNNER_TEMP/ios-result.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | grep -vE '^\s*(CompileC|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|CpResource|Copy|builtin-|cd |export |/Applications/Xcode|\s*$)' | tail -400
+      - name: Collect the app's logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/ios-logs"
+          DATA="$(xcrun simctl get_app_container booted com.youcoded.app.dev data 2>/dev/null || true)"
+          if [ -n "$DATA" ]; then
+            cp "$DATA/Library/Application Support/userdata/"*.log "$RUNNER_TEMP/ios-logs/" 2>/dev/null || true
+            ls -la "$DATA/Documents" > "$RUNNER_TEMP/ios-logs/home-listing.txt" 2>/dev/null || true
+          fi
+          tail -c 400000 "$RUNNER_TEMP/xcodebuild.log" > "$RUNNER_TEMP/ios-logs/xcodebuild-tail.log" 2>/dev/null || true
+          xcrun simctl spawn booted log show --last 15m --predicate 'subsystem == "com.youcoded.app"' --style compact > "$RUNNER_TEMP/ios-logs/unified.log" 2>/dev/null || true
+          ls -la "$RUNNER_TEMP/ios-logs" "$RUNNER_TEMP/ios-shots" || true
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: ios-simulator-run
+          path: |
+            ${{ runner.temp }}/ios-shots
+            ${{ runner.temp }}/ios-logs
+          if-no-files-found: warn
+          retention-days: 7

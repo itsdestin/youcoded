@@ -52,7 +52,7 @@ function hostOf(value: string, kind: 'origin' | 'host'): string | null {
  * may connect. Pure and side-effect free so it can be unit-tested exhaustively
  * without a live server or a phone.
  */
-import { ANDROID_PAGE_ORIGIN } from '../shared/android-page-origin';
+import { ANDROID_PAGE_ORIGIN, IOS_PAGE_ORIGIN } from '../shared/android-page-origin';
 
 export function isAllowedWsOrigin(origin: string | undefined | null, host: string | undefined | null): boolean {
   const o = (origin ?? '').trim();
@@ -66,6 +66,8 @@ export function isAllowedWsOrigin(origin: string | undefined | null, host: strin
   // The Android app now serves its page from this private https name (2026-10-30 audit A2), so its socket carries this Origin
   // instead of "null". Same client, same reasoning: it still cannot authenticate without the password or a stored secret.
   if (o.toLowerCase() === ANDROID_PAGE_ORIGIN) return true;
+  // The iPhone app's page (2026-11-25): a private scheme only the app itself can serve. Same client, same reasoning.
+  if (o.toLowerCase() === IOS_PAGE_ORIGIN) return true;
   const originHost = hostOf(o, 'origin');
   const hostHeaderHost = hostOf(host ?? '', 'host');
   if (!originHost || !hostHeaderHost) return false;

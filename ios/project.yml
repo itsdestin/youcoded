@@ -1,0 +1,122 @@
+# The iPhone app's Xcode project, as data. `xcodegen generate` (run by build-resources.sh) turns this into
+# YouCoded.xcodeproj, which is never committed: a hand-edited project file is unreadable in review and conflicts
+# on every change. See docs/ios-runtime.md.
+name: YouCoded
+options:
+  bundleIdPrefix: com.youcoded
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Both are stamped by build-resources.sh (desktop/package.json's version; the CI run number).
+    MARKETING_VERSION: "0.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  YouCoded:
+    type: application
+    platform: iOS
+    sources:
+      - path: YouCoded
+      # Folder references: copied into the app whole, keeping their layout (the backend finds its files by path).
+      - path: build/Resources/web
+        type: folder
+        buildPhase: resources
+      - path: build/Resources/backend
+        type: folder
+        buildPhase: resources
+    dependencies:
+      # Node for iOS (nodejs-mobile), fetched and checksum-verified by runtime/fetch-node.sh.
+      - framework: build/Frameworks/NodeMobile.xcframework
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: YouCoded
+        PRODUCT_BUNDLE_IDENTIFIER: com.youcoded.app
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        # nodejs-mobile ships no bitcode and Apple no longer accepts it.
+        ENABLE_BITCODE: NO
+        APP_DISPLAY_NAME: YouCoded
+      configs:
+        # The Dev copy installs beside the real app with its own data, like Android's com.youcoded.app.dev.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.youcoded.app.dev
+          APP_DISPLAY_NAME: YouCoded Dev
+    info:
+      path: build/Info.plist
+      properties:
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # The Files app shows the assistant's home folder ("On My iPhone › YouCoded"): see AppPaths.swift.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # The app uses only standard encryption (HTTPS, the system's own ciphers), which is exempt from export filing.
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: YouCoded uses the camera to scan the pairing code shown on your computer, and when a page you open asks for it.
+        NSMicrophoneUsageDescription: YouCoded uses the microphone when you tap the mic button to speak a message.
+        NSSpeechRecognitionUsageDescription: YouCoded turns what you say into text for your message when you tap the mic button.
+        NSLocalNetworkUsageDescription: YouCoded connects to your own computer when you pair this iPhone with it.
+        LSApplicationQueriesSchemes:
+          - tailscale
+        NSAppTransportSecurity:
+          # The page talks to the assistant running inside this app over a loopback address.
+          NSAllowsLocalNetworking: true
+          # A paired computer is reached without TLS, over Tailscale only (which encrypts the link itself); the
+          # Tailscale-only rule is enforced in code (CleartextPolicy in UrlPolicy.swift, and the page's own check).
+          NSAllowsArbitraryLoadsInWebContent: true
+  YouCodedTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: YouCodedTests
+    dependencies:
+      - target: YouCoded
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.youcoded.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+  YouCodedUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: YouCodedUITests
+    dependencies:
+      - target: YouCoded
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.youcoded.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: YouCoded
+schemes:
+  YouCoded:
+    build:
+      targets:
+        YouCoded: all
+        YouCodedTests: [test]
+        YouCodedUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - YouCodedTests
+        - YouCodedUITests
+    archive:
+      config: Release

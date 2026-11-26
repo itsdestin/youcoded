@@ -6,6 +6,12 @@
 // object per line: {id, method, params} → {id, result} | {id, error}. The app names the socket in
 // YOUCODED_HOST_SOCKET (a Linux abstract socket name, written "@name"). Without it (the backend run
 // on a laptop for testing) every call answers locally: links are printed, the rest are no-ops.
+//
+// The iPhone app (2026-11-25, card #89) names a loopback port instead: YOUCODED_HOST_SOCKET="tcp:<port>". WHY not a
+// socket file there: iOS has no abstract sockets, and a socket FILE's path must fit in 104 bytes, which an app's
+// container path (and every simulator path) can exceed. Other apps on a phone can reach loopback ports, so the
+// first line the backend sends is this run's host token (YOUCODED_HOST_TOKEN); the app drops a connection that
+// does not open with it.
 import net from 'net';
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
@@ -23,16 +29,39 @@ function socketPath(): string | null {
   return name.startsWith('@') ? `\0${name.slice(1)}` : name;
 }
 
+/** The loopback port of an app that listens on TCP (the iPhone app), or null. */
+function tcpPort(target: string): number | null {
+  const m = /^tcp:(\d{1,5})$/.exec(target);
+  return m ? Number(m[1]) : null;
+}
+
+// Read once and removed from the environment, like the owner token (headless-main.ts).
+const HOST_TOKEN = process.env.YOUCODED_HOST_TOKEN ?? '';
+delete process.env.YOUCODED_HOST_TOKEN;
+
+/** Which phone system the app that started this backend runs on. WHY a function, not process.platform: on Android
+ *  the bundled Node reports "linux"; on the iPhone nodejs-mobile reports "ios". The app may also say so itself
+ *  (YOUCODED_HOST_OS), which is how a laptop test run imitates either phone. */
+export function hostOs(): 'android' | 'ios' {
+  const said = process.env.YOUCODED_HOST_OS;
+  if (said === 'ios' || said === 'android') return said;
+  return (process.platform as string) === 'ios' ? 'ios' : 'android';
+}
+
 function connect(): Promise<net.Socket | null> {
   if (socket) return Promise.resolve(socket);
   if (connecting) return connecting;
   const target = socketPath();
   if (!target) return Promise.resolve(null);
   connecting = new Promise((resolve) => {
-    const s = net.createConnection(target);
+    const port = tcpPort(target);
+    const s = port !== null ? net.createConnection({ host: '127.0.0.1', port }) : net.createConnection(target);
     let buf = '';
     s.setEncoding('utf8');
-    s.on('connect', () => { socket = s; connecting = null; resolve(s); });
+    s.on('connect', () => {
+      if (port !== null) s.write(JSON.stringify({ hello: HOST_TOKEN }) + '\n');
+      socket = s; connecting = null; resolve(s);
+    });
     s.on('data', (chunk: string) => {
       buf += chunk;
       let nl: number;
