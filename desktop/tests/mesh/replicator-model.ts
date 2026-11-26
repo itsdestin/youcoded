@@ -123,6 +123,17 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     for (const n of NAMES) { world.devs[n].carrier.passFilter = null; if (!online.has(n)) world.devs[n].carrier.setOnline(true); }
     for (const n of NAMES) world.devs[n].rep.hello();
     for (let round = 0; round < 12; round++) {
+      // WHY a reader pass: the store tells damage past its scrub mark only when something READS it, and a restart forgets a damage that was known but not yet repaired.
+      // What a screen or an adapter will do (read, and report a `corrupt` answer) is done here for every device and version, every round.
+      for (const n of NAMES) for (const v of vs) {
+        const dev = world.devs[n]; const local = await world.localOf(n, v);
+        if (!local) continue;
+        const hd = await dev.store.head(local);
+        for (let at = 0; at < hd.lines; at += 64) {
+          const bad = await dev.store.read(local, 0, at, Math.min(hd.lines, at + 64)).then(() => false, (e: { code?: string }) => e?.code === 'corrupt');
+          if (bad) { await dev.rep.reportCorrupt(v); break; }
+        }
+      }
       await world.elapse(30_000, 10_000, true);
       // WHY also the status: a rotted copy has the same head as a healthy one; "equal heads" alone would stop waiting before its repair ran
       const agree = await Promise.all(vs.map(async (v) => { const hs = await Promise.all(NAMES.map((n) => world.heads(n, v))); const sts = await Promise.all(NAMES.map((n) => world.devs[n].rep.status(v))); return hs.every((h) => h.hash === hs[0].hash && h.lines === (oracle.get(v.toString('hex'))?.length ?? -1)) && sts.every((x) => x.state !== 'refilling' && x.state !== 'pulling' && x.state !== 'retired-recopy'); }));

@@ -147,6 +147,8 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
     /** Take a device down and bring it up again over the same folder (its store reopened with the real file system). */
     async restart(n: string, opts: { graceful?: boolean; start?: boolean } = {}): Promise<WDev> {
       const d = devs[n];
+      // WHY idle first: a real kill ends in-flight work; here the old objects would otherwise keep writing into the folder the new ones are opening
+      await d.rep.idle();
       d.rep.stop(); d.link.stop();
       if (opts.graceful !== false) await d.store.close();
       else { const lp = path.join(dirs[n], 'store', 'LOCK'); if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' })); }
