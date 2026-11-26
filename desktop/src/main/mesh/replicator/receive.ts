@@ -130,6 +130,9 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   try { res = await ctx.store.append(v.local, 0, b.from, lines); } catch (e) { await storeFailed(ctx, peer, wire, e, b.from); return; }
   if (res === 'ok') {
     run.diverged = null; run.stuck = null; run.retiredRecopy = false;
+    // the sender holds at least what the writer signed in this batch (a signed statement, not a bare claim), so its entry is at least that
+    const sk = wire.toString('hex'); const prev = peer.heads.get(sk);
+    if (!prev || prev.lines <= b.head.lines) peer.heads.set(sk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });
     await sendAck(ctx, peer, wire, v.local);
     if (run.pull) run.pull = { ...run.pull, at: ctx.clock.now() };
     await checkRepair(ctx, wire);
