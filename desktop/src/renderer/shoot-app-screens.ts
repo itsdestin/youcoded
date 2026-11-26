@@ -9,6 +9,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useScreenOpen } from './shoot-mode';
 import { GUIDE_STOPS } from './components/guide/guide-stops';
 import { setTourStart } from './components/guide/guide-state';
+import { HANDOFF_TAKEOVER_FAILED, LIVE_HANDOFF_UNAVAILABLE } from './utils/notice-words';
 import type { ScreenNoticeData } from './components/ScreenNotice';
 import type { PendingTab } from './state/pending-handoff';
 
@@ -91,7 +92,7 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('chat/resume', () => {
     const which = new URLSearchParams(location.search).get('resumeNotice');
     if (which === 'failed') s.setResumeNotice({ text: "Couldn't resume this conversation.", tone: 'error', retry: () => {} });
-    else if (which === 'unavailable') s.setResumeNotice({ text: 'Live handoff is available from a computer or a remote connection to one.', tone: 'warn' });
+    else if (which === 'unavailable') s.setResumeNotice({ text: LIVE_HANDOFF_UNAVAILABLE, tone: 'warn' });
     s.setResumeRequested(true);
   });
   // The screen for moving a chat here, in its "failed" state, optionally with the take-over sentence (`?handoffNote=1`).
@@ -99,7 +100,7 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('chat/handoff', () => {
     if (!id) return;
     s.setPendingTab({ tabId: id, conversationId: 'shoot-handoff', provider: 'claude', projectSlug: 'youcoded', name: 'Conversation', cwd: '/home/destin/youcoded-dev/youcoded', phase: 'failed' });
-    if (new URLSearchParams(location.search).get('handoffNote') === '1') s.setHandoffNote({ tabId: id, text: "Couldn't take over from your other computer. Close the conversation there, then try again." });
+    if (new URLSearchParams(location.search).get('handoffNote') === '1') s.setHandoffNote({ tabId: id, text: HANDOFF_TAKEOVER_FAILED });
   });
   // Same fixture pattern as chat/takeover just below: a fake session/project id
   // stands in for a real native resume with no model bound yet.

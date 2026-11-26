@@ -9,9 +9,7 @@ import { clearChatNotice, getChatNotice, recheckChatNotice, subscribeChatNotice,
 import { useOptionalChatStore } from '../state/chat-context';
 import { subscribeScreenInputBlocks } from '../state/screen-input-store';
 import { getCapabilities } from '../platform';
-import { useNarrowViewport } from '../hooks/use-narrow-viewport';
-import { StatusStrip } from './ui/StatusStrip';
-import { Button } from './ui/Button';
+import { NoticeBand } from './NoticeBand';
 import { ScreenMark } from '../shoot-mode';
 
 /**
@@ -37,33 +35,17 @@ function useNoticeRecheck(sessionId: string | null, notice: ChatNotice | undefin
   }, [sessionId, watching, poll, chatVisible, chatStore, notice?.key]);
 }
 
-// The visible body is its own component so the narrow-screen hook runs only while a notice is showing.
+// The visible body is its own component so the narrow-screen hook (inside NoticeBand) runs only while a notice is showing.
 function NoticeBody({ sessionId, notice }: { sessionId: string; notice: ChatNotice }) {
-  // WHY (R-phone): on a phone the buttons sit on their own full-width line under the words, as the design guide
-  // says for buttons that cannot share the line; beside the words they squeezed the sentence onto two lines.
-  const narrow = useNarrowViewport();
-  const others = notice.actions ?? [];
-  // Error notices announce themselves to screen readers at once (C1); the rest wait their turn.
-  const isError = notice.tone === 'error';
   return (
-    <div className="px-2 sm:px-3 pb-1.5" role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'}>
-      <ScreenMark name="chat/notice-strip" />
-      <StatusStrip
-        tone={notice.tone}
-        actionBelow={narrow}
-        action={
-          <span className={`flex items-center gap-1.5 ${narrow ? 'w-full' : 'shrink-0'}`}>
-            <Button variant="secondary" size="sm" className={narrow ? 'flex-1' : undefined} onClick={() => clearChatNotice(sessionId, notice.key)}>Dismiss</Button>
-            {/* Outlined ones first, the filled main one last, whatever order the caller listed them in. */}
-            {[...others.filter((a) => !a.primary), ...others.filter((a) => a.primary)].map((a) => (
-              <Button key={a.label} variant={a.primary ? 'primary' : 'secondary'} size="sm" className={narrow ? 'flex-1' : undefined} onClick={a.onClick}>{a.label}</Button>
-            ))}
-          </span>
-        }
-      >
-        {notice.text}
-      </StatusStrip>
-    </div>
+    <NoticeBand
+      className="px-2 sm:px-3 pb-1.5"
+      mark={<ScreenMark name="chat/notice-strip" />}
+      tone={notice.tone}
+      text={notice.text}
+      onDismiss={() => clearChatNotice(sessionId, notice.key)}
+      actions={notice.actions}
+    />
   );
 }
 

@@ -516,14 +516,18 @@ describe('Close', () => {
     expect(s.finish).toHaveBeenCalledTimes(1);                     // not twice
   });
 
-  it('REFUSED: the computer refuses (in its own words): the conversation is back in the strip and the selection returns, and the person is told what the computer said', async () => {
+  it('REFUSED: the computer refuses (in its own words): the conversation is back in the strip and the selection returns, and the person is told only that it was not accepted (the reason goes to the console)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     wire(); const s = strip(); const reply = deferred<boolean>();
     close(s, () => reply.promise);
     await act(async () => { reply.reject(new Error('Session is busy handing off')); await Promise.resolve(); });
     expect(isPending('close:b')).toBe(false);
     expect(s.state.open).toBe('b');
     expect(s.finish).not.toHaveBeenCalled();
-    expect(notices).toEqual(['Couldn\'t close "Build": Session is busy handing off']);
+    // Review F5: the computer's own reason is for the console, never the screen.
+    expect(notices).toEqual(['Couldn\'t close "Build". Your computer didn\'t accept the request.']);
+    expect(warn).toHaveBeenCalledWith('[close] "Build" refused:', 'Session is busy handing off');
+    warn.mockRestore();
   });
 
   it('REFUSED, with no reason given (the computer does not offer the channel): says only what is known', async () => {

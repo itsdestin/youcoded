@@ -19,8 +19,8 @@ export function announceSettingsRepaired(backupPath: string, durationMs = 30_000
   // WHY no button on a phone or the Android app (card #11 a, deck C-1): the file is on the computer, and a phone's
   // showItemInFolder does nothing, so the button would be a dead tap. The words alone still tell the person.
   const canShow = !isAndroid() && !isRemoteMode();
-  announce(SETTINGS_REPAIR_MESSAGE, durationMs, canShow ? {
+  announce(SETTINGS_REPAIR_MESSAGE, { durationMs, untilClosed: true, action: canShow ? {
     label: SHOW_BUTTON,
     onClick: () => { void (window as any).claude?.shell?.showItemInFolder?.(backupPath); },
-  } : undefined, { untilClosed: true }); // WHY untilClosed (K-7): a file changed behind the person's back; it stays until closed
+  } : undefined }); // WHY untilClosed (K-7): a file changed behind the person's back; it stays until closed
 }

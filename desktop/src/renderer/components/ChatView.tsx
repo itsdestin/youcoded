@@ -153,6 +153,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const activeProviderType = useModelProviderType(native ? model : null, native ? providerType : null, !visible);
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
+  // WHY (review F9): the control card's Try again needs to read this chat's live state, so a refused retry ("still working") can leave by itself
+  // when the reply ends. A ref (not a new subscription) keeps the latest state reachable without re-rendering any row.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const getSessionForRows = useCallback((id: string) => (id === sessionId ? stateRef.current : undefined), [sessionId]);
 
   // WHY (one-core R5-3): a phone watches only a few conversations, so switching to one it has not opened means its content is still
   // on its way. Until some arrives, the input bar's connection strip says "Catching up with your computer…" (ConnectionStrip.tsx),
@@ -935,8 +940,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // row reads these at click time, so the row never needs a fresh callback
   // prop — which would re-render every row on every streamed word — and a row
   // that skipped rendering can never call a stale handler.
-  const rowActionsRef = useRef<TimelineRowActions>({ promptSelect: handlePromptSelect, dispatch });
-  rowActionsRef.current = { promptSelect: handlePromptSelect, dispatch };
+  const rowActionsRef = useRef<TimelineRowActions>({ promptSelect: handlePromptSelect, dispatch, getSession: getSessionForRows });
+  rowActionsRef.current = { promptSelect: handlePromptSelect, dispatch, getSession: getSessionForRows };
 
   // Task 12 review fix (Important — float collision): .model-status-strip and
   // .jump-to-bottom share .queued-messages-strip's offset band — they'd

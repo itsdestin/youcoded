@@ -13,24 +13,18 @@ import { commandNotInNativeChat, skillWhichOne } from '../utils/notice-words';
 
 type Extra = Pick<ChatNotice, 'actions' | 'stillTrue' | 'recheckEverySecond'>;
 
-/** Can't be done here or now (amber; gone on your next action). */
-export function raiseCant(sessionId: string, key: string, text: string, extra: Extra = {}): void {
-  showChatNotice(sessionId, { key, text, tone: 'warn', leave: 'next-action', ...extra });
-}
-
-/** Something failed (red; gone on your next action; red dot on the chat if it is not the one on screen). */
-export function raiseFailed(sessionId: string, key: string, text: string, extra: Extra = {}): void {
-  showChatNotice(sessionId, { key, text, tone: 'error', leave: 'next-action', ...extra });
-}
-
-/** Not sure it went through (amber; stays until you send again — InputBar's send clears the strip — or dismiss it). */
-export function raiseUnsure(sessionId: string, key: string, text: string, extra: Extra = {}): void {
-  showChatNotice(sessionId, { key, text, tone: 'warn', leave: 'resolved', ...extra });
-}
-
-/** The same, but gone on your next action (a Stop or a command you can simply press again). */
-export function raiseUnsureNextAction(sessionId: string, key: string, text: string, extra: Extra = {}): void {
-  showChatNotice(sessionId, { key, text, tone: 'warn', leave: 'next-action', ...extra });
+/**
+ * The one raiser (review consolidation; it replaces four near-identical functions). Tone is the only real difference:
+ *   'warn'  — amber: can't be done here or now, or not sure it went through
+ *   'error' — red (and a red dot on the chat in the list if you are elsewhere): something failed
+ * By default it leaves on your next action. A "not sure it went through" notice passes `leave: 'resolved'`, so it stays until you
+ * send again (InputBar's send clears the strip) or you dismiss it.
+ */
+export function raiseNotice(
+  sessionId: string, tone: 'warn' | 'error', key: string, text: string,
+  extra: Extra & Partial<Pick<ChatNotice, 'leave'>> = {},
+): void {
+  showChatNotice(sessionId, { key, text, tone, leave: 'next-action', ...extra });
 }
 
 /**
@@ -44,7 +38,7 @@ export function raiseBusy(
 ): void {
   const get = () => io.getSession?.(sessionId);
   const knownBusy = !!get() && isTurnBusy(get()!);
-  raiseCant(sessionId, key, text, {
+  raiseNotice(sessionId, 'warn', key, text, {
     actions: [{ label: 'Stop', primary: true, onClick: io.stop }],
     ...(knownBusy ? { stillTrue: stillBusy(get) } : {}),
   });
@@ -66,7 +60,7 @@ export function raiseNotRunning(
     if (s.isThinking) return true;
     return endedAtRaise && s.attentionState !== 'session-died';
   };
-  raiseCant(sessionId, key, text, endedAtRaise ? { stillTrue: stillNotLive(isLive) } : {});
+  raiseNotice(sessionId, 'warn', key, text, endedAtRaise ? { stillTrue: stillNotLive(isLive) } : {});
 }
 
 /** "Browse skills" asks App to open the marketplace (no prop path from here). */
@@ -78,7 +72,7 @@ export const browseSkillsAction = (): NonNullable<ChatNotice['actions']>[number]
 
 /** "/doctor isn't available in YouCoded-runtime sessions yet." in that chat's strip (a plain terminal session has no strip: App floats its own sentence). */
 export function raiseCommandNotHere(sessionId: string, command: string): void {
-  raiseCant(sessionId, 'not-in-native-runtime', commandNotInNativeChat(command));
+  raiseNotice(sessionId, 'warn', 'not-in-native-runtime', commandNotInNativeChat(command));
 }
 
 /**
@@ -88,7 +82,7 @@ export function raiseCommandNotHere(sessionId: string, command: string): void {
  */
 const WHICH_SKILL_KEY = 'skill-which-one';
 export function raiseWhichSkill(sessionId: string, skill: string, fullIds: string[], run: (fullId: string) => void): void {
-  raiseCant(sessionId, WHICH_SKILL_KEY, skillWhichOne(skill), {
+  raiseNotice(sessionId, 'warn', WHICH_SKILL_KEY, skillWhichOne(skill), {
     actions: fullIds.map((id) => ({ label: id, onClick: () => { clearChatNotice(sessionId, WHICH_SKILL_KEY); run(id); } })),
   });
 }

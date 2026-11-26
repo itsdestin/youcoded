@@ -10,7 +10,7 @@ import { resetFloatingNotices, showRoutineToast } from '../src/renderer/state/fl
 beforeEach(() => { vi.useFakeTimers(); resetFloatingNotices(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); resetFloatingNotices(); });
 
-const needs = (m: string, label?: string, onClick = () => {}) => act(() => announce(m, undefined, label ? { label, onClick } : undefined, { untilClosed: true }));
+const needs = (m: string, label?: string, onClick = () => {}) => act(() => announce(m, { action: label ? { label, onClick } : undefined, untilClosed: true }));
 
 describe('floating notices', () => {
   it('a quick toast during an open needs-you notice shows beside it and does not remove it', () => {

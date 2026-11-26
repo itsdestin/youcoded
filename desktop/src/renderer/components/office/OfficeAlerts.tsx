@@ -21,7 +21,7 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
     if (!closeFailed) return;
     const path = closeFailed;
     clearCloseFailed();
-    announce("An Office document couldn't be saved.", undefined, { label: 'Open Office', onClick: () => onReview(path) }, { untilClosed: true, tone: 'error' });
+    announce("An Office document couldn't be saved.", { action: { label: 'Open Office', onClick: () => onReview(path) }, untilClosed: true, tone: 'error' });
   }, [closeFailed, onReview]);
   return (
     <>

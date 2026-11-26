@@ -8,9 +8,9 @@ import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { applyCloseChoices } from './state/close-prompt-writes';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
-import { clearChatNotice, getUnseenFailureIds, markFailureSeen, setNoticeViewer, subscribeUnseenFailures } from './state/chat-notice-store';
-import { raiseCant, raiseCommandNotHere, OPEN_MARKETPLACE_EVENT } from './state/raise-notice';
-import { SKILL_CANT_START_NATIVE } from './utils/notice-words';
+import { getUnseenFailureIds, markChatClosed, markChatsOpen, markFailureSeen, noticeViewerFor, setNoticeViewer, subscribeUnseenFailures } from './state/chat-notice-store';
+import { raiseNotice, raiseCommandNotHere, OPEN_MARKETPLACE_EVENT } from './state/raise-notice';
+import { HANDOFF_TAKEOVER_FAILED, LIVE_HANDOFF_UNAVAILABLE, SKILL_CANT_START_NATIVE } from './utils/notice-words';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
 import { SessionTerminal } from './components/SessionTerminal';
@@ -1379,7 +1379,7 @@ function AppInner() {
       // WHY (R-4): a closed chat's "viewed" mark and a still-pending model switch used to outlive it.
       setViewedSessions((prev) => withoutSession(prev, id));
       setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
-      clearChatNotice(id); // WHY: a reused id (resume) must not bring back an old strip notice (review C2)
+      markChatClosed(id); // WHY: a reused id (resume) must not bring back an old strip notice (review C2), and a late failure for a closed chat is ignored (review F6)
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
       // WHY: free a closed session's file-pane entries. A resumed native chat reuses
       // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
@@ -2375,9 +2375,9 @@ function AppInner() {
         const wanted = pendingModel.charAt(0).toUpperCase() + pendingModel.slice(1);
         const failedSid = sessionId;
         if (failures >= 2) {
-          announce(modelSwitchFailedAgain(wanted), undefined, { label: 'Report bug', onClick: () => setModelReportOpen(true) }, { untilClosed: true });
+          announce(modelSwitchFailedAgain(wanted), { action: { label: 'Report bug', onClick: () => setModelReportOpen(true) }, untilClosed: true });
         } else {
-          announce(modelSwitchFailed(wanted), undefined, { label: 'Try again', onClick: () => { if (failedSid) switchModelRef.current?.(failedSid, pendingModel as ModelAlias); } }, { untilClosed: true });
+          announce(modelSwitchFailed(wanted), { action: { label: 'Try again', onClick: () => { if (failedSid) switchModelRef.current?.(failedSid, pendingModel as ModelAlias); } }, untilClosed: true });
         }
       }
     });
@@ -2587,7 +2587,7 @@ function AppInner() {
         // Native sessions have no PTY. A skill's natural-language prompt has no
         // harness path yet (that is the Skill tool's job, model-invoked), so say
         // so rather than dropping it silently (handoff §2.3).
-        raiseCant(sessionId, 'skill-cant-start-native', SKILL_CANT_START_NATIVE);
+        raiseNotice(sessionId, 'warn', 'skill-cant-start-native', SKILL_CANT_START_NATIVE);
         return;
       }
       dispatch({
@@ -2722,7 +2722,7 @@ function AppInner() {
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
     setViewedSessions((prev) => withoutSession(prev, id)); // WHY (R-4): same two tidy-ups as the session:destroyed handler
     setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
-    clearChatNotice(id); // WHY: a reused id (resume) must not bring back an old strip notice (review C2)
+    markChatClosed(id); // WHY: a reused id (resume) must not bring back an old strip notice (review C2), and a late failure for a closed chat is ignored (review F6)
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
     // WHY: drop the gone session's file-pane entries too (they were never freed).
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
@@ -2752,7 +2752,7 @@ function AppInner() {
   const handleResumeRef = useRef<((...a: any[]) => Promise<boolean>) | null>(null);
   const raiseResumeNotice = useCallback((text: string, o: { tone?: 'warn' | 'error'; retry?: () => void; stay?: boolean; durationMs?: number } = {}) => {
     if (resumeScreenOpenRef.current) { setResumeNotice({ text, tone: o.tone, retry: o.retry }); return; }
-    if (o.stay) announce(text, undefined, o.retry ? { label: 'Try again', onClick: o.retry } : undefined, { untilClosed: true });
+    if (o.stay) announce(text, { action: o.retry ? { label: 'Try again', onClick: o.retry } : undefined, untilClosed: true });
     else showRoutineToast({ message: text, durationMs: o.durationMs });
   }, []);
   // True only for an acknowledged launch; aborted/failed/stale/model-picker replies keep modal/row UI open.
@@ -2776,7 +2776,7 @@ function AppInner() {
       onHandoff: async () => {
         if (epoch !== sessionEpochRef.current) return; // host changed while consent was pending
         if (!getCapabilities().liveHandoff) { // R4-1: capability (false only on the Android app's own runtime), was a two-flag guess
-          raiseResumeNotice('Live handoff is available from a computer or a remote connection to one.', { tone: 'warn' });
+          raiseResumeNotice(LIVE_HANDOFF_UNAVAILABLE, { tone: 'warn' });
           return;
         }
         // WHY: explicit consent opens a read/draft tab immediately; only the
@@ -2936,7 +2936,12 @@ function AppInner() {
   }, [currentViewMode]);
   // Tells the notice store which chat's message area is on screen, so a red failure for any OTHER chat gets its dot in the list
   // (in terminal view the strip is hidden, so no chat counts as seen).
-  useEffect(() => { setNoticeViewer('main', currentViewMode === 'chat' ? (sessionId ?? null) : null); }, [currentViewMode, sessionId]);
+  // WHY the cover test (review, panel-covers-chat): a full-screen panel hides the strip, so the chat under it is not "seen".
+  const chatCovered = activeView === 'marketplace' || activeView === 'library' || settingsOpen
+    || artifactState.projectViewOpen || artifactState.pageViewOpen || artifactState.pagesViewOpen;
+  useEffect(() => { setNoticeViewer('main', noticeViewerFor({ viewMode: currentViewMode, sessionId, covered: chatCovered })); }, [currentViewMode, sessionId, chatCovered]);
+  // WHY (review F6): the list of open chats says which ids may show notices again after a close (a resumed chat reuses its id).
+  useEffect(() => { markChatsOpen(sessions.map((s) => s.id)); }, [sessions]);
 
   // SWITCH MARKS (2026-10-05): tell the hitch recorder every time the active session changes, so it can time the switch
   // (state/switch-marks.ts, docs/hitch-recorder.md). WHY a LAYOUT effect: it runs in the same commit that makes the new pane the
@@ -3695,7 +3700,7 @@ function AppInner() {
                       onContinue={() => { void pendingRef.current?.continueWithSavedCopy(s.id,
                         (device) => askTakeover(device, 'force'),
                         // WHY the screen's own sentence, no button (deck R-screen): this screen already has Try again and Continue.
-                        () => setHandoffNote({ tabId: s.id, text: "Couldn't take over from your other computer. Close the conversation there, then try again." })); }} /></ErrorBoundary>
+                        () => setHandoffNote({ tabId: s.id, text: HANDOFF_TAKEOVER_FAILED })); }} /></ErrorBoundary>
                   ) : <ErrorBoundary name="Chat">
                     <ChatView
                       sessionId={s.id}

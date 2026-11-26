@@ -78,10 +78,32 @@ export function subscribeChatNotice(sessionId: string | null | undefined, listen
   return () => { set!.delete(listener); if (set!.size === 0) listeners.delete(sessionId); };
 }
 
+/** Chats that were closed in this window: a late answer for one of them must not raise a notice nobody can ever see (review F6). */
+const closedChats = new Set<string>();
+
+/**
+ * The chat was closed: its notice goes, its red dot goes, and nothing more is accepted for it until it is open again.
+ * WHY (review F6): a failure answer that lands after the chat closed used to create a notice and a red-dot entry for an id nobody lists,
+ * and that entry then outlived the chat (a resumed chat reuses its id and would have shown the old notice).
+ */
+export function markChatClosed(sessionId: string): void {
+  closedChats.add(sessionId);
+  clearChatNotice(sessionId);
+  dropUnseenFailure(sessionId);
+}
+
+/** These chats are open (App's list of chats): any that were marked closed accept notices again (resume reuses an id). */
+export function markChatsOpen(ids: readonly string[]): void {
+  for (const id of ids) closedChats.delete(id);
+}
+
 /** Shows `notice` in that chat's strip, replacing whatever that chat showed before. */
 export function showChatNotice(sessionId: string, notice: ChatNotice): void {
-  if (!sessionId) return;
+  if (!sessionId || closedChats.has(sessionId)) return;
+  const previous = notices.get(sessionId);
   notices.set(sessionId, notice);
+  // WHY (review F7): the red dot points at a RED notice. Replacing an error with a warning leaves nothing red behind it, so the dot goes.
+  if (previous?.tone === 'error' && notice.tone !== 'error') dropUnseenFailure(sessionId);
   // WHY here (R-elsewhere, owner chose "a red dot on that chat in the list"): a failure raised for a chat nobody is looking at
   // would sit unseen in a strip nobody can see. Marking it here covers every caller with one rule.
   if (notice.tone === 'error' && !isViewed(sessionId)) addUnseenFailure(sessionId);
@@ -140,6 +162,15 @@ function dropUnseenFailure(id: string): void {
 /** Which chat each window is looking at right now (null: none, or it is in terminal view). Only used to decide "not visible". */
 const viewers = new Map<string, string | null>();
 const isViewed = (id: string): boolean => { for (const seen of viewers.values()) if (seen === id) return true; return false; };
+
+/**
+ * Which chat's message area is really on screen: only in chat view, and not while a full-screen panel (Settings, the marketplace, the
+ * library, a project or page screen) sits over it. WHY (review, panel-covers-chat): the strip is hidden behind such a panel, so a failure
+ * raised then must count as "not looked at" and get its red dot, like any other chat that is not on screen.
+ */
+export function noticeViewerFor(o: { viewMode: string; sessionId: string | null | undefined; covered: boolean }): string | null {
+  return o.viewMode === 'chat' && !o.covered ? (o.sessionId ?? null) : null;
+}
 
 /** A window says which chat's message area is on screen. Opening a chat also counts it as seen (clears its dot). */
 export function setNoticeViewer(windowKey: string, sessionId: string | null): void {

@@ -11,7 +11,7 @@ import {
   showChatNotice, clearChatNotice, getChatNotice, stillBusy, stillNotLive, stillTransferring, type ChatNotice,
   setNoticeViewer, markFailureSeen, getUnseenFailureIds, subscribeUnseenFailures,
 } from '../src/renderer/state/chat-notice-store';
-import { raiseFailed, raiseCant, raiseBusy, raiseNotRunning } from '../src/renderer/state/raise-notice';
+import { raiseNotice, raiseBusy, raiseNotRunning } from '../src/renderer/state/raise-notice';
 import { runNativeSlashAction } from '../src/renderer/state/native-slash-actions';
 import { busyWith, MESSAGE_UNSURE, STOP_UNSURE } from '../src/renderer/utils/notice-words';
 import { setScreenInputBlock, getScreenInputBlock, clearScreenInputBlocks, subscribeScreenInputBlocks } from '../src/renderer/state/screen-input-store';
@@ -214,7 +214,7 @@ describe('a notice is raised for the chat the action was for', () => {
 
   it('a failure raised for a background chat lands in that chat\'s strip and marks its dot; the chat on screen gets neither', () => {
     setNoticeViewer('main', 'fg');
-    raiseFailed('bg', 'skill-failed', "Couldn't run /review.");
+    raiseNotice('bg', 'error', 'skill-failed', "Couldn't run /review.");
     expect(getChatNotice('bg')?.text).toBe("Couldn't run /review.");
     expect(getChatNotice('fg')).toBeUndefined();
     expect([...getUnseenFailureIds()]).toEqual(['bg']);
@@ -222,19 +222,19 @@ describe('a notice is raised for the chat the action was for', () => {
 
   it('opening the chat clears its dot, and a failure for the chat you are looking at never marks one', () => {
     setNoticeViewer('main', 'fg');
-    raiseFailed('bg', 'skill-failed', 'x');
+    raiseNotice('bg', 'error', 'skill-failed', 'x');
     setNoticeViewer('main', 'bg');                       // switched to it
     expect(getUnseenFailureIds().has('bg')).toBe(false);
-    raiseFailed('bg', 'skill-failed', 'again');           // raised while looking at it
+    raiseNotice('bg', 'error', 'skill-failed', 'again');           // raised while looking at it
     expect(getUnseenFailureIds().has('bg')).toBe(false);
   });
 
   it('a notice the person dismisses takes its dot with it, and a can\'t-do-now notice never makes one', () => {
     setNoticeViewer('main', 'fg');
-    raiseFailed('bg', 'k', 'x');
+    raiseNotice('bg', 'error', 'k', 'x');
     clearChatNotice('bg');
     expect(getUnseenFailureIds().has('bg')).toBe(false);
-    raiseCant('bg', 'c', 'Not here.');
+    raiseNotice('bg', 'warn', 'c', 'Not here.');
     expect(getUnseenFailureIds().size).toBe(0);
   });
 
@@ -242,7 +242,7 @@ describe('a notice is raised for the chat the action was for', () => {
     const seen = vi.fn();
     const off = subscribeUnseenFailures(seen);
     setNoticeViewer('main', 'fg');
-    raiseFailed('bg', 'k', 'x'); raiseFailed('bg', 'k', 'y');   // the second changes nothing
+    raiseNotice('bg', 'error', 'k', 'x'); raiseNotice('bg', 'error', 'k', 'y');   // the second changes nothing
     expect(seen).toHaveBeenCalledTimes(1);
     markFailureSeen('bg'); markFailureSeen('bg');
     expect(seen).toHaveBeenCalledTimes(2);

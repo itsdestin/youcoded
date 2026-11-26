@@ -45,19 +45,19 @@ export default function ToastPractice() {
     // shows with "1 more" (waiting-notice T3, review 2 S2).
     if (which === 'stack') {
       const bytes = (id: string) => NOTICE_CATALOGUE.find((n) => n.id === id)!;
-      announce(bytes('plugin-turned-off').text, undefined, { label: 'Show', onClick: () => {} }, { untilClosed: true });
-      announce(bytes('settings-repaired').text, undefined, { label: 'Show file', onClick: () => {} }, { untilClosed: true });
-      announce('Copied path', 60_000);
+      announce(bytes('plugin-turned-off').text, { action: { label: 'Show', onClick: () => {} }, untilClosed: true });
+      announce(bytes('settings-repaired').text, { action: { label: 'Show file', onClick: () => {} }, untilClosed: true });
+      announce('Copied path', { durationMs: 60_000 });
       setShown(true); return;
     }
     const strip = new URLSearchParams(location.search).get('strip');
     // Held back in a chat you are NOT looking at (`?toast=held-elsewhere`): the short floating notice that names the other chat,
     // built by the app's own function so the words cannot drift (waiting-notice T1).
-    if (which === 'held-elsewhere') { const f = blockedSendFloating('Research notes'); announce(f.message, 60_000); setShown(true); return; }
+    if (which === 'held-elsewhere') { const f = blockedSendFloating('Research notes'); announce(f.message, { durationMs: 60_000 }); setShown(true); return; }
     if (strip && STRIPS[strip]) { showChatNotice('wb-1', STRIPS[strip]); setShown(true); return; }
     // K-7 (needs you, app-wide): stays until closed, outlined Dismiss left, its own button filled right (`?toast=k7:<id>`).
     const heads = which?.startsWith('k7:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(3)) : undefined;
-    if (heads) { announce(heads.text, undefined, heads.button ? { label: heads.button, onClick: () => {} } : undefined, { untilClosed: true }); setShown(true); return; }
+    if (heads) { announce(heads.text, { action: heads.button ? { label: heads.button, onClick: () => {} } : undefined, untilClosed: true }); setShown(true); return; }
     const listed = which?.startsWith('n:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(2)) : undefined;
     // A notice that now lives in the chat's strip is raised there (the practice chat `wb-1`), exactly as the real code raises it;
     // one that stays floating keeps announce(), and one that stays until closed shows with its button.
@@ -66,14 +66,14 @@ export default function ToastPractice() {
         key: listed.id, text: listed.text, tone: listed.strip.tone, leave: listed.strip.leave,
         actions: listed.strip.buttons.map((label, i, all) => ({ label, onClick: noop, primary: i === all.length - 1 })),
       });
-    } else if (listed?.untilClosed) announce(listed.text, undefined, listed.button ? { label: listed.button, onClick: () => {} } : undefined, { untilClosed: true });
-    else if (listed) announce(listed.text, 60_000, listed.button ? { label: listed.button, onClick: () => {} } : undefined);
+    } else if (listed?.untilClosed) announce(listed.text, { action: listed.button ? { label: listed.button, onClick: () => {} } : undefined, untilClosed: true });
+    else if (listed) announce(listed.text, { durationMs: 60_000, action: listed.button ? { label: listed.button, onClick: () => {} } : undefined });
     else if (which === 'turned-off') announcePluginTurnedOff(60_000);
     else if (which === 'none') { /* the same screen with no notice: the "Before" picture for card #216 */ }
     else if (which === 'settings-repaired') announceSettingsRepaired('/home/me/.claude/settings.json.corrupt-2026-11-12T04-30-00-000Z', 60_000); // card #11 a
     else if (which === 'action-failed') announceFailed('copy the path'); // card #134 round 4
     else if (which === 'signed-out') announceSessionLost(() => {}, 60_000); // card #216
-    else announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, 60_000);
+    else announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, { durationMs: 60_000 });
     setShown(true);
   });
   // Escape closes the marker like any layer (shoot --check presses it).

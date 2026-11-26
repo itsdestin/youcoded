@@ -77,3 +77,21 @@ export const SKILL_NOT_HERE_NATIVE = 'Not available in YouCoded-runtime sessions
 export const SKILL_UNREADABLE_MARK = "Its instructions can't be read. Reinstall it from the marketplace.";
 /** The question when two installed skills share a name. */
 export const skillWhichOne = (skill: string): string => `Two skills are called /${skill}. Which one did you mean?`;
+
+// ---- Sentences that used to sit beside the code that raised them (moved here with NO wording change, review consolidation) ----
+/** A send the app knows was refused for a stated reason: held back, the words stay. The keys ARE the reasons that count as "held back" (native-send-copy). */
+export const SEND_HELD_BACK = {
+  compacting: 'Conversation is compacting. Wait for it to finish, then send your message.',
+  'queue-full': 'Send queue is full (10 messages waiting). Wait for the current turn to finish.',
+  changed: 'This conversation changed while your message was being prepared. Your message is still here.',
+  initializing: 'This conversation is not ready to send yet. Your message is still here.',
+  starting: 'Starting up — the model is still loading, and ten messages are already waiting.',
+  'not-live': 'This session is no longer running. Start or resume it to send messages.',
+} as const;
+/** Claude Code's queue is not ready yet (retryable): nothing was sent. */
+export const CHAT_NOT_ANSWERING = "Claude Code isn't answering in this chat yet. Your message wasn't sent.";
+/** The chat refused the message outright: nothing was sent. */
+export const CHAT_COULDNT_TAKE_MESSAGE = "This chat couldn't take your message. Your message wasn't sent.";
+/** Resuming/handing off a chat when this device cannot do a live handoff. */
+export const LIVE_HANDOFF_UNAVAILABLE = 'Live handoff is available from a computer or a remote connection to one.';
+export const HANDOFF_TAKEOVER_FAILED = "Couldn't take over from your other computer. Close the conversation there, then try again.";

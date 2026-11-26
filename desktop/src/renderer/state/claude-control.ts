@@ -1,7 +1,7 @@
 import type { ClaudeControlRequest, ClaudeControlResult } from '../../shared/claude-control-types';
 import { announce } from '../utils/announce';
 import { screenInputBlock } from './pty-input-gate';
-import { raiseUnsureNextAction } from './raise-notice';
+import { raiseNotice } from './raise-notice';
 import { STOP_REFUSED, STOP_UNSURE, commandRefused, commandUnsure } from '../utils/notice-words';
 
 /**
@@ -14,7 +14,7 @@ function reportControlTrouble(sessionId: string, what: '/model' | '/clear' | '/c
   const text = what === 'Stop'
     ? (outcome === 'refused' ? STOP_REFUSED : STOP_UNSURE)
     : (outcome === 'refused' ? commandRefused(what) : commandUnsure(what));
-  raiseUnsureNextAction(sessionId, what === 'Stop' ? 'stop-unconfirmed' : 'control-unconfirmed', text);
+  raiseNotice(sessionId, 'warn', what === 'Stop' ? 'stop-unconfirmed' : 'control-unconfirmed', text);
 }
 
 /** WHY: only an explicit pre-dispatch unavailability allows a caller to use terminal input. */

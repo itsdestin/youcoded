@@ -87,6 +87,8 @@ describe('IPC Handlers', () => {
       createSession: vi.fn(() => ({ id: '1', name: 'test', cwd: '/tmp', status: 'active' })),
       destroySession: vi.fn(() => true),
       listSessions: vi.fn(() => []),
+      // WHY (review F8): the shared update service can announce a status change after this test ended, and the status push then reads sessions.
+      getSession: vi.fn(() => undefined),
       sendInput: vi.fn(),
       resizeSession: vi.fn(),
       on: vi.fn(),

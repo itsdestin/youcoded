@@ -41,7 +41,7 @@ export default function RemoteUnsupportedNotice() {
       if (timer) return;
       timer = setTimeout(() => {
         const features = batch; batch = []; timer = undefined;
-        announce(remoteOnlyOnComputerMessage(features), VISIBLE_MS);
+        announce(remoteOnlyOnComputerMessage(features), { durationMs: VISIBLE_MS });
       }, GATHER_MS);
     };
     window.addEventListener(REMOTE_UNSUPPORTED_EVENT, onUnsupported);

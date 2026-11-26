@@ -17,7 +17,8 @@ import { getCapabilities } from '../platform';
 import type { ChatAction } from './chat-types';
 import type { NativeSlashAction, DispatcherResult } from './slash-command-dispatcher';
 import type { SessionChatState } from './chat-types';
-import { raiseBusy, raiseCant, raiseFailed, raiseNotRunning, raiseWhichSkill, browseSkillsAction } from './raise-notice';
+import { clearChatNotice } from './chat-notice-store';
+import { raiseBusy, raiseNotice, raiseNotRunning, raiseWhichSkill, browseSkillsAction } from './raise-notice';
 import { busyWith, notRunning, NOTHING_TO_COMPACT, NOT_AN_INSTALLED_SKILL, SKILL_UNREADABLE, skillAmbiguous, skillFailed } from '../utils/notice-words';
 
 /** User-facing copy per refusal reason. Specific and accurate — never a guessed
@@ -89,7 +90,7 @@ export async function runNativeSlashAction(
 
   // Can't-do-now refusals: the chat's strip, with the words shared by every notice that means the same thing.
   if (result.reason === 'turn-in-flight') { raiseBusy(sessionId, 'compact-busy', busyWith('compact'), { getSession, stop: () => stopTurn(sessionId) }); return false; }
-  if (result.reason === 'nothing-to-compact') { raiseCant(sessionId, 'compact-nothing', NOTHING_TO_COMPACT); return false; }
+  if (result.reason === 'nothing-to-compact') { raiseNotice(sessionId, 'warn', 'compact-nothing', NOTHING_TO_COMPACT); return false; }
   if (result.reason === 'not-live') { raiseNotRunning(sessionId, 'compact-not-live', notRunning('compact'), getSession); return false; }
   // WHY a card in the chat (deck L-sort-failed): the command is already in the chat, so its failure belongs where the summary would
   // have gone, and stays until Try again works or the next message is sent. The computer's own reason is kept for Details only.
@@ -165,12 +166,14 @@ async function runNativeSkill(
   // sentence (a skill that isn't installed, OR a Claude Code command with no YouCoded-runtime equivalent), because the dispatcher
   // cannot tell them apart; it now carries the button to go and install one.
   switch (result.reason) {
-    case 'not-a-skill': raiseCant(sessionId, 'skill-not-a-skill', NOT_AN_INSTALLED_SKILL, { actions: [browseSkillsAction()] }); return false;
+    case 'not-a-skill': raiseNotice(sessionId, 'warn', 'skill-not-a-skill', NOT_AN_INSTALLED_SKILL, { actions: [browseSkillsAction()] }); return false;
     case 'turn-in-flight': raiseBusy(sessionId, 'skill-busy', busyWith('start a skill'), { getSession, stop: () => stopTurn(sessionId) }); return false;
     case 'not-live': raiseNotRunning(sessionId, 'skill-not-live', notRunning('run the skill in'), getSession); return false;
   }
-  const retry = { label: 'Try again', primary: true, onClick: () => { void runNativeSkill(skill, args, { sessionId, getSession }); } };
-  if (result.reason === 'unreadable') { raiseFailed(sessionId, 'skill-unreadable', SKILL_UNREADABLE, { actions: [retry] }); return false; }
+  // WHY the clear on success (review F1): "Try again" re-runs the skill, and when that works the red "Couldn't run /x" must go at once;
+  // otherwise it sat there until you typed. The key makes sure only THIS notice is removed, never a newer one a failed retry just raised.
+  const retryFor = (key: string) => ({ label: 'Try again', primary: true, onClick: () => { void runNativeSkill(skill, args, { sessionId, getSession }).then((ok) => { if (ok) clearChatNotice(sessionId, key); }); } });
+  if (result.reason === 'unreadable') { raiseNotice(sessionId, 'error', 'skill-unreadable', SKILL_UNREADABLE, { actions: [retryFor('skill-unreadable')] }); return false; }
   // Two skills with one name: ask which one (waiting-notice T5) when the installed list can name them; otherwise fall back to the
   // sentence that names the choices. WHY the list is read here, not taken from the refusal: the refusal's own text is the computer's
   // sentence, and this keeps the choices as real ids a button can run.
@@ -183,9 +186,9 @@ async function runNativeSkill(
   }
   // Two skills with one name is the only detail worth showing (it names the choices). Any other detail is the computer's own
   // technical text: it goes to the console, never the screen (review A5).
-  if (result.reason === 'ambiguous' && result.detail) { raiseFailed(sessionId, 'skill-error-detail', skillAmbiguous(skill, result.detail)); return false; }
+  if (result.reason === 'ambiguous' && result.detail) { raiseNotice(sessionId, 'error', 'skill-error-detail', skillAmbiguous(skill, result.detail)); return false; }
   if (result.detail) console.warn(`[skill] /${skill} failed:`, result.reason, result.detail);
-  raiseFailed(sessionId, 'skill-failed', skillFailed(skill), { actions: [retry] });
+  raiseNotice(sessionId, 'error', 'skill-failed', skillFailed(skill), { actions: [retryFor('skill-failed')] });
   return false;
 }
 

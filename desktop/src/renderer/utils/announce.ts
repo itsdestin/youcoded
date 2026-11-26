@@ -14,9 +14,8 @@ export interface AppNoticeDetail {
   message: string;
   /** Longer for a message with more to read; the toast's default is 3 s. */
   durationMs?: number;
-  /** One button beside the words (the toast's existing action slot). WHY an optional third
-   *  argument and not a new event: the plugin off-switch heads-up needs "Show", and every
-   *  plain announcement stays exactly as it was. */
+  /** One button beside the words (the toast's existing action slot). WHY optional and not a new event: the plugin
+   *  off-switch heads-up needs "Show", and every plain announcement stays exactly as it was. */
   action?: { label: string; onClick: () => void };
   /** A notice that needs you, app-wide (Destin, waiting-notice deck K-7): it stays until you act or press its
    *  outlined Dismiss (leftmost); its own button becomes the filled one on the right. */
@@ -25,9 +24,11 @@ export interface AppNoticeDetail {
   tone?: 'default' | 'error';
 }
 
-export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action'], opts?: { untilClosed?: boolean; tone?: 'default' | 'error' }): void {
+// WHY one options object (review consolidation): four positional arguments, two of them often `undefined`, were easy to swap and hard to
+// read at the call site; the options now carry the same names as AppNoticeDetail (and ChatNotice), so every caller says what it means.
+export function announce(message: string, opts: Omit<AppNoticeDetail, 'message'> = {}): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action, untilClosed: opts?.untilClosed, tone: opts?.tone } }));
+  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, ...opts } }));
 }
 
 /**
@@ -40,5 +41,5 @@ export function announceFailed(what: string, cause?: unknown): void {
   if (isUnsupportedHere(cause)) { console.warn(`[app] ${what}: not available on this client`); return; }
   console.warn(`[app] couldn't ${what}:`, cause instanceof Error ? cause.message : cause);
   // 5 s, not the 3 s default: Destin, K-5 "button failed" = floating, 5 seconds (independent review B7).
-  announce(`Couldn't ${what}.`, 5000);
+  announce(`Couldn't ${what}.`, { durationMs: 5000 });
 }

@@ -42,9 +42,9 @@ export async function downloadFile(absolutePath: string, opts?: { projectRoot?: 
     } else {
       // The host's own reason when it gives one; never a guess.
       const reason = typeof res?.error === 'string' ? (REFUSALS[res.error] ?? res.error) : null;
-      announce(reason ? `Couldn’t download ${name}: ${reason}` : `Couldn’t download ${name}.`, 5000);
+      announce(reason ? `Couldn’t download ${name}: ${reason}` : `Couldn’t download ${name}.`, { durationMs: 5000 });
     }
   } catch (err: any) {
-    announce(err?.message ? `Couldn’t download ${name}: ${String(err.message)}` : `Couldn’t download ${name}.`, 5000);
+    announce(err?.message ? `Couldn’t download ${name}: ${String(err.message)}` : `Couldn’t download ${name}.`, { durationMs: 5000 });
   }
 }

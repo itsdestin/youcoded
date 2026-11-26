@@ -14,5 +14,5 @@ const SESSION_LOST_BUTTON = 'Sign in again';
 
 /** 30 s, not the plugin notice's 10: this one is about being offline to friends, and a person may look up late. */
 export function announceSessionLost(signInAgain: () => void, durationMs = 30_000): void {
-  announce(SESSION_LOST_MESSAGE, durationMs, { label: SESSION_LOST_BUTTON, onClick: signInAgain });
+  announce(SESSION_LOST_MESSAGE, { durationMs, action: { label: SESSION_LOST_BUTTON, onClick: signInAgain } });
 }

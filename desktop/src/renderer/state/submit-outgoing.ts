@@ -18,8 +18,8 @@ import { pendingQueueSend, savePendingQueueSend, clearPendingQueueSend, allPendi
 import { getNativeStartup } from './native-startup-store';
 import { nativeStartupBlocked } from '../../shared/native-startup';
 import { reportSendFailure } from './native-send-copy';
-import { raiseUnsure } from './raise-notice';
-import { MESSAGE_NOT_SENT_BACK_IN_BOX, MESSAGE_UNSURE, MESSAGE_UNSURE_BACK_IN_BOX } from '../utils/notice-words';
+import { raiseNotice } from './raise-notice';
+import { CHAT_COULDNT_TAKE_MESSAGE, CHAT_NOT_ANSWERING, MESSAGE_NOT_SENT_BACK_IN_BOX, MESSAGE_UNSURE, MESSAGE_UNSURE_BACK_IN_BOX } from '../utils/notice-words';
 import { announce } from '../utils/announce';
 
 /** The gap between attached-file paths sent to Claude Code: longer than Ink's 500 ms paste window, so each path is its own paste (verified on a 4-image send). */
@@ -124,8 +124,8 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
       // epoch"), and one fixed sentence for every cause had made a stuck chat impossible to tell apart.
       console.warn('[queue] not ready:', identity);
       throw new QueueSendNotice('retryable' in identity && identity.retryable
-        ? "Claude Code isn't answering in this chat yet. Your message wasn't sent."
-        : "This chat couldn't take your message. Your message wasn't sent.", false);
+        ? CHAT_NOT_ANSWERING
+        : CHAT_COULDNT_TAKE_MESSAGE, false);
      }
      request={kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId,originalText:o.originalText??o.ptyText,attachments:[...o.paths],displayContent:o.content}};
      savePendingQueueSend(o.sessionId,request);
@@ -138,7 +138,7 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     // other answer may have, so the person checks before sending again rather than risking a double.
     console.warn('[queue] send not accepted:', result);
     throw result.status === 'rejected'
-      ? new QueueSendNotice("This chat couldn't take your message. Your message wasn't sent.", false)
+      ? new QueueSendNotice(CHAT_COULDNT_TAKE_MESSAGE, false)
       : new QueueSendNotice(MESSAGE_UNSURE, true);
   } catch (error) {
     // A settled failure is already a recovery candidate, even while the notice module loads.
@@ -154,7 +154,7 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     } else {
       // WHY the console: anything that is not one of our own sentences is the computer's or the connection's technical text (A5).
       if (!(error instanceof QueueSendNotice)) console.warn('[queue] send ended unclearly:', error);
-      raiseUnsure(o.sessionId, 'send-unconfirmed', MESSAGE_UNSURE);
+      raiseNotice(o.sessionId, 'warn', 'send-unconfirmed', MESSAGE_UNSURE, { leave: 'resolved' });
     }
     window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT,{detail:{sessionId:o.sessionId,text:o.originalText ?? o.ptyText,paths:[...o.paths]}}));
   } finally { if(activeSendId)inFlightQueueSends.delete(activeSendId); }
@@ -342,7 +342,7 @@ export function settleSavedQueueSends(onlySessionId?: string): Promise<void> {
       if (!detail.restored) continue; // the box is busy or not on screen: kept for the next check, never lost
       clearPendingQueueSend(sessionId, request);
       // In THAT chat's strip (the loop knows which one it was for), not a toast over whichever chat is on screen.
-      raiseUnsure(sessionId, 'send-restored', sure ? LOST_SEND_NOTICE : MESSAGE_UNSURE_BACK_IN_BOX);
+      raiseNotice(sessionId, 'warn', 'send-restored', sure ? LOST_SEND_NOTICE : MESSAGE_UNSURE_BACK_IN_BOX, { leave: 'resolved' });
     }
   })().finally(() => { settling = null; });
   return settling;

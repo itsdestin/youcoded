@@ -2164,7 +2164,7 @@ async function uploadFileToDesktop(file: File): Promise<string | null> {
     });
     // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
     if (result?.path) { rememberAttachmentPreview(result.path, file); /* card #194: the browser's own copy, for the card's picture */ return result.path; }
-    if (typeof result?.error === 'string') announce(result.error, 5000);
+    if (typeof result?.error === 'string') announce(result.error, { durationMs: 5000 });
   } catch (err) {
     console.error('Failed to upload file:', file.name, err);
   }

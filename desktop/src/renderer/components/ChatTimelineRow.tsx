@@ -21,7 +21,7 @@
 import { announceFailed } from '../utils/announce';
 import { copyText } from './context-menu/clipboard';
 import React from 'react';
-import type { AssistantTurn, TimelineEntry } from '../state/chat-types';
+import type { AssistantTurn, SessionChatState, TimelineEntry } from '../state/chat-types';
 import type { ChatAction } from '../state/chat-types';
 import type { ToolCallState, ToolGroupState, SessionProvider } from '../../shared/types';
 import UserMessage from './UserMessage';
@@ -47,6 +47,8 @@ export interface TimelineRowActions {
   // shows "Claude Code didn't take that" from it; dropping it here would hide failures.
   promptSelect: (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => void | Promise<PromptAnswerResult> | undefined;
   dispatch: (action: ChatAction) => void;
+  /** This chat's live state, for notices that leave when their reason is gone (review F9). */
+  getSession?: (id: string) => SessionChatState | undefined;
 }
 
 interface Props {
@@ -190,7 +192,7 @@ function renderContent(p: Props): React.ReactNode {
           detail={entry.detail}
           onTryAgain={() => {
             const act = p.actionsRef.current;
-            return act ? retryControlFailure(sessionId, op, act.dispatch) : Promise.resolve(false);
+            return act ? retryControlFailure(sessionId, op, act.dispatch, act.getSession) : Promise.resolve(false);
           }}
         />
       );

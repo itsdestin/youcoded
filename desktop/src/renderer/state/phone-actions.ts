@@ -4,7 +4,7 @@
 // Each function does exactly what the button did before whenever this screen is the computer's own window (local IPC, the round trip is invisible) and
 // does the instant version only on a phone, or on the Android app paired to a computer.
 import type { ChatAction, SessionChatState } from './chat-types';
-import { raiseUnsureNextAction } from './raise-notice';
+import { raiseNotice } from './raise-notice';
 import { STOP_OFFLINE, STOP_REFUSED, STOP_UNSURE } from '../utils/notice-words';
 import { stopClaudeTurn } from './claude-control';
 import { runPending, optimisticScreen, connected } from './pending-action';
@@ -30,7 +30,7 @@ export function stopTurn(o: { sessionId: string; provider: 'claude' | 'native' |
   if (!optimisticScreen() || !turn) { write(); return; }
   // A person's action is never held for later (contract row R2): say it was not sent, and let them press it again.
   // WHY the strip of THIS chat (waiting-notice T2): Stop is about the chat whose turn is running; the offline detail stays because it changes what you do.
-  if (!connected()) { raiseUnsureNextAction(o.sessionId, 'stop-offline', STOP_OFFLINE); return; }
+  if (!connected()) { raiseNotice(o.sessionId, 'warn', 'stop-offline', STOP_OFFLINE); return; }
   void runPending({
     key: `stop:${o.sessionId}`,
     sessionId: o.sessionId,
@@ -40,7 +40,7 @@ export function stopTurn(o: { sessionId: string; provider: 'claude' | 'native' |
     observe: { done: () => !turn.running(), subscribe: turn.subscribe },
     check: () => (turn.running() ? 'absent' : 'present'),
     undo(reason) {
-      raiseUnsureNextAction(o.sessionId, 'stop-unconfirmed', reason.kind === 'refused' ? STOP_REFUSED : STOP_UNSURE);
+      raiseNotice(o.sessionId, 'warn', 'stop-unconfirmed', reason.kind === 'refused' ? STOP_REFUSED : STOP_UNSURE);
     },
     settleAfterMs: STOP_SETTLE_MS,
   });

@@ -62,6 +62,8 @@ export function startStatusPushGate(opts: StatusPushGateOptions): StatusPushGate
   };
 
   const push = (): void => {
+    // WHY the catch (review F8): a failed build (a manager that is gone, a status file that vanished) used to become an unhandled
+    // rejection, which fails a test run long after the test ended and is noise in the app. The next tick tries again anyway.
     void opts.build().then((data) => {
       if (stopped) return;
       const serialized = JSON.stringify(data);
@@ -70,7 +72,7 @@ export function startStatusPushGate(opts: StatusPushGateOptions): StatusPushGate
       lastSent = serialized;
       lastWindows = windows;
       opts.deliver(data);
-    });
+    }).catch((e) => { console.warn('[status-push] could not build status data:', e instanceof Error ? e.message : e); });
   };
 
   const pushIfMissed = (): void => {

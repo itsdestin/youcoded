@@ -59,6 +59,22 @@ describe('startStatusPushGate', () => {
     return { mainWindow, gate };
   }
 
+  it('a status build that fails is logged, never left as an unhandled rejection (review F8)', async () => {
+    const stray = vi.fn();
+    process.on('unhandledRejection', stray);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      start({ build: async () => { throw new TypeError('sessionManager.getSession is not a function'); } });
+      await tick();
+      await settle();
+      expect(stray).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith('[status-push] could not build status data:', 'sessionManager.getSession is not a function');
+    } finally {
+      process.off('unhandledRejection', stray);
+      warn.mockRestore();
+    }
+  });
+
   it('delivers a changed payload once and never repeats an identical one', async () => {
     start();
     await tick();

@@ -5,7 +5,7 @@ import { createQueuedEditActions } from './queued-edit-actions';
 import { queueEditStorage } from './queue-transfer-storage';
 import { RESTORE_UNSENT_EVENT } from './submit-outgoing';
 import { nativeQueuedDraft } from '../components/native-send';
-import { raiseUnsureNextAction } from './raise-notice';
+import { raiseNotice } from './raise-notice';
 import { QUEUE_ACTION_UNSURE } from '../utils/notice-words';
 interface Options {
  provider(id: string): string | undefined;
@@ -24,10 +24,11 @@ export function createConversationQueueActions(o: Options) {
  }, composer: { snapshot:()=>o.composer()?.queueDraftSnapshot(), fillIfCurrent:(before,text,files)=>o.composer()?.fillQueuedDraftIfCurrent(before,text,files)??false } });
  // WHY (review A5): the computer's own text ("Stale send epoch…", "Edit acknowledgement unconfirmed") is for the console; the person
  // sees one plain sentence, in the strip of the chat the queued message belongs to (not whichever chat is open when the answer lands).
- const failure = (sid: string, e: unknown) => { console.warn('[queue-action] not confirmed:', e); raiseUnsureNextAction(sid,'queue-action-unconfirmed',QUEUE_ACTION_UNSURE); };
+ // WHY the native branches use it too (review F4): the same failure must read the same way in both kinds of chat, and show in the chat the message belongs to.
+ const failure = (sid: string, e: unknown) => { console.warn('[queue-action] not confirmed:', e); raiseNotice(sid,'warn','queue-action-unconfirmed',QUEUE_ACTION_UNSURE); };
  return {
   cancel: async (sid: string,id: string) => {
-   if(o.provider(sid)==='native'){const ok=await window.claude.native.queueRemove(sid,id);o.dispatch({type:'QUEUED_MESSAGE_REMOVED',sessionId:sid,queueId:id});if(!ok)o.toast('Already sending — too late to cancel.');return;}
+   if(o.provider(sid)==='native'){const ok=await window.claude.native.queueRemove(sid,id);o.dispatch({type:'QUEUED_MESSAGE_REMOVED',sessionId:sid,queueId:id});if(!ok)failure(sid,'native queueRemove: already sending');return;}
    try{const kind=o.session(sid)?.queuedMessages.find(q=>q.queueId===id)?.status==='uncertain'?'dismiss':'remove';const r=await action(sid,{kind,itemId:id});if(r.status!=='done')throw Error('message'in r?r.message:'Queue removal was not confirmed.');
     // WHY (2026-10-22): a dismissed unconfirmed message's words go back into THIS screen's message box (the listener fills only an empty one), so nothing is lost and resending is the person's own choice.
     if(r.restore){const detail:{sessionId:string;text:string;paths:string[];restored?:boolean}={sessionId:sid,text:r.restore.text,paths:[...r.restore.attachments]};window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT,{detail}));
@@ -50,7 +51,7 @@ export function createConversationQueueActions(o: Options) {
    else o.toast(outcome==='draft-busy'||outcome==='draft-changed'?'Your draft changed. It was not overwritten.':'The queued message could not be edited.');
   },
   sendNow: async (sid: string,id: string) => {
-   if(o.provider(sid)==='native'){const ok=await window.claude.native.queueSendNow(sid,id).catch(()=>null);if(ok!==true)o.toast('Send now was not confirmed.');return;}
+   if(o.provider(sid)==='native'){const ok=await window.claude.native.queueSendNow(sid,id).catch(()=>null);if(ok!==true)failure(sid,'native queueSendNow not confirmed');return;}
    try{const r=await action(sid,{kind:'send-now',itemId:id});if(r.status!=='done')throw Error('message'in r?r.message:'Send now was not confirmed.');}catch(e){failure(sid,e);}
   },
  };
