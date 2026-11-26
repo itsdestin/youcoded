@@ -79,9 +79,12 @@ export interface OpenRouterSignInAuth {
 
 // The wizard's ChatGPT sign-in window (design §9.1, review R2-11): a first
 // ChatGPT sign-in on a fresh machine is an email code or 2FA away, and this
-// screen has no Cancel — so 5 minutes, not Claude's 2 and not the Settings
+// screen has no Cancel — so 5 minutes (Claude's too, since 2026-11-25), not the Settings
 // card's 10.
 export const CHATGPT_FIRST_RUN_TIMEOUT_MS = 300_000;
+// WHY Claude's sign-in now gets the same 5 minutes (Destin, 2026-11-25): a brand-new person may have to make an
+// account or wait for an emailed code, and 2 minutes timed them out mid-way ("localhost refused to connect").
+export const CLAUDE_FIRST_RUN_TIMEOUT_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -536,7 +539,7 @@ export class FirstRunManager extends EventEmitter {
 
     // Return the URL to the caller so it can open it via shell.openExternal()
     // Then poll in the background for auth completion
-    void pollAuthStatus(120000, 2000).then((success) => {
+    void pollAuthStatus(CLAUDE_FIRST_RUN_TIMEOUT_MS, 2000).then((success) => {
       oauth.kill();
       if (round !== this.authRound) return; // cancelled meanwhile — the buttons are already back
       this.stopOAuth = null;
