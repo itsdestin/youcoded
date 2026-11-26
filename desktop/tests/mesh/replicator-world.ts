@@ -14,6 +14,7 @@ import { RosterStore } from '../../src/main/mesh/roster-store';
 import { ChatStore, type StoreOptions } from '../../src/main/mesh/store';
 import { realFs, type Fs } from '../../src/main/mesh/store/fsio';
 import { Replicator } from '../../src/main/mesh/replicator';
+import { incarnationId } from '../../src/main/mesh/replicator/idmap';
 import type { Clock } from '../../src/main/mesh/replicator';
 import { tmp } from './helpers';
 
@@ -124,7 +125,7 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
     /** The store id of the current (lowest non-retired) incarnation of `v` on device `n`, or null. */
     async localOf(n: string, v: Buffer): Promise<Buffer | null> {
       for (let inc = 0; inc < 8; inc++) {
-        const local = inc === 0 ? v : createHash('sha256').update('youcoded-mesh/v1/incarnation\0').update(v).update(`\0${inc}`).digest();
+        const local = incarnationId(v, inc);
         try { await devs[n].store.head(local); return local; } catch { continue; /* benign (test helper): retired or never registered, try the next incarnation */ }
       }
       return null;
