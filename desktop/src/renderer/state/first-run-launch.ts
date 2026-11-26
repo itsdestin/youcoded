@@ -9,7 +9,7 @@
 /** How long the loading screen waits for the setup answer before opening the app anyway. Never hang for good. */
 export const FIRST_RUN_ANSWER_WAIT_MS = 20_000;
 /** How soon a failed ask (the phone's backend not listening yet) is asked again. */
-export const FIRST_RUN_RETRY_MS = 1_000;
+const FIRST_RUN_RETRY_MS = 1_000;
 
 type SetupState = { currentStep?: string } | null | undefined;
 
