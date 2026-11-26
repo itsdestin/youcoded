@@ -167,12 +167,13 @@ function Guided({ list, onPick, initial, offline, lastWay }: { list: Group[]; on
         // WHY a row that cannot be pressed (Destin, 2026-11-25): on a phone every other choice costs money, and
         // dropping the free row hid that a free way exists at all; a greyed "Coming soon" row says it is on its way.
         // Its badge stays visible on a narrow screen: it is the row's whole point.
-        <div key={x.id} aria-disabled="true" className="brand-card w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3 opacity-60 select-none">
-          <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg">
+        <div key={x.id} aria-disabled="true" className="brand-card w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3 select-none">
+          {/* WHY dim colours, not a whole-row opacity (review): opacity on top of the dim summary text fell under readable contrast. */}
+          <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg opacity-50">
             {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
           </span>
           <span className="flex-1 min-w-0">
-            <span className="block brand-heading text-lg max-sm:text-base text-fg">{x.title}</span>
+            <span className="block brand-heading text-lg max-sm:text-base text-fg-dim">{x.title}</span>
             <span className="block text-sm max-sm:text-sm-tight text-fg-dim">{x.summary}</span>
           </span>
           <span className="brand-badge shrink-0">{x.badge}</span>
