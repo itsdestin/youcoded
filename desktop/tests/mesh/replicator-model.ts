@@ -189,6 +189,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         }
       }
       await world.elapse(30_000, 10_000, true);
+      world.hub.stored.length = 0; // test-only memory: the hub keeps every sealed frame ever stored (a retransmitted 17 MiB line adds up); nothing here reads it
       // WHY also the status: a rotted copy has the same head as a healthy one; "equal heads" alone would stop waiting before its repair ran
       const agree = await Promise.all(vs.map(async (v) => { const hs = await Promise.all(NAMES.map((n) => world.heads(n, v))); const sts = await Promise.all(NAMES.map((n) => world.devs[n].rep.status(v))); return hs.every((h) => h.hash === hs[0].hash && h.lines === (oracle.get(v.toString('hex'))?.length ?? -1)) && sts.every((x) => x.state !== 'refilling' && x.state !== 'pulling' && x.state !== 'retired-recopy' && x.state !== 'serving'); }));
       if (agree.every(Boolean)) break;

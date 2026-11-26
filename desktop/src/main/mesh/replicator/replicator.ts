@@ -571,6 +571,8 @@ export class Replicator {
     if (desc && desc.writer.equals(ctx.crypto.self)) { const own = await this.ownHead(wire); if (own && lines < own.lines) return mk('refilling', 'behind-own-signed-head'); }
     if (run.pull) return mk('pulling', run.skip.size > 0 ? 'peers-not-answering' : null);
     if ([...ctx.sessions.values()].some((s) => s.wire.equals(wire))) return mk('serving', run.serveWait ? 'waiting-for-read-memory' : null);
+    // no copy is registered at the current incarnation (the announcement is known but the store has not been set up for it yet): nothing can be in sync with anything
+    if (!cur?.registered) return mk('comparing', 'copy not set up yet');
     const wk = wire.toString('hex'); const now = ctx.clock.now();
     const known = [...ctx.peers.values()].flatMap((p) => { const h = p.heads.get(wk); return h ? [h] : []; });
     if (known.length === 0) return mk('comparing');
