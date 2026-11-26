@@ -42,20 +42,21 @@ import type { VoiceNotice, VoicePhase } from '../hooks/useVoiceInput';
 /** What the card says when a dictation came back empty. Each line states what
  *  the microphone actually sent (useVoiceInput VoiceNotice) and the one thing
  *  the person can do about it — never a guessed cause. */
-const NOTICE_COPY: Record<VoiceNotice, { title: string; body: string }> = {
+// WHY a function (2026-11-25): the Android app has voice typing too, and its sound settings are the phone's.
+const noticeCopy = (): Record<VoiceNotice, { title: string; body: string }> => ({
   'no-sound': {
     title: 'No sound from your microphone',
-    body: "Your microphone sent only silence, so nothing could be heard. Check that it isn't muted, and that the right microphone is chosen in your computer's sound settings.",
+    body: `Your microphone sent only silence, so nothing could be heard. Check that it isn't muted, and that the right microphone is chosen in your ${deviceNoun()}'s sound settings.`,
   },
   'too-quiet': {
     title: 'Your microphone was too quiet',
-    body: "Some sound arrived, but too quietly to make out words. Try speaking closer, or turn up your microphone's volume in your computer's sound settings.",
+    body: `Some sound arrived, but too quietly to make out words. Try speaking closer, or turn up your microphone's volume in your ${deviceNoun()}'s sound settings.`,
   },
   'no-words': {
     title: 'No words were heard',
     body: 'Try again, speaking clearly and a little closer to the microphone.',
   },
-};
+});
 import { ErrorState, FoldRow, Tooltip } from './ui';
 import { getCapabilities, deviceNoun } from '../platform';
 import { featureWorks } from '../feature-gate';
@@ -380,7 +381,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
     // WHY (Destin, 2026-11-03): an empty dictation used to end with the spinner
     // stopping and nothing else — a muted mic looked exactly like a broken app.
     // Not ErrorState: nothing failed; the mic worked and heard what it heard.
-    const copy = NOTICE_COPY[notice];
+    const copy = noticeCopy()[notice];
     card = (
       <>
         <p className="text-xs font-semibold text-fg mb-1.5">{copy.title}</p>
