@@ -4,7 +4,19 @@
 // ceiling, fifteen peers asking for a 300 MB chat would hold gigabytes. A request that does not fit is refused loudly (the peer re-asks later).
 export const MAX_SESSIONS = 4;
 export const WINDOW_FRAMES = 4;
-export const READ_BUFFER_BUDGET_BYTES = 16 * 1024 * 1024;
+/** WHY 80 MiB (review 1, F5): a single line may be 64 MiB (the wire cap) and must be readable on its own; the budget used to be 16 MiB, so a 17 MiB line could never be served. The 16 MiB
+ *  that is left over is what ordinary batches (at most 640 KiB each) share. */
+export const READ_BUFFER_BUDGET_BYTES = 80 * 1024 * 1024;
+/** One peer may hold this many of the shared serve sessions (F6): one device cannot fill all four. */
+export const MAX_SESSIONS_PER_PEER = 2;
+/** Entries kept per peer for versions it has told me about, and unknown-version announcement requests I will make per peer per period (F6). */
+export const MAX_PEER_HEADS = 20_000;
+export const MAX_INTRO_ASKS_PER_PERIOD = 32;
+export const INTRO_PERIOD_MS = 60_000;
+/** An unfinished reassembly is dropped after this long without a new part (F6). */
+export const REASSEMBLY_IDLE_MS = 30_000;
+/** A version-queue step that has not finished after this long is reported blocked (F8). */
+export const QUEUE_STEP_LIMIT_MS = 120_000;
 export const REASSEMBLY_BUDGET_BYTES = 64 * 1024 * 1024;
 /** The relay allows 100 holds a second per device (RATE_MAX_HOLDS); the replicator stays far under it so control traffic always has room. */
 export const MAX_HOLDS_PER_SECOND = 6;
@@ -30,7 +42,8 @@ export class ByteBudget {
 export class RateLimiter {
   #tokens: number;
   #last: number;
-  constructor(private readonly perSecond: number, private readonly now: () => number) { this.#tokens = perSecond; this.#last = now(); }
+  /** `burst` defaults to `perSecond` (a bucket that holds one second's worth). */
+  constructor(private readonly perSecond: number, private readonly now: () => number, private readonly burst: number = perSecond) { this.#tokens = burst; this.#last = now(); }
   /** True and one token spent, or false and `retryInMs` says when to ask again. */
   take(): boolean {
     this.refill();
@@ -41,7 +54,7 @@ export class RateLimiter {
   get retryInMs(): number { this.refill(); return this.#tokens >= 1 ? 0 : Math.ceil(((1 - this.#tokens) / this.perSecond) * 1000); }
   private refill(): void {
     const t = this.now();
-    if (t > this.#last) this.#tokens = Math.min(this.perSecond, this.#tokens + ((t - this.#last) / 1000) * this.perSecond);
+    if (t > this.#last) this.#tokens = Math.min(this.burst, this.#tokens + ((t - this.#last) / 1000) * this.perSecond);
     this.#last = Math.max(this.#last, t);
   }
 }

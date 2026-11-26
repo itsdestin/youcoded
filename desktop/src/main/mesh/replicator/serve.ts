@@ -10,9 +10,9 @@ import { hex, unhex } from '../store/chain';
 import { StoreError } from '../store';
 import type { Head } from '../store';
 import { reportFailure } from '../../report-failure';
-import { MAX_SESSIONS, WINDOW_FRAMES } from './budget';
+import { MAX_SESSIONS, MAX_SESSIONS_PER_PEER, WINDOW_FRAMES } from './budget';
 import { chatGroup, repairFrom, type PeerInfo, type RepCtx, type ServeSession } from './ctx';
-import { sendNak } from './receive';
+import { sendAck, sendNak } from './receive';
 import { onCorruptRead } from './repair';
 import { headMessage, KIND_INTRO, KIND_LINES, linesBody, MAX_LINES_PER_FRAME, introBodyOf, PART_BYTES, PAYLOAD_BUDGET_BYTES, type AckBody, type NakWhy, type SignedHead, type WantBody, ackMessage } from './wire';
 
@@ -50,10 +50,15 @@ async function buildBatchOnce(ctx: RepCtx, wire: Buffer, local: Buffer, writer: 
     const raw = unhex(h);
     return { lines, end, head: { lines: end, hash: raw, sig: ctx.crypto.sign(headMessage(wire, end, raw)) } };
   }
-  const pt = await ctx.heads.nextAfter(wire, from);
-  if (!pt || pt.lines > head.lines) return { nak: 'unavailable' };
-  if (!ctx.crypto.verify(writer, headMessage(wire, pt.lines, pt.hash), pt.sig)) { ctx.bump('saved-point-bad-signature'); return { nak: 'unavailable' }; }
-  if ((await ctx.store.hashAt(local, 0, pt.lines)) !== hex(pt.hash)) { ctx.runOf(wire).diverged = 'my-chain-differs-from-signed-point'; return { nak: 'unavailable' }; }
+  // the first saved point above `from` that the writer signed and that lies on MY chain (a writer that signed two histories leaves points that do not)
+  let pt: Awaited<ReturnType<typeof ctx.heads.nextAfter>> = null;
+  for (const c of await ctx.heads.pointsAfter(wire, from)) {
+    if (c.lines > head.lines) break;
+    if (!ctx.crypto.verify(writer, headMessage(wire, c.lines, c.hash), c.sig)) { ctx.bump('saved-point-bad-signature'); continue; }
+    if ((await ctx.store.hashAt(local, 0, c.lines)) !== hex(c.hash)) { ctx.bump('saved-point-not-on-my-chain'); continue; }
+    pt = c; break;
+  }
+  if (!pt) return { nak: 'unavailable' };
   if (pt.lines - from > MAX_LINES_PER_FRAME) return { nak: 'unavailable' };
   const got = await ctx.store.read(local, 0, from, pt.lines);
   if (got === 'evicted') return { nak: 'evicted' };
@@ -79,6 +84,8 @@ async function sendBatch(ctx: RepCtx, wire: Buffer, chatId: string, to: Buffer |
 export async function onWant(ctx: RepCtx, peer: PeerInfo, w: WantBody): Promise<void> {
   const wire = w.version;
   if (w.intro) { const i = ctx.directory.intro(wire); if (i) ctx.sendLive(KIND_INTRO, introBodyOf(i), peer.id); return; }
+  // F6: a version nobody announced to me gets one cheap nak and creates no queue, run or session
+  if (!ctx.directory.describe(wire)) { sendNak(ctx, peer, wire, 0, 'unknown-version'); return; }
   await ctx.run(wire, async () => {
     const desc = ctx.directory.describe(wire);
     if (!desc) { sendNak(ctx, peer, wire, 0, 'unknown-version'); return; }
@@ -94,10 +101,15 @@ export async function onWant(ctx: RepCtx, peer: PeerInfo, w: WantBody): Promise<
     if (mine !== hex(w.haveHash)) { sendNak(ctx, peer, wire, w.haveLines, 'not-a-prefix', mine); return; }
     let through = Math.min(w.through ?? head.lines, head.lines);
     if (!desc.writer.equals(ctx.crypto.self)) { const newest = await ctx.heads.newest(wire); through = Math.min(through, newest ? newest.lines : 0); }
-    if (w.haveLines >= through) { if (w.haveLines >= head.lines) return; sendNak(ctx, peer, wire, w.haveLines, 'unavailable'); return; }
+    if (w.haveLines >= through) {
+      // level with me: say so with a signed ack of my head (this is how a device asks "do you still hold these lines?", F2); behind my signed points: say I cannot help
+      if (w.haveLines >= head.lines) { await sendAck(ctx, peer, wire, v.local); return; }
+      sendNak(ctx, peer, wire, w.haveLines, 'unavailable'); return;
+    }
     const key = keyOf(peer.hex, wire);
     const old = ctx.sessions.get(key);
-    if (!old && ctx.sessions.size >= MAX_SESSIONS) { ctx.bump('serve-session-limit'); sendNak(ctx, peer, wire, w.haveLines, 'unavailable'); return; }
+    const ofPeer = [...ctx.sessions.values()].filter((x) => x.peer === peer.hex).length; // F6: one device cannot fill every session
+    if (!old && (ctx.sessions.size >= MAX_SESSIONS || ofPeer >= MAX_SESSIONS_PER_PEER)) { ctx.bump('serve-session-limit'); sendNak(ctx, peer, wire, w.haveLines, 'unavailable'); return; }
     old?.timer?.cancel();
     const s: ServeSession = { peer: peer.hex, wire, next: w.haveLines, acked: w.haveLines, through, inFlight: [], lastProgress: ctx.clock.now(), timer: null, pumping: false };
     ctx.sessions.set(key, s);
@@ -134,7 +146,8 @@ async function pump(ctx: RepCtx, key: string): Promise<void> {
       if (!batch || !peer) { ctx.sessions.delete(key); return; }
       if ('nak' in batch.r) { sendNak(ctx, peer, s.wire, s.next, batch.r.nak); ctx.sessions.delete(key); return; }
       const bytes = batch.r.lines.reduce((n, l) => n + l.length, 0);
-      if (!ctx.readBytes.take(bytes)) { ctx.clock.setTimeout(() => { void pump(ctx, key); }, 500); return; }
+      if (!ctx.readBytes.take(bytes)) { ctx.runOf(s.wire).serveWait = true; ctx.bump('serve-read-budget-wait'); ctx.clock.setTimeout(() => { void pump(ctx, key); }, 500); return; }
+      ctx.runOf(s.wire).serveWait = false;
       const from = s.next; s.next = batch.r.end; s.inFlight.push({ end: batch.r.end, bytes });
       try { await sendBatch(ctx, s.wire, batch.v.desc.chatId, peer.id, from, batch.r); } catch (e) {
         ctx.sessions.delete(key); reportFailure({ what: 'send chat lines to another device', cause: e, where: 'mesh.replicator' }); return;
@@ -145,6 +158,7 @@ async function pump(ctx: RepCtx, key: string): Promise<void> {
 
 /** A peer's signed ack. Recorded only when it verifies AND matches my chain; the value may fall as well as rise (a peer can roll back). */
 export async function onAck(ctx: RepCtx, peer: PeerInfo, a: AckBody): Promise<void> {
+  if (!ctx.directory.describe(a.version)) { ctx.bump('ack-unknown-version-ignored'); return; } // F6
   if (!ctx.crypto.verify(peer.id, ackMessage(peer.id, a.version, a.lines, a.hash), a.sig)) { ctx.bump('ack-bad-signature'); return; }
   const wireHex = a.version.toString('hex');
   const v = await ctx.run(a.version, async () => {
@@ -157,7 +171,10 @@ export async function onAck(ctx: RepCtx, peer: PeerInfo, a: AckBody): Promise<vo
   if (!v) return;
   // WHY the chain check: an ack by count alone would credit a peer holding DIFFERENT lines (invariant 4); an evicted value cannot be checked, so it is not credited either
   if (v.mine !== a.hash.toString('hex')) { ctx.bump('ack-not-on-my-chain'); peer.acks.delete(wireHex); return; }
-  peer.acks.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), sig: a.sig }); // set, never max(): it may be lower than before
+  const now = ctx.clock.now();
+  peer.acks.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), sig: a.sig, at: now }); // set, never max(): it may be lower than before
+  // a signed ack is also the freshest word of that device about what it holds: its entry follows it (F2: acks are listed only while the holder's heads agree)
+  peer.heads.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), state: 'ok', at: now });
   const key = keyOf(peer.hex, a.version);
   const s = ctx.sessions.get(key);
   if (s) {
@@ -182,7 +199,7 @@ export async function pushNew(ctx: RepCtx, wire: Buffer): Promise<void> {
         const v = await ctx.localOf(wire);
         if (!v) return null;
         const head = await ctx.store.head(v.local);
-        const from = run.pushedThrough ?? head.lines;
+        const from = Math.min(run.pushedThrough ?? head.lines, head.lines); // after a refill the head may be below what was pushed before
         if (from >= head.lines || repairFrom(head) !== null) { run.pushedThrough = Math.max(from, run.pushedThrough ?? 0); return null; }
         const r = await buildBatch(ctx, wire, v.local, v.desc.writer, from, head.lines, head);
         return { v, from, r };

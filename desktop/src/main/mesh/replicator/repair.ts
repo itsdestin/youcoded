@@ -36,11 +36,13 @@ export async function retireAndRecopy(ctx: RepCtx, wire: Buffer, why: string): P
     }
   }
   ctx.ids.retired(wire, cur.incarnation);
-  run.recopies++; run.retiredRecopy = true; run.refill = null; run.lastSigned.clear(); run.seenRejected = 0;
+  run.recopies++; run.retiredRecopy = true; run.refill = null; run.lastSigned.clear(); run.seenRejected = 0; run.caughtUp = false;
   ctx.bump('retired-recopy');
   ctx.heads.forget(wire);
   // the new incarnation is registered lazily by localOf; then everything is asked for again from line 0
-  await ctx.reconsider(wire);
+  await ctx.reconsider(wire); // registers the new, empty incarnation
+  // WHY at once (review 1, F2): the other devices still list the retired copy's acknowledgement until they hear what this device holds now; the new copy is empty, and saying so drops it immediately
+  ctx.advertise();
 }
 
 /** After any append or at a tick: look at what the store says about this version and act on it. Never throws; a failure is named in the version's status. */

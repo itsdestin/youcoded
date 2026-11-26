@@ -34,20 +34,23 @@ export interface VersionDirectory {
   wanted(wire: Buffer): boolean;
   list(): Buffer[];
   onChange(cb: (wire: Buffer) => void): void;
+  /** Set when a DIFFERENT announcement for a known version was received (review 1, F4): the reason, kept for good (durable in the interim directory), or null. */
+  conflict?(wire: Buffer): string | null;
 }
 
 export type AcceptResult = 'new' | 'known' | 'conflict' | 'bad-signature' | 'unknown-writer' | 'bad-fork-id';
 
 export class InterimDirectory implements VersionDirectory {
   readonly #byWire = new Map<string, IntroBody>();
+  readonly #conflicts = new Map<string, string>();
   #cbs: Array<(wire: Buffer) => void> = [];
   constructor(private readonly fs: Fs, private readonly dir: string, private readonly crypto: ReplicatorCrypto) {}
   private path(wire: Buffer): string { return nodePath.join(this.dir, 'intro', wire.toString('hex')); }
+  private conflictPath(wire: Buffer): string { return nodePath.join(this.dir, 'conflict', wire.toString('hex')); }
 
-  /** Read every saved announcement again. A file that does not parse or whose signature fails is reported and skipped (never believed). */
+  /** Read every saved announcement and conflict note again. A file that does not parse or whose signature fails is reported and skipped (never believed). */
   async load(): Promise<void> {
-    const names = await this.fs.readdir(nodePath.join(this.dir, 'intro'));
-    for (const name of names) {
+    for (const name of await this.fs.readdir(nodePath.join(this.dir, 'intro'))) {
       if (!/^[0-9a-f]{2,128}$/.test(name)) continue; // *.tmp-* scratch of an interrupted write
       try {
         const raw = await this.fs.readFile(nodePath.join(this.dir, 'intro', name));
@@ -57,6 +60,10 @@ export class InterimDirectory implements VersionDirectory {
         if (this.check(body) === 'ok') this.#byWire.set(name, body);
         else reportFailure({ what: 'trust a saved version announcement (it fails its checks and is ignored)', where: 'mesh.replicator.directory' });
       } catch (cause) { reportFailure({ what: 'read a saved version announcement (it is ignored)', cause, where: 'mesh.replicator.directory' }); }
+    }
+    for (const name of await this.fs.readdir(nodePath.join(this.dir, 'conflict'))) {
+      if (!/^[0-9a-f]{2,128}$/.test(name)) continue;
+      try { const raw = await this.fs.readFile(nodePath.join(this.dir, 'conflict', name)); if (raw) this.#conflicts.set(name, raw.toString('utf8').slice(0, 200)); } catch (cause) { reportFailure({ what: 'read a saved announcement conflict', cause, where: 'mesh.replicator.directory' }); }
     }
   }
 
@@ -76,19 +83,29 @@ export class InterimDirectory implements VersionDirectory {
     return body;
   }
 
-  /** A received announcement. Only a verified, non-conflicting one is kept. */
+  /** A received announcement. Only a verified, non-conflicting one is kept.
+   *  WHY the decision is made BEFORE the first await (review 1, F4): two announcements handled in the same turn used to both see "not known yet" and the second one won; a paired device could
+   *  time its own announcement with the real one and capture the version id. The map entry is set synchronously; the file is written after. */
   async accept(b: IntroBody): Promise<AcceptResult> {
     const key = b.version.toString('hex');
-    const have = this.#byWire.get(key);
     const verdict = this.check(b);
     if (verdict !== 'ok') return verdict;
+    const have = this.#byWire.get(key);
     if (have) {
       const { sig: _a, ...x } = have; const { sig: _b, ...y } = b; // eslint-disable-line @typescript-eslint/no-unused-vars
-      return introMessage(x).equals(introMessage(y)) ? 'known' : 'conflict';
+      if (introMessage(x).equals(introMessage(y))) return 'known';
+      // a different announcement for a known version: remembered IN the directory (durable), never in a status flag a later append could clear
+      if (!this.#conflicts.has(key)) {
+        const why = `writer ${b.writer.toString('hex').slice(0, 8)} announced this version differently from ${have.writer.toString('hex').slice(0, 8)}`;
+        this.#conflicts.set(key, why);
+        await mkdirDurable(this.fs, nodePath.join(this.dir, 'conflict'));
+        await writeFileAtomic(this.fs, this.conflictPath(b.version), Buffer.from(why, 'utf8'));
+      }
+      return 'conflict';
     }
+    this.#byWire.set(key, b);
     await mkdirDurable(this.fs, nodePath.join(this.dir, 'intro'));
     await writeFileAtomic(this.fs, this.path(b.version), encode(introBodyOf(b)));
-    this.#byWire.set(key, b);
     for (const cb of this.#cbs) cb(b.version);
     return 'new';
   }
@@ -103,4 +120,5 @@ export class InterimDirectory implements VersionDirectory {
   wanted(wire: Buffer): boolean { return this.#byWire.has(wire.toString('hex')); }
   list(): Buffer[] { return [...this.#byWire.keys()].map((h) => Buffer.from(h, 'hex')); }
   onChange(cb: (wire: Buffer) => void): void { this.#cbs.push(cb); }
+  conflict(wire: Buffer): string | null { return this.#conflicts.get(wire.toString('hex')) ?? null; }
 }

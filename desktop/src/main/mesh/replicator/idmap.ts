@@ -1,6 +1,6 @@
 // Two id spaces (plan "Decisions for you" 1): the WIRE id is what every device uses to name a version; the LOCAL id is the store folder this
-// device keeps it in. They are equal for incarnation 0. The store retires a damaged version id for good and never refills it, so a recopy
-// needs a new local id while the wire id stays: incarnation n >= 1 is SHA-256(label || wire id || n).
+// device keeps it in. They are never equal (F3). The store retires a damaged version id for good and never refills it, so a recopy
+// needs a new local id while the wire id stays: incarnation n is SHA-256(label || wire id || n), for every n including 0.
 //
 // WHY derived and probed, not stored: a map file would be one more thing to roll back or lose. The store already remembers which ids are
 // retired (three witnesses, inventory limit 5), so the current incarnation is the lowest one whose id is not retired. A retired id is never
@@ -14,8 +14,9 @@ export const MAX_INCARNATIONS = 32;
 
 export function incarnationId(wire: Buffer, n: number): Buffer {
   if (!Number.isSafeInteger(n) || n < 0 || n > MAX_INCARNATIONS) throw new RangeError('incarnation out of range');
-  if (n === 0) return Buffer.from(wire);
-  // WHY the incarnation number as text: a fixed, unambiguous byte string; 32 bytes out, within the store's 64-byte id limit.
+  // WHY EVERY incarnation, the first too, goes through the hash (review 1, F3): when incarnation 0 was the wire id itself, a paired device could announce a version whose
+  // wire id equals the victim's incarnation-1 id and have its lines written into the folder that later became the victim's copy. With every local id a domain-separated
+  // hash of (wire id, n), no wire id can name another version's folder, and 32 bytes out stay within the store's 64-byte id limit.
   return createHash('sha256').update('youcoded-mesh/v1/incarnation\0').update(wire).update(`\0${n}`).digest();
 }
 

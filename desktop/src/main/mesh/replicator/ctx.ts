@@ -24,14 +24,16 @@ export const realClock: Clock = {
   setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return { cancel: () => clearTimeout(t) }; },
 };
 
-type VState = 'unknown' | 'comparing' | 'in-sync' | 'pulling' | 'serving' | 'refilling' | 'diverged' | 'retired-recopy' | 'stuck';
+/** `faulted`: a sticky named fault that only an operator-level decision clears (the writer signed two histories, or two announcements disagree). `peer-repairing`, `stale` and `uncomparable`:
+ *  states in which `in-sync` would claim more than this device knows (review 1, F7). */
+type VState = 'unknown' | 'comparing' | 'in-sync' | 'pulling' | 'serving' | 'refilling' | 'diverged' | 'retired-recopy' | 'stuck' | 'faulted' | 'peer-repairing' | 'stale' | 'uncomparable';
 export interface VersionStatus { state: VState; reason: string | null; lines: number; incarnation: number }
 
 /** A signed statement a holder made about a version, in the shape of an eviction proof's ack (the store's `EvictionProof.acks`). */
 export interface PeerAck { holder: string; version: string; lines: number; hash: string; signature: string }
 
 interface PeerHead { lines: number; hash: string; state: AdvertisedState; at: number }
-export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer }> }
+export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number }>; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
 
 /** The source of lines no peer holds (the writer's own chat file, via an adapter): `resupply(wire, from, to)` gives raw lines [from, to) or null. */
 export type SourceRefill = (wire: Buffer, from: number, to: number) => Promise<Buffer[] | null>;
@@ -57,10 +59,18 @@ export interface VRun {
   pushing: boolean;
   /** Peers that just failed to serve this version (a nak, or no progress): not asked again until one serves or all are tried. */
   skip: Set<string>;
+  /** STICKY (review 1, F1/F4): set only by `ctx.fault`, persisted in `faults/`, never cleared by an append, a restart or a recopy. */
+  fault: string | null;
+  /** A fresh incarnation (or a restart after one) has been compared with a peer and found to hold everything anyone claims: only then may the writer append again. */
+  caughtUp: boolean;
+  /** Serving is waiting for read memory (named in status, F5). */
+  serveWait: boolean;
+  /** The highest incarnation this process has used for the version (a rise means the store retired the copy under us, F2). */
+  incarnationSeen: number | null;
 }
 
 /** A line larger than one frame, arriving in parts from one peer (receive.ts). Held in memory under `reassemblyBytes`, one per (peer, version). */
-interface Reasm { from: number; of: number; total: number; chunks: Buffer[]; bytes: number; at: number }
+interface Reasm { from: number; of: number; total: number; chunks: Buffer[]; bytes: number; at: number; peer: string; timer: { cancel(): void } | null }
 /** One peer's catch-up of one version that this device is serving (serve.ts). */
 export interface ServeSession { peer: string; wire: Buffer; next: number; acked: number; through: number; inFlight: Array<{ end: number; bytes: number }>; lastProgress: number; timer: { cancel(): void } | null; pumping: boolean }
 
@@ -96,6 +106,8 @@ export interface RepCtx {
   /** Re-judge a version against what every peer last said, and ask for what is missing. */
   reconsider(wire: Buffer): Promise<void>;
   advertise(): void;
+  /** Record a sticky fault for this version: in memory and on disk. Never cleared by this module. */
+  fault(wire: Buffer, reason: string): Promise<void>;
 }
 
 export const hex8 = (b: Buffer): string => b.toString('hex').slice(0, 8);

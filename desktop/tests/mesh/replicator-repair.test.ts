@@ -4,6 +4,7 @@ import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { repWorld, wireId, lineSet, line, CHAT, type World } from './replicator-world';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
+import { incarnationId } from '../../src/main/mesh/replicator/idmap';
 import { FaultFs } from '../../src/main/mesh/store/fault-fs';
 import { chainStep, deriveForkId } from '../../src/main/mesh/store';
 import { headMessage, introBodyOf, introMessage, KIND_INTRO, KIND_LINES, linesBody } from '../../src/main/mesh/replicator/wire';
@@ -11,7 +12,7 @@ import { signWith } from '../../src/main/mesh/crypto/identity';
 
 let w: World | null = null;
 afterEach(async () => { await w?.stopAll(); w = null; });
-const vdir = (world: World, n: string, v: Buffer): string => nodePath.join(world.dirs[n], 'store', 'versions', v.toString('hex'));
+const vdir = (world: World, n: string, v: Buffer): string => nodePath.join(world.dirs[n], 'store', 'versions', incarnationId(v, 0).toString('hex'));
 const allSame = async (world: World, v: Buffer, names: string[]): Promise<void> => {
   const bytes = await Promise.all(names.map((n) => world.readAll(n, v)));
   for (const b of bytes) expect(b).toEqual(bytes[0]);
@@ -37,12 +38,12 @@ describe('a copy that was rolled back or damaged', () => {
     fs.rmSync(vdir(world, 'B', V), { recursive: true }); fs.cpSync(snap, vdir(world, 'B', V), { recursive: true });
     world.devs.A.carrier.setOnline(false);
     const b = await world.restart('B');
-    expect((await b.store.head(V)).rolledBack).toEqual({ from: 12, had: 30 });
+    expect((await b.store.head(await world.local('B', V))).rolledBack).toEqual({ from: 12, had: 30 });
     expect((await b.rep.status(V)).state).toBe('refilling');
     world.devs.A.carrier.setOnline(true);
-    await vi.waitFor(async () => expect((await b.store.head(V)).lines).toBe(30), { timeout: 30_000 });
+    await vi.waitFor(async () => expect((await b.store.head(await world.local('B', V))).lines).toBe(30), { timeout: 30_000 });
     await world.settle();
-    const h = await b.store.head(V);
+    const h = await b.store.head(await world.local('B', V));
     expect(h.rolledBack).toBeNull(); expect(h.damagedFromLine).toBeNull();
     await allSame(world, V, ['A', 'B']);
     expect((await b.rep.status(V)).state).toBe('in-sync');
@@ -59,15 +60,15 @@ describe('a copy that was rolled back or damaged', () => {
     const raw = fs.readFileSync(body); const lineLen = lineSet(1, 'm', 0)[0].length; raw[lineLen * 5 + 10] ^= 0xff; fs.writeFileSync(body, raw);
     world.devs.A.carrier.setOnline(false);
     const b = await world.restart('B');
-    expect((await b.store.scrubStep(V, { maxBytes: 1 << 20 })).damagedFromLine).toBe(5);
+    expect((await b.store.scrubStep(await world.local('B', V), { maxBytes: 1 << 20 })).damagedFromLine).toBe(5);
     await b.rep.hello();
     const adv = (await b.rep.advertised()).find((e) => e.version.equals(V));
     expect(adv).toMatchObject({ lines: 5, state: 'refilling' }); // NOT 20
     world.devs.A.carrier.setOnline(true);
-    await vi.waitFor(async () => expect((await b.store.head(V)).damagedFromLine).toBeNull(), { timeout: 30_000 });
+    await vi.waitFor(async () => expect((await b.store.head(await world.local('B', V))).damagedFromLine).toBeNull(), { timeout: 30_000 });
     await world.settle();
     await allSame(world, V, ['A', 'B']);
-    expect((await b.store.verify(V)).ok).toBe(true);
+    expect((await b.store.verify(await world.local('B', V))).ok).toBe(true);
   });
 });
 
@@ -87,14 +88,14 @@ describe('two rotted lines', () => {
       b.rep.stop(); b.link.stop(); await b.store.close();
       const raw = fs.readFileSync(body); raw[at] ^= 0xff; fs.writeFileSync(body, raw);
       b = await world.restart('B', { graceful: true });
-      const hd = await b.store.head(V);
-      await b.store.read(V, 0, 0, hd.lines).catch(async (e: { code?: string }) => { if (e?.code === 'corrupt') await b.rep.reportCorrupt(V); });
+      const hd = await b.store.head(await world.local('B', V));
+      await b.store.read(await world.local('B', V), 0, 0, hd.lines).catch(async (e: { code?: string }) => { if (e?.code === 'corrupt') await b.rep.reportCorrupt(V); });
     }
     world.devs.A.carrier.setOnline(true);
     await world.elapse(120_000, 10_000);
-    await vi.waitFor(async () => expect((await b.store.head(V)).damagedFromLine).toBeNull(), { timeout: 30_000 });
+    await vi.waitFor(async () => expect((await b.store.head(await world.local('B', V))).damagedFromLine).toBeNull(), { timeout: 30_000 });
     expect(await world.readAll('B', V)).toEqual(await world.readAll('A', V)); // every line reads back, including line 0
-    expect((await b.store.verify(V)).ok).toBe(true);
+    expect((await b.store.verify(await world.local('B', V))).ok).toBe(true);
   });
 });
 
@@ -105,7 +106,7 @@ describe('a copy that differs from the writer\'s', () => {
     await world.create('A', V);
     await world.settle();
     // B's copy of the version holds other lines than the writer will sign
-    await world.devs.B.store.append(V, 0, 0, lineSet(6, 'other'));
+    await world.devs.B.store.append(await world.local('B', V), 0, 0, lineSet(6, 'other'));
     const good = lineSet(8, 'real');
     await world.devs.A.rep.appendLocal(V, good);
     await vi.waitFor(async () => expect(world.devs.B.rep.counters()['retired-recopy']).toBe(1));
@@ -113,7 +114,7 @@ describe('a copy that differs from the writer\'s', () => {
     await world.settle();
     const local = (await world.localOf('B', V)) as Buffer;
     expect(local.equals(V)).toBe(false);
-    await expect(world.devs.B.store.head(V)).rejects.toMatchObject({ code: 'damaged' }); // the old id stays retired
+    await expect(world.devs.B.store.head(incarnationId(V, 0))).rejects.toMatchObject({ code: 'damaged' }); // the old id stays retired
     expect(fs.readdirSync(nodePath.join(world.dirs.B, 'store', 'aside')).length).toBeGreaterThan(0); // and its bytes are kept
     // a restart does not bring it back
     const b = await world.restart('B');
@@ -153,7 +154,7 @@ describe('a full disk', () => {
 
 describe('takeovers: forked versions', () => {
   async function takeover(world: World, parent: Buffer, at: number, token: string, by: string): Promise<Buffer> {
-    const hash = (await world.devs[by].store.hashAt(parent, 0, at)) as string;
+    const hash = (await world.devs[by].store.hashAt(await world.local(by, parent), 0, at)) as string;
     const child = deriveForkId(parent, at, hash, token);
     await world.devs[by].rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent, forkLine: at, forkHash: Buffer.from(hash, 'hex'), token });
     return child;
@@ -208,7 +209,7 @@ describe('takeovers: forked versions', () => {
     const child = await takeover(world, V, 6, 'same-entry', 'A');
     await world.settle();
     // the same takeover claimed by a second device: B signs its own announcement of the same child id and sends it
-    const hash = Buffer.from((await world.devs.B.store.hashAt(V, 0, 6)) as string, 'hex');
+    const hash = Buffer.from((await world.devs.B.store.hashAt(await world.local('B', V), 0, 6)) as string, 'hex');
     const claim = { version: child, chatId: CHAT, runtime: 'claude-code' as const, parent: V, forkLine: 6, forkHash: hash, token: 'same-entry', writer: world.ids.B.deviceId };
     world.devs.B.link.sendLive({ group: 'rep.live', kind: KIND_INTRO, body: introBodyOf({ ...claim, sig: signWith(world.ids.B, introMessage(claim)) }) });
     await vi.waitFor(async () => expect((await world.devs.C.rep.status(child)).reason).toBe('directory-conflict'));
@@ -216,7 +217,7 @@ describe('takeovers: forked versions', () => {
     const aLines = lineSet(3, 'from-a', 6);
     await world.devs.A.rep.appendLocal(child, aLines);
     const forged = lineSet(3, 'from-b', 6);
-    const h0 = Buffer.from((await world.devs.B.store.hashAt(V, 0, 6)) as string, 'hex');
+    const h0 = Buffer.from((await world.devs.B.store.hashAt(await world.local('B', V), 0, 6)) as string, 'hex');
     const fh = forged.reduce((h, l) => chainStep(h, l), h0);
     await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, body: linesBody({ version: child, from: 6, lines: forged, head: { lines: 9, hash: fh, sig: signWith(world.ids.B, headMessage(child, 9, fh)) } }) });
     await vi.waitFor(async () => expect((await world.heads('C', child)).lines).toBe(9));

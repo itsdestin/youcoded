@@ -13,8 +13,9 @@ import * as nodePath from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { repWorld, wireId, lineSet, line, CHAT, type World } from './replicator-world';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
+import { incarnationId } from '../../src/main/mesh/replicator/idmap';
 import { chainStep, deriveForkId } from '../../src/main/mesh/store';
-import { headMessage, headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_LINES, KIND_NAK, linesBody, nakBodyOf, ackBodyOf, ackMessage } from '../../src/main/mesh/replicator/wire';
+import { introMessage, headMessage, headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, linesBody, nakBodyOf, ackBodyOf, ackMessage } from '../../src/main/mesh/replicator/wire';
 import { signWith } from '../../src/main/mesh/crypto/identity';
 
 /** Documented store limits (inventory.ts) that may leave a device in a named non-in-sync state at the end of a run. Key = the status reason or state. */
@@ -23,6 +24,9 @@ export const EXCUSE_LIMITS: Record<string, string> = {
   'state:refilling': 'a rolled-back or rotted copy still repairing when the run ended (inventory rules iii-v): named, never in-sync',
   'state:pulling': 'a request outstanding to a peer that answered nothing (plan: receiver-driven, re-asked on a timer)',
   'state:comparing': 'no peer has said anything about the version since the last restart',
+  'state:faulted': 'a hostile announcement of an existing version id contradicted the real one: named, sticky, durable (review 1, F4)',
+  'state:stale': 'no peer has spoken in ten virtual minutes (review 1, F7)',
+  'state:peer-repairing': 'a peer said it was repairing and has not said otherwise yet (F7)',
 };
 
 function rng(seed: number): () => number {
@@ -36,7 +40,7 @@ const NAMES = ['A', 'B', 'C'];
 export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const rand = rng(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
-  const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000 });
+  const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000 });
   const ops: Record<string, number> = {};
   const excuses: string[] = [];
   const oracle = new Map<string, Buffer[]>();
@@ -67,7 +71,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
-        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready/.test(String(e))) throw e; });
+        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; });
         note('append');
       } else if (r < 42) { const d = pick(NAMES); if (online.has(d)) { world.devs[d].carrier.setOnline(false); online.delete(d); } else { world.devs[d].carrier.setOnline(true); online.add(d); } note('toggle-link'); }
       else if (r < 48) { const d = pick(NAMES); await world.restart(d, { graceful: rand() < 0.5 }); if (!online.has(d)) world.devs[d].carrier.setOnline(false); note('restart'); }
@@ -77,16 +81,16 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       else if (r < 75) { // remember a non-writer's folder
         const v = pick(vs); const d = pick(NAMES.filter((n) => n !== writer.get(v.toString('hex'))));
         const local = await world.localOf(d, v);
-        if (local) { const src = nodePath.join(world.dirs[d], 'store', 'versions', local.toString('hex')); const dst = `${world.dirs[d]}-snap-${counter++}`; if (fs.existsSync(src) && local.equals(v)) { world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close(); fs.cpSync(src, dst, { recursive: true }); await world.restart(d); snaps.set(`${d}/${v.toString('hex')}`, { dev: d, v, dir: dst }); } }
+        if (local) { const src = nodePath.join(world.dirs[d], 'store', 'versions', local.toString('hex')); const dst = `${world.dirs[d]}-snap-${counter++}`; if (fs.existsSync(src) && local.equals(incarnationId(v, 0))) { world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close(); fs.cpSync(src, dst, { recursive: true }); await world.restart(d); snaps.set(`${d}/${v.toString('hex')}`, { dev: d, v, dir: dst }); } }
         note('snapshot');
       } else if (r < 79) { // put it back
         const e = [...snaps.entries()][0];
-        if (e) { const [key, sn] = e; snaps.delete(key); const dst = nodePath.join(world.dirs[sn.dev], 'store', 'versions', sn.v.toString('hex')); world.devs[sn.dev].rep.stop(); world.devs[sn.dev].link.stop(); await world.devs[sn.dev].store.close(); if (fs.existsSync(dst)) { fs.rmSync(dst, { recursive: true }); fs.cpSync(sn.dir, dst, { recursive: true }); } await world.restart(sn.dev, { graceful: true }); if (!online.has(sn.dev)) world.devs[sn.dev].carrier.setOnline(false); note('rollback'); }
+        if (e) { const [key, sn] = e; snaps.delete(key); const dst = nodePath.join(world.dirs[sn.dev], 'store', 'versions', incarnationId(sn.v, 0).toString('hex')); world.devs[sn.dev].rep.stop(); world.devs[sn.dev].link.stop(); await world.devs[sn.dev].store.close(); if (fs.existsSync(dst)) { fs.rmSync(dst, { recursive: true }); fs.cpSync(sn.dir, dst, { recursive: true }); } await world.restart(sn.dev, { graceful: true }); if (!online.has(sn.dev)) world.devs[sn.dev].carrier.setOnline(false); note('rollback'); }
       } else if (r < 83) { // a rotted byte in a non-writer's copy
         const v = pick(vs); const d = pick(NAMES.filter((n) => n !== writer.get(v.toString('hex'))));
         const local = await world.localOf(d, v);
-        if (local && local.equals(v)) {
-          const body = nodePath.join(world.dirs[d], 'store', 'versions', v.toString('hex'), 'body-0000000000000000.bin');
+        if (local && local.equals(incarnationId(v, 0))) {
+          const body = nodePath.join(world.dirs[d], 'store', 'versions', incarnationId(v, 0).toString('hex'), 'body-0000000000000000.bin');
           if (fs.existsSync(body) && fs.statSync(body).size > 40) {
             world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close();
             const raw = fs.readFileSync(body); raw[Math.floor(rand() * (raw.length - 1))] ^= 0xff; fs.writeFileSync(body, raw);
@@ -115,7 +119,52 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             vs.push(child); oracle.set(child.toString('hex'), (oracle.get(v.toString('hex')) as Buffer[]).slice(0, h.lines)); writer.set(child.toString('hex'), 'B'); forked = true; note('takeover');
           }
         }
+      } else if (r < 96) { // review 1: the WRITER loses its copy, or its whole store folder is put back; it must recover its own signed lines from peers and never start a second history
+        const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
+        const O = oracle.get(v.toString('hex')) as Buffer[];
+        const others = NAMES.filter((n) => n !== wr);
+        const held = await Promise.all(others.map(async (n) => (await world.heads(n, v)).lines));
+        // only when a peer that is online holds every line the writer ever acknowledged: otherwise the lines would be gone for good (store limit 4), which this oracle cannot express
+        const safe = O.length > 0 && others.some((n, i) => online.has(n) && held[i] === O.length) && online.has(wr);
+        if (safe && rand() < 0.5) {
+          const local = await world.localOf(wr, v);
+          if (local) { await world.devs[wr].store.setAsideDamaged(local).catch(() => undefined /* benign (fuzz): already retired */); await world.devs[wr].rep.reportCorrupt(v); note('writer-retire'); }
+        } else if (safe) {
+          await world.devs[wr].rep.idle(); world.devs[wr].rep.stop(); world.devs[wr].link.stop(); await world.devs[wr].store.close();
+          const root = nodePath.join(world.dirs[wr], 'store'); const snap = `${world.dirs[wr]}-wsnap-${counter++}`;
+          fs.cpSync(root, snap, { recursive: true });
+          // a few lines more, so the put-back copy is genuinely older than what peers hold
+          await world.restart(wr); const extra = lineSet(2, `ws${seed}-${counter++}`, O.length);
+          const ok = await world.devs[wr].rep.appendLocal(v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; return false; });
+          if (ok) O.push(...extra);
+          await world.elapse(30_000, 10_000, true);
+          await world.devs[wr].rep.idle(); world.devs[wr].rep.stop(); world.devs[wr].link.stop(); await world.devs[wr].store.close();
+          fs.rmSync(root, { recursive: true, force: true }); fs.cpSync(snap, root, { recursive: true }); fs.rmSync(snap, { recursive: true, force: true });
+          await world.restart(wr); if (!online.has(wr)) world.devs[wr].carrier.setOnline(false);
+          // the first exchange with the peers: the window before it cannot be closed by any device (store limit 4), so the model lets it happen before the next append
+          world.devs[wr].rep.hello(); await world.elapse(60_000, 10_000, true);
+          note('writer-rollback');
+        }
+      } else if (r < 98) { // a paired device announces an EXISTING version as its own, to everyone, or floods heads naming thousands of unknown versions
+        const liar = pick(NAMES); const v = pick(vs);
+        if (rand() < 0.5) {
+          const b = { version: v, chatId: 'lie', runtime: 'claude-code' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: world.ids[liar].deviceId };
+          world.devs[liar].link.sendLive({ group: 'rep.live', kind: KIND_INTRO, body: introBodyOf({ ...b, sig: signWith(world.ids[liar], introMessage(b)) }) });
+          note('intro-conflict');
+        } else {
+          const entries = Array.from({ length: 2000 }, (_, i) => ({ version: wireId(`flood-${seed}-${counter}-${i}`), lines: 5, hash: Buffer.alloc(32, 1), conversationHash: Buffer.alloc(32), stamp: 0, state: 'ok' as const })); counter++;
+          world.devs[liar].link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: entries }) });
+          note('heads-flood');
+        }
       } else { watchAcks(); note('look'); }
+      // review 1, F5: now and then the writer appends one line above the old 16 MiB read budget (rare: it is slow)
+      if (rand() < 0.0006) {
+        const v = pick(vs); const wr = writer.get(v.toString('hex')) as string; const O = oracle.get(v.toString('hex')) as Buffer[];
+        const big = Buffer.concat([Buffer.from('{"type":"user","message":{"content":"'), Buffer.alloc(17 * 1024 * 1024, 0x62), Buffer.from('"}}\n')]);
+        const ok = await world.devs[wr].rep.appendLocal(v, [big]).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; return false; });
+        if (ok) O.push(big);
+        note('big-line');
+      }
       watchAcks();
     }
     // ---- quiescence: noise off, everybody online, time passes until the devices agree (at most a few virtual minutes)

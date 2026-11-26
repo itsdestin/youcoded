@@ -91,6 +91,8 @@ export class SignedHeads {
     for (const p of await this.load(wire)) if (p.lines > lines) return p;
     return null;
   }
+  /** Every held point above `lines`, in order (a fork leaves points that are not on my chain; the caller picks the ones that are). */
+  async pointsAfter(wire: Buffer, lines: number): Promise<Point[]> { return (await this.load(wire)).filter((p) => p.lines > lines); }
   /** The newest held point (the highest count), or null. */
   async newest(wire: Buffer): Promise<Point | null> {
     const pts = await this.load(wire);

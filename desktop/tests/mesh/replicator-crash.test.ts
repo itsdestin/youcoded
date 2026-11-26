@@ -8,6 +8,7 @@ import { repWorld, wireId, lineSet, CHAT, type World } from './replicator-world'
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
 import { FaultFs } from '../../src/main/mesh/store/fault-fs';
 import { deriveForkId } from '../../src/main/mesh/store';
+import { incarnationId } from '../../src/main/mesh/replicator/idmap';
 
 const FULL = process.env.MESH_REPLICATOR_CRASH_FULL === '1';
 const SAMPLE = FULL ? 1 : 9;
@@ -90,7 +91,7 @@ describe('a kill at any file operation', () => {
       await world.create('A', V);
       await world.devs.A.rep.appendLocal(V, lineSet(6));
       await world.settle();
-      const hash = (await world.devs.B.store.hashAt(V, 0, 6)) as string;
+      const hash = (await world.devs.B.store.hashAt(await world.local('B', V), 0, 6)) as string;
       child = deriveForkId(V, 6, hash, 'crash-entry');
       await world.devs.B.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 6, forkHash: Buffer.from(hash, 'hex'), token: 'crash-entry' });
       await world.devs.B.rep.appendLocal(child, lineSet(3, 'b', 6));
@@ -99,7 +100,7 @@ describe('a kill at any file operation', () => {
     // the child id depends only on the (deterministic) parent chain, so it can be named before the run: compute it once from a clean A
     const probe = await repWorld(['A']); const pv = wireId('crash');
     await probe.create('A', pv); await probe.devs.A.rep.appendLocal(pv, lineSet(6));
-    child = deriveForkId(pv, 6, (await probe.devs.A.store.hashAt(pv, 0, 6)) as string, 'crash-entry');
+    child = deriveForkId(pv, 6, (await probe.devs.A.store.hashAt(await probe.local('A', pv), 0, 6)) as string, 'crash-entry');
     await probe.stopAll();
     sc.versions = [V, child];
     await sweep(sc);
@@ -108,7 +109,7 @@ describe('a kill at any file operation', () => {
     await sweep({ diverges: true, name: 'retire', names: ['A', 'B'], owner: 'B', versions: [V], run: async (world) => {
       await world.create('A', V);
       await world.settle();
-      await world.devs.B.store.append(V, 0, 0, lineSet(5, 'other')).catch(() => undefined /* benign (test): the kill may land inside this very call; the writer's lines below must still be written */);
+      await world.devs.B.store.append(incarnationId(V, 0), 0, 0, lineSet(5, 'other')).catch(() => undefined /* benign (test): the kill may land inside this very call; the writer's lines below must still be written */);
       await world.devs.A.rep.appendLocal(V, lineSet(7, 'real'));
       await world.settle();
     } });

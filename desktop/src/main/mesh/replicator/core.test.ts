@@ -65,8 +65,9 @@ describe('budgets', () => {
 
 describe('the incarnation map', () => {
   const wire = Buffer.from('aa010001', 'hex');
-  it('incarnation 0 is the wire id; every other one is a different, stable, 32-byte id', () => {
-    expect(incarnationId(wire, 0).equals(wire)).toBe(true);
+  it('every incarnation, the first too, is a different, stable, 32-byte id and none is the wire id', () => {
+    expect(incarnationId(wire, 0).equals(wire)).toBe(false);
+    expect(incarnationId(wire, 0).length).toBe(32);
     const a = incarnationId(wire, 1); const b = incarnationId(wire, 2);
     expect(a.length).toBe(32); expect(a.equals(b)).toBe(false); expect(a.equals(incarnationId(wire, 1))).toBe(true);
     expect(() => incarnationId(wire, MAX_INCARNATIONS + 1)).toThrow();
@@ -76,7 +77,7 @@ describe('the incarnation map', () => {
     const probe: Probe = async (l) => (retired.has(l.toString('hex')) ? 'retired' : 'absent');
     const m = new IdMap(probe);
     expect((await m.current(wire)).incarnation).toBe(0);
-    retired.add(wire.toString('hex')); m.retired(wire, 0);
+    retired.add(incarnationId(wire, 0).toString('hex')); m.retired(wire, 0);
     const second = await m.current(wire);
     expect(second.incarnation).toBe(1);
     // even a fresh map over the same store (a restart) skips what is retired

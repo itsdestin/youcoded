@@ -9,17 +9,53 @@ import { StoreError } from '../store';
 import { reportFailure } from '../../report-failure';
 import { hex } from '../store/chain';
 import { askIntro } from './receive';
+import { incarnationId, MAX_INCARNATIONS } from './idmap';
 import { chatGroup, type RepCtx } from './ctx';
 import type { VersionDescriptor } from './directory';
 
 /** The store's id of the CURRENT incarnation of `wire`, registered. null when it cannot be set up yet (a child waiting for its parent). */
+/** Folders already checked against their description, so the (whole-store) listing runs once per version per process (F3). */
+const verifiedFolders = new WeakMap<object, Set<string>>();
+
+/** A folder found already registered under the derived id must be THIS version's: same chat, same parent (review 1, F3). Anything else is a squatter or a mistake: not used, named. */
+async function folderIsThisVersion(ctx: RepCtx, local: Buffer, desc: VersionDescriptor): Promise<boolean> {
+  let seen = verifiedFolders.get(ctx.store); if (!seen) { seen = new Set(); verifiedFolders.set(ctx.store, seen); }
+  const key = `${local.toString('hex')}/${desc.chatId}/${desc.parent ? desc.parent.toString('hex') : ''}`;
+  if (seen.has(key)) return true;
+  const all = await ctx.store.listVersions();
+  const mine = all.find((x) => x.version.equals(local));
+  if (!mine || mine.chatId === null) return true; // not listed or too damaged to say: the store's own damage handling decides
+  // a forked child's folder names its parent's STORE id (forkVersion), a child registered whole names the parent's wire id: either, for any incarnation of the parent, is this version's
+  const parentOk = ((): boolean => {
+    if (!desc.parent) return mine.parent === null;
+    if (!mine.parent) return false;
+    const got = mine.parent.toString('hex');
+    if (got === desc.parent.toString('hex')) return true;
+    for (let n = 0; n <= MAX_INCARNATIONS; n++) if (incarnationId(desc.parent, n).toString('hex') === got) return true;
+    return false;
+  })();
+  if (mine.chatId !== desc.chatId || !parentOk) return false;
+  seen.add(key);
+  return true;
+}
+
 export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescriptor): Promise<{ local: Buffer; incarnation: number } | null> {
   const run = ctx.runOf(wire);
   const cur = await ctx.ids.current(wire);
-  if (cur.registered) return { local: cur.local, incarnation: cur.incarnation };
+  // The store retired the copy under us (the id map moved up an incarnation, review 1, F2): from here on the version is a fresh copy that must be refilled before it counts for anything,
+  // and the other devices must hear at once what this device holds now, so no acknowledgement of the old copy outlives it.
+  const retiredNow = run.incarnationSeen !== null && cur.incarnation > run.incarnationSeen;
+  run.incarnationSeen = Math.max(run.incarnationSeen ?? 0, cur.incarnation);
+  if (retiredNow) { run.caughtUp = false; run.retiredRecopy = true; run.lastSigned.clear(); run.refill = null; ctx.bump('retired-by-store'); ctx.heads.forget(wire); }
+  if (cur.registered) {
+    if (!(await folderIsThisVersion(ctx, cur.local, desc))) { run.stuck = 'folder-belongs-to-another-version'; ctx.bump('folder-belongs-to-another-version'); return null; }
+    if (retiredNow) ctx.advertise();
+    return { local: cur.local, incarnation: cur.incarnation };
+  }
   const register = async (): Promise<{ local: Buffer; incarnation: number }> => {
     await ctx.store.registerVersion(cur.local, { chatId: desc.chatId, runtime: desc.runtime, parent: desc.parent });
     ctx.link.follow(chatGroup(ctx.setId, desc.chatId));
+    if (retiredNow) ctx.advertise(); // the new copy exists now, so what is advertised is what it holds
     return { local: cur.local, incarnation: cur.incarnation };
   };
   if (desc.parent === null || cur.incarnation > 0) return register(); // a recopy of a child is a whole copy (its fork point is inside the lines)

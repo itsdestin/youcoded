@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { repWorld, wireId, lineSet, line, CHAT, type World } from './replicator-world';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
+import { incarnationId } from '../../src/main/mesh/replicator/idmap';
 import { SignedHeads } from '../../src/main/mesh/replicator/signed-heads';
 import { ackBodyOf, ackMessage, headMessage, headsBodyOf, KIND_ACK, KIND_HEADS, KIND_LINES, KIND_NAK, linesBody, nakBodyOf } from '../../src/main/mesh/replicator/wire';
 import { chainStep, defaultChainSeeds } from '../../src/main/mesh/store';
@@ -28,7 +29,7 @@ async function trio(): Promise<{ world: World; V: Buffer }> {
 const chainOver = (base: Buffer, ls: Buffer[]): Buffer => ls.reduce((h, l) => chainStep(h, l), base);
 async function unchanged(world: World, n: string, V: Buffer, lines: number): Promise<void> {
   const local = (await world.localOf(n, V)) as Buffer;
-  expect(local.equals(V)).toBe(true); // still the first incarnation: nothing was set aside
+  expect(local.equals(incarnationId(V, 0))).toBe(true); // still the first incarnation: nothing was set aside
   const h = await world.devs[n].store.head(local);
   expect(h.lines).toBe(lines);
   expect((await world.devs[n].store.verify(local)).ok).toBe(true);
@@ -39,7 +40,7 @@ describe('a paired device that is not the writer cannot put lines into my chat',
   it('lines carrying the lying device\'s own signature are rejected by name and change nothing (guard: signature before append)', async () => {
     const { world, V } = await trio();
     const forged = [line('forged', 0)];
-    const hash = chainOver((await world.devs.B.store.head(V).then((h) => Buffer.from(h.hash, 'hex'))), forged);
+    const hash = chainOver((await world.devs.B.store.head(await world.local('B', V)).then((h) => Buffer.from(h.hash, 'hex'))), forged);
     const head = { lines: 11, hash, sig: signWith(world.ids.C, headMessage(V, 11, hash)) }; // signed by C, not by the writer A
     await world.devs.C.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, body: linesBody({ version: V, from: 10, lines: forged, head }) });
     await vi.waitFor(() => expect(world.devs.B.rep.counters()['bad-head-signature']).toBeGreaterThanOrEqual(1));
@@ -117,7 +118,7 @@ describe('acknowledgements', () => {
   });
   it('an ack with a signature that is not the sender\'s is ignored (guard: ack signature)', async () => {
     const { world, V } = await trio();
-    const h = Buffer.from((await world.devs.A.store.head(V)).hash, 'hex');
+    const h = Buffer.from((await world.devs.A.store.head(await world.local('A', V))).hash, 'hex');
     world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 10, hash: h, sig: signWith(world.ids.B, ackMessage(world.ids.C.deviceId, V, 10, h)) }) });
     await vi.waitFor(() => expect(world.devs.A.rep.counters()['ack-bad-signature']).toBe(1));
   });
@@ -126,7 +127,7 @@ describe('acknowledgements', () => {
     const cHex = world.ids.C.deviceId.toString('hex');
     const before = world.devs.A.rep.peerAcks(V).find((a) => a.holder === cHex);
     expect(before?.lines).toBe(10);
-    const h5 = Buffer.from((await world.devs.A.store.hashAt(V, 0, 5)) as string, 'hex');
+    const h5 = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 5)) as string, 'hex');
     world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 5, hash: h5, sig: signWith(world.ids.C, ackMessage(world.ids.C.deviceId, V, 5, h5)) }) });
     await vi.waitFor(() => expect(world.devs.A.rep.peerAcks(V).find((a) => a.holder === cHex)?.lines).toBe(5));
   });

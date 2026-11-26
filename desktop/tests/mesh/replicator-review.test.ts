@@ -71,13 +71,10 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     expect((await headOf(world, 'B', V)).lines).toBe(8);
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
   });
-  it('appendLocal refuses by name while any peer holds a writer-signed point beyond my head (without any store report)', async () => {
-    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1c');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4));
-    await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(4)); await world.settle();
-    // B (honestly) tells A it holds MORE than A does, as a rolled-back writer would find out
-    const bHash = Buffer.from((await headOf(world, 'B', V)).hash, 'hex');
-    world.devs.B.link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 9, hash: bHash, conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }) });
+  it('appendLocal refuses by name while any fresh peer claim names more lines of my version than I hold (without any store report)', async () => {
+    w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1c');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    sendLive(world, KIND_HEADS, headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 9, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }), 'A');
     await vi.waitFor(() => expect(world.devs.A.rep.peerView(V).some((p) => p.lines === 9)).toBe(true));
     await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4))).rejects.toThrow(/writer-behind/);
   });
@@ -142,8 +139,12 @@ describe('F2 an ack is a statement about a copy that still exists', () => {
     await world.devs.B.rep.idle(); world.devs.B.rep.stop(); world.devs.B.link.stop(); await world.devs.B.store.close();
     fs.rmSync(nodePath.join(world.dirs.B, 'store'), { recursive: true, force: true }); fs.cpSync(snap, nodePath.join(world.dirs.B, 'store'), { recursive: true });
     await world.restart('B');
+    world.hub.holdFilter = () => 'drop'; // nothing can be refilled yet: B can only SAY what it now holds
     world.devs.A.carrier.setOnline(true);
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines ?? 0).toBeLessThan(6), { timeout: 30_000 });
+    world.hub.holdFilter = null;
+    await world.elapse(120_000, 10_000);
+    expect(ackOf(world, 'B', V)?.lines).toBe(6); // refilled: the ack is back, and it is true again
   });
 });
 
@@ -267,9 +268,9 @@ describe('F6 a paired hostile device cannot make a device do unbounded work', ()
     await world.settle();
     let calls = 0; const orig = world.devs.A.store.head.bind(world.devs.A.store);
     (world.devs.A.store as unknown as { head: unknown }).head = (...a: Parameters<typeof orig>) => { calls++; return orig(...a); };
-    for (let i = 0; i < 30; i++) sendLive(world, KIND_SUM, sumBody({ count: 0, digest: randomBytes(32), ask: true }), 'A');
+    for (let i = 0; i < 150; i++) sendLive(world, KIND_SUM, sumBody({ count: 0, digest: randomBytes(32), ask: true }), 'A');
     await world.settle();
-    expect(calls).toBeLessThanOrEqual(40 * 12);
+    expect(calls).toBeLessThanOrEqual(40 * 2 * 12); // a burst of answers then none: 150 frames would cost 12,000 head reads, this costs under 1,000
   });
   it('naks, acks and wants naming versions nobody announced create no per-version state', async () => {
     w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w;
@@ -309,19 +310,18 @@ describe('F7 status never says in-sync when it cannot know', () => {
     await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('in-sync'));
     world.devs.B.carrier.setOnline(false);
     await world.clock.advance(11 * 60_000);
-    await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('stale'));
+    await vi.waitFor(async () => expect(await st(world, 'A', V)).toMatch(/^stale/));
   });
 });
 
 describe('F8 a store call that never answers ends in a named state', () => {
   it('a version whose store call hangs is reported stuck(store-call-blocked), and other versions keep working', async () => {
-    w = await repWorld(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f8a'); const U = wireId('f8b');
+    w = await repWorld(['A'], { discoveryMs: 600_000, stepLimitMs: 300 } as never); const world = w; const V = wireId('f8a'); const U = wireId('f8b');
     await world.create('A', V); await world.create('A', U); await world.settle();
     const lv = (await world.localOf('A', V)) as Buffer;
     const orig = world.devs.A.store.head.bind(world.devs.A.store);
     (world.devs.A.store as unknown as { head: unknown }).head = (id: Buffer, ...r: unknown[]) => (id.equals(lv) ? new Promise(() => undefined) : (orig as (...x: unknown[]) => Promise<unknown>)(id, ...r));
     void world.devs.A.rep.appendLocal(V, lineSet(1)).catch(() => undefined);
-    await world.clock.advance(5 * 60_000);
     await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('stuck(store-call-blocked)'));
     await world.devs.A.rep.appendLocal(U, lineSet(2)); // another version is not held up
     expect((await headOf(world, 'A', U)).lines).toBe(2);
@@ -333,10 +333,10 @@ describe('F9 rot at rest is found by the replicator itself', () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000, scrubEveryMs: 30_000 } as never); const world = w; const V = wireId('f9');
     await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(8));
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(8)); await world.settle();
-    await world.devs.B.rep.idle(); world.devs.B.rep.stop(); world.devs.B.link.stop(); await world.devs.B.store.close();
+    await world.restart('B'); await world.elapse(60_000, 30_000); // the store's own scrub-on-open has now passed over everything
+    // the file rots WHILE the store is open and nobody reads it: the store's scrub mark is already past it
     const body = nodePath.join(world.dirs.B, 'store', 'versions', (incarnationId(V, 0)).toString('hex'), 'body-0000000000000000.bin');
     const raw = fs.readFileSync(body); raw[lineSet(1)[0].length * 3 + 12] ^= 0xff; fs.writeFileSync(body, raw);
-    await world.restart('B');
     // nobody reads B's copy; only time passes
     await world.elapse(10 * 60_000, 30_000);
     expect(await world.readAll('B', V)).toEqual(await world.readAll('A', V));

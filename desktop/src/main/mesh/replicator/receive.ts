@@ -22,6 +22,7 @@ import { ackBodyOf, ackMessage, headMessage, KIND_ACK, KIND_NAK, KIND_WANT, nakB
 import { UNKNOWN_SPAN } from './signed-heads';
 import { repairFrom, type PeerInfo, type RepCtx } from './ctx';
 import { checkRepair, retireAndRecopy, scrubAll } from './repair';
+import { REASSEMBLY_IDLE_MS } from './budget';
 
 const REASSEMBLY_STALE_MS = 60_000;
 const DISK_FULL_BACKOFF_MS = 30_000;
@@ -30,7 +31,7 @@ export function sendNak(ctx: RepCtx, peer: PeerInfo, wire: Buffer, at: number, w
   ctx.sendLive(KIND_NAK, nakBodyOf({ version: wire, at, why, hashAtYourCount: mine ? unhex(mine) : null }), peer.id);
 }
 
-async function sendAck(ctx: RepCtx, peer: PeerInfo, wire: Buffer, local: Buffer): Promise<void> {
+export async function sendAck(ctx: RepCtx, peer: PeerInfo, wire: Buffer, local: Buffer): Promise<void> {
   const h = await ctx.store.head(local);
   const raw = unhex(h.hash);
   ctx.sendLive(KIND_ACK, ackBodyOf({ version: wire, lines: h.lines, hash: raw, sig: ctx.crypto.sign(ackMessage(ctx.crypto.self, wire, h.lines, raw)) }), peer.id);
@@ -41,33 +42,37 @@ export function askIntro(ctx: RepCtx, peer: PeerInfo, wire: Buffer): void {
   ctx.sendLive(KIND_WANT, wantBodyOf({ version: wire, haveLines: 0, haveHash: Buffer.alloc(32), through: null, intro: true }), peer.id);
 }
 
-/** A part of a line too large for one frame. Returns the whole line when the last part arrives, else null. Parts must come in order from part 0; anything else restarts. */
+/** A part of a line too large for one frame. Returns the whole line when the last part arrives, else null. Parts must come in order from part 0; anything else restarts.
+ *  WHY the reservation grows with what ARRIVES (review 1, F6): reserving the whole declared size up front let one 512 KiB frame with a replayed head pin the 64 MiB budget. Now a peer pins only the
+ *  bytes it actually sent, holds at most one unfinished line, and an idle one is dropped by a timer. */
 function addPart(ctx: RepCtx, peer: PeerInfo, b: LinesBody): Buffer | null {
   const key = `${peer.hex}/${b.version.toString('hex')}`;
   const part = b.part as NonNullable<LinesBody['part']>;
+  const drop = (k: string): void => { const x = ctx.reasm.get(k); if (!x) return; x.timer?.cancel(); ctx.reassemblyBytes.give(x.bytes); ctx.reasm.delete(k); };
   let r = ctx.reasm.get(key);
   const now = ctx.clock.now();
-  if (r && (part.index === 0 || r.from !== b.from || r.of !== part.of || r.total !== part.totalBytes || r.chunks.length !== part.index || now - r.at > REASSEMBLY_STALE_MS)) {
-    ctx.reassemblyBytes.give(r.bytes); ctx.reasm.delete(key); r = undefined; // out of order or stale: start over (a partial line is never used)
-  }
+  if (r && (part.index === 0 || r.from !== b.from || r.of !== part.of || r.total !== part.totalBytes || r.chunks.length !== part.index || now - r.at > REASSEMBLY_STALE_MS)) { drop(key); r = undefined; } // out of order or stale: start over (a partial line is never used)
   if (!r) {
     if (part.index !== 0) { ctx.bump('part-out-of-order'); return null; }
-    if (!ctx.reassemblyBytes.take(part.totalBytes)) { ctx.bump('part-over-budget'); return null; } // reserve the WHOLE line up front: a peer cannot grow a buffer past what it declared
-    r = { from: b.from, of: part.of, total: part.totalBytes, chunks: [], bytes: part.totalBytes, at: now };
+    for (const [k, x] of [...ctx.reasm]) if (x.peer === peer.hex) drop(k); // one unfinished line per peer
+    r = { from: b.from, of: part.of, total: part.totalBytes, chunks: [], bytes: 0, at: now, peer: peer.hex, timer: null };
     ctx.reasm.set(key, r);
   }
-  r.chunks.push(b.lines[0]); r.at = now;
-  const have = r.chunks.reduce((n, c) => n + c.length, 0);
-  if (have > r.total) { ctx.reassemblyBytes.give(r.bytes); ctx.reasm.delete(key); throw new FrameReject('part-bytes-exceed-total'); }
+  const chunk = b.lines[0];
+  if (!ctx.reassemblyBytes.take(chunk.length)) { drop(key); ctx.bump('part-over-budget'); return null; }
+  r.bytes += chunk.length; r.chunks.push(chunk); r.at = now;
+  r.timer?.cancel(); r.timer = ctx.clock.setTimeout(() => { if (ctx.reasm.get(key) === r) { drop(key); ctx.bump('part-idle-dropped'); } }, REASSEMBLY_IDLE_MS);
+  if (r.bytes > r.total) { drop(key); throw new FrameReject('part-bytes-exceed-total'); }
   if (r.chunks.length < r.of) return null;
-  ctx.reassemblyBytes.give(r.bytes); ctx.reasm.delete(key);
-  if (have !== r.total) throw new FrameReject('part-bytes-short');
-  return Buffer.concat(r.chunks);
+  const whole = Buffer.concat(r.chunks); const total = r.total;
+  drop(key);
+  if (whole.length !== total) throw new FrameReject('part-bytes-short');
+  return whole;
 }
 
 /** Drop every half-received line (a peer left, or a reconnect). */
 export function dropReassembly(ctx: RepCtx): void {
-  for (const r of ctx.reasm.values()) ctx.reassemblyBytes.give(r.bytes);
+  for (const r of ctx.reasm.values()) { r.timer?.cancel(); ctx.reassemblyBytes.give(r.bytes); }
   ctx.reasm.clear();
 }
 
@@ -93,13 +98,11 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   try { head = await ctx.store.head(v.local); } catch (e) { await storeFailed(ctx, peer, wire, e, 0); return; }
   const iAmWriter = desc.writer.equals(ctx.crypto.self);
   const end = b.from + lines.length;
-  const refilling = repairFrom(head) !== null;
-  // Only the named writer ever has lines of its own that no peer sent. Peer lines for MY version beyond my head are explained only by a store report (rule vii).
-  if (iAmWriter && end > head.lines && !refilling) {
-    ctx.bump('writer-ahead-unexplained'); run.stuck = 'writer-behind-unreported';
-    sendNak(ctx, peer, wire, head.lines, 'not-a-prefix', head.hash);
-    throw new FrameReject('writer-ahead-unexplained');
-  }
+  // A version with a sticky fault takes nothing more from anyone (F1/F4): the copy is kept exactly as it is, and still served.
+  if (run.fault) { ctx.bump('lines-refused-faulted'); return; }
+  // WRITER-SIDE (review 1, F1). Lines past my own head that carry MY signature are my own lines coming back (a rolled-back or set-aside copy refilling): the signature is the proof, and they are
+  // verified below exactly like any receiver's (signature, chain from a trusted base, then append). Nothing else can put lines past a writer's head, because the writer signs only what it holds.
+  if (iAmWriter && end > head.lines) ctx.bump('writer-restored-from-peer');
   // 3. never park: a batch that starts past my head is dropped and the missing lines are asked for
   if (b.from > head.lines) { ctx.bump('lines-ahead-dropped'); await ctx.want(wire, peer); return; }
   // 4. the chain over these lines from a trusted starting value must equal the signed value
@@ -155,10 +158,44 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   const nk = wire.toString('hex'); const pv = peer.heads.get(nk);
   if (!pv || pv.lines <= b.head.lines) peer.heads.set(nk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });
   const dmg = await scrubAll(ctx, v.local);
-  if (dmg !== null || !iAmWriter) { reportFailure({ what: 'keep a chat copy that differs from its writer (set aside, recopied)', where: 'mesh.replicator' }); await retireAndRecopy(ctx, wire, dmg !== null ? 'damaged-bytes' : 'diverged-from-writer'); return; }
-  // I am the writer, my bytes are fine, and a signed-by-me history says otherwise: never retire on a peer's word; say so
-  run.stuck = 'writer-conflict';
-  sendNak(ctx, peer, wire, head.lines, 'not-a-prefix', head.hash);
+  if (dmg !== null) { reportFailure({ what: 'set a damaged chat copy aside (recopied from a peer)', where: 'mesh.replicator' }); await retireAndRecopy(ctx, wire, 'damaged-bytes'); return; }
+  // My bytes are intact and the writer's signed chain still contradicts them. Two cases (review 1, F1):
+  //  * my lines at the point of conflict were ENDORSED by an earlier writer signature I hold (or I AM the writer): the writer signed two histories. Neither is mine to discard: the copy is kept as it
+  //    is, the version goes to the sticky named fault, and the copy keeps being served (that is how it is "offered back").
+  //  * they were never covered by any writer signature (foreign bytes): nothing endorsed them, so they are set aside and recopied.
+  if (iAmWriter || (await endorsedByWriter(ctx, wire, v.local, b.from, lines, head.lines, desc.writer))) {
+    await ctx.fault(wire, 'writer-signed-two-histories');
+    sendNak(ctx, peer, wire, head.lines, 'not-a-prefix', head.hash);
+    ctx.advertise();
+    return;
+  }
+  reportFailure({ what: 'set aside a chat copy no writer signature ever covered (recopied from a peer)', where: 'mesh.replicator' });
+  await retireAndRecopy(ctx, wire, 'unendorsed-bytes');
+}
+
+/** Was my copy, at the first line where the new batch disagrees, covered by a writer signature I hold (a saved signed point above that line whose chain value is mine)? */
+async function endorsedByWriter(ctx: RepCtx, wire: Buffer, local: Buffer, from: number, lines: Buffer[], head: number, writer: Buffer): Promise<boolean> {
+  try {
+    // walk the batch along MY chain from `from`: the first line whose chain value differs from mine is where the two histories part
+    let conflict = Math.max(0, from - 1);
+    const start = await ctx.store.hashAt(local, 0, from);
+    if (start !== null) {
+      let c = unhex(start);
+      for (let i = 0; i < lines.length && from + i < head; i++) {
+        c = chainStep(c, lines[i]);
+        if ((await ctx.store.hashAt(local, 0, from + i + 1)) !== hex(c)) { conflict = from + i; break; }
+      }
+    }
+    // any saved point above the conflict that the writer signed AND that lies on my chain proves my lines there were endorsed (a point from the contradicting history does not lie on my chain)
+    for (const pt of await ctx.heads.pointsAfter(wire, conflict)) {
+      if (pt.lines > head || !ctx.crypto.verify(writer, headMessage(wire, pt.lines, pt.hash), pt.sig)) continue;
+      if ((await ctx.store.hashAt(local, 0, pt.lines)) === hex(pt.hash)) return true;
+    }
+    return false;
+  } catch (e) {
+    if (e instanceof StoreError && e.code === 'evicted') return true; // cannot judge an evicted range: keep the copy and say so (loud) rather than discard
+    throw e;
+  }
 }
 
 /** A store call failed while applying a batch: each typed failure ends in a named status (invariant 9), never in silence and never in an ack. */

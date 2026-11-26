@@ -22,12 +22,15 @@
 // a lost frame is simply asked for again.
 import { createHash } from 'node:crypto';
 import { StoreError } from '../store';
+import { MAX_LINE_BYTES } from './wire';
+import { mkdirDurable, writeFileAtomic } from '../store/fsio';
+import * as nodePath from 'node:path';
 import type { ChatStore, Head } from '../store';
 import { unhex } from '../store/chain';
 import { realFs, type Fs } from '../store/fsio';
 import { FrameReject, type LinkFrame } from '../link';
 import { reportFailure } from '../../report-failure';
-import { ByteBudget, MAX_HOLDS_PER_SECOND, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
+import { ByteBudget, INTRO_PERIOD_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
 import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
@@ -45,6 +48,9 @@ const DEFAULT_STALL_MS = 20_000;
 const PUSH_RATE_PER_SECOND = 40;
 /** A peer whose last word is older than this is not chosen as a source (its heads may be long out of date). */
 const PEER_FRESH_MS = 10 * 60_000;
+const DEFAULT_SCRUB_MS = 30_000;
+const SCRUB_SLICE_BYTES = 4 * 1024 * 1024;
+const MAX_INTRO_ASKS_PER_FRAME = 16;
 
 export interface ReplicatorOptions {
   store: ChatStore;
@@ -61,20 +67,29 @@ export interface ReplicatorOptions {
   sourceRefill?: SourceRefill;
   discoveryMs?: number;
   stallMs?: number;
+  /** How often the replicator scrubs one slice of one version (review 1, F9); 0 turns it off. Default 30 s. */
+  scrubEveryMs?: number;
+  /** A queued step that has not finished after this many REAL milliseconds is given up as `stuck(store-call-blocked)` (default 120 s). Real time on purpose: it measures a call that never answers, not virtual time. */
+  stepLimitMs?: number;
 }
 
-const newRun = (): VRun => ({ stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set() });
+const newRun = (): VRun => ({ stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null });
 
 export class Replicator {
   readonly #o: ReplicatorOptions;
   readonly #ctx: RepCtx;
   readonly #queues = new Map<string, Promise<unknown>>();
   readonly #introAsked = new Set<string>();
+  readonly #savedFaults = new Map<string, string>();
+  readonly #adopting = new Set<string>();
+  #scrub: { cancel(): void } | null = null;
+  #scrubIdx = 0;
   readonly #directory: VersionDirectory;
   #discovery: { cancel(): void } | null = null;
   #stopped = false;
 
-  private constructor(o: ReplicatorOptions, directory: VersionDirectory) {
+  private constructor(o: ReplicatorOptions, directory: VersionDirectory, savedFaults: Map<string, string>) {
+    for (const [k, v] of savedFaults) this.#savedFaults.set(k, v);
     this.#o = o;
     this.#directory = directory;
     const clock = o.clock ?? realClock;
@@ -93,7 +108,8 @@ export class Replicator {
       readBytes: new ByteBudget(READ_BUFFER_BUDGET_BYTES), reassemblyBytes: new ByteBudget(REASSEMBLY_BUDGET_BYTES), sourceRefill: o.sourceRefill,
       peers: new Map(), runs: new Map(), counters: new Map(), reasm: new Map(), sessions: new Map(),
       run: (wire, fn) => self.queue(wire, fn),
-      runOf: (wire) => { const k = wire.toString('hex'); let r = self.#ctx.runs.get(k); if (!r) { r = newRun(); self.#ctx.runs.set(k, r); } return r; },
+      runOf: (wire) => { const k = wire.toString('hex'); let r = self.#ctx.runs.get(k); if (!r) { r = newRun(); r.fault = self.#savedFaults.get(k) ?? null; self.#ctx.runs.set(k, r); } return r; },
+      fault: (wire, reason) => self.recordFault(wire, reason),
       localOf: (wire) => self.localOf(wire),
       bump: (c) => { self.#ctx.counters.set(c, (self.#ctx.counters.get(c) ?? 0) + 1); },
       sendLive: (kind, body, to) => o.link.sendLive({ group: GROUP_LIVE, kind, body, ...(to ? { to } : {}) }),
@@ -107,26 +123,65 @@ export class Replicator {
   static async create(o: ReplicatorOptions): Promise<Replicator> {
     let directory = o.directory;
     if (!directory) { const d = new InterimDirectory(o.fs ?? realFs, o.dir, o.crypto); await d.load(); directory = d; }
-    return new Replicator(o, directory);
+    // sticky faults saved by an earlier run (F1): read back before anything else can touch a version
+    const faults = new Map<string, string>();
+    const fs = o.fs ?? realFs;
+    for (const name of await fs.readdir(nodePath.join(o.dir, 'faults'))) {
+      if (!/^[0-9a-f]{2,128}$/.test(name)) continue;
+      try { const raw = await fs.readFile(nodePath.join(o.dir, 'faults', name)); if (raw) faults.set(name, raw.toString('utf8').slice(0, 200)); } catch (cause) { reportFailure({ what: 'read a saved version fault (the version is treated as faulted)', cause, where: 'mesh.replicator' }); faults.set(name, 'fault-file-unreadable'); }
+    }
+    return new Replicator(o, directory, faults);
+  }
+  /** A sticky fault: in memory and on disk. Nothing in this folder ever clears it (F1/F4); only a person-level decision (a later piece) can. */
+  private async recordFault(wire: Buffer, reason: string): Promise<void> {
+    const k = wire.toString('hex'); const run = this.#ctx.runOf(wire);
+    if (run.fault) return;
+    run.fault = reason; this.#savedFaults.set(k, reason); this.#ctx.bump(`fault-${reason}`);
+    reportFailure({ what: `keep a chat copy as it is (${reason})`, where: 'mesh.replicator' });
+    const dir = nodePath.join(this.#o.dir, 'faults');
+    try { await mkdirDurable(this.#o.fs ?? realFs, dir); await writeFileAtomic(this.#o.fs ?? realFs, nodePath.join(dir, k), Buffer.from(reason, 'utf8')); } catch (cause) { reportFailure({ what: 'save a version fault (it stays in memory until restart)', cause, where: 'mesh.replicator' }); }
   }
 
   // ------------------------------------------------------------------ plumbing
   private queue<T>(wire: Buffer, fn: () => Promise<T>): Promise<T> {
     const k = wire.toString('hex');
-    const next = (this.#queues.get(k) ?? Promise.resolve()).catch(() => undefined /* benign: the previous step's failure was reported where it happened; it must not stop the next */).then(fn);
-    this.#queues.set(k, next.catch(() => undefined /* benign: same; the caller of `next` sees the real failure */));
+    const next = (this.#queues.get(k) ?? Promise.resolve()).then(() => this.guarded(wire, fn));
+    const tail = next.then(() => undefined, () => undefined /* benign: the step's failure goes to the caller of `next` and was reported where it happened; it must not stop the next step */);
+    this.#queues.set(k, tail);
+    // an idle version leaves no entry behind (F6): the map is bounded by the versions with work in flight
+    void tail.then(() => { if (this.#queues.get(k) === tail) this.#queues.delete(k); });
     return next;
+  }
+  /** One step of a version's queue, with a ceiling (review 1, F8): a store call that never answers ends in the named state `stuck(store-call-blocked)` and the queue moves on, instead of wedging every later step. */
+  private guarded<T>(wire: Buffer, fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      const timer = { cancel: ((): (() => void) => { const t = setTimeout(() => {
+        if (done) return;
+        done = true; this.#ctx.runOf(wire).stuck = 'store-call-blocked'; this.#ctx.bump('store-call-blocked');
+        reportFailure({ what: 'finish a step on a chat copy (the store did not answer; the step was given up)', where: 'mesh.replicator' });
+        reject(new Error('store-call-blocked'));
+      }, this.#o.stepLimitMs ?? QUEUE_STEP_LIMIT_MS); t.unref?.(); return () => clearTimeout(t); })() };
+      fn().then((v) => { if (!done) { done = true; timer.cancel(); resolve(v); } }, (e: unknown) => { if (!done) { done = true; timer.cancel(); reject(e); } });
+    });
   }
   /** Resolves when no work is queued (for tests and orderly shutdown). */
   async idle(): Promise<void> {
-    for (let i = 0; i < 50; i++) { const q = [...this.#queues.values()]; await Promise.all(q); if ([...this.#queues.values()].every((p, j) => p === q[j]) && this.#queues.size === q.length) return; }
+    for (let i = 0; i < 50; i++) { const q = [...this.#queues.values()]; await Promise.all(q); await Promise.resolve(); if (this.#queues.size === 0) return; if ([...this.#queues.values()].every((p, j) => p === q[j]) && this.#queues.size === q.length) return; }
   }
+  /** Sizes of every per-peer and per-version table, so a test (and a status screen) can see they stay bounded (F6). */
+  stateSizes(): { runs: number; queues: number; peerHeads: number; introAsked: number; reassemblyBytes: number; sessions: number } {
+    let heads = 0; for (const p of this.#ctx.peers.values()) heads += p.heads.size;
+    return { runs: this.#ctx.runs.size, queues: this.#queues.size, peerHeads: heads, introAsked: this.#introAsked.size, reassemblyBytes: this.#ctx.reassemblyBytes.used, sessions: this.#ctx.sessions.size };
+  }
+  /** The announced description of a version, or null (for tests and the service). */
+  describe(wire: Buffer): VersionDescriptor | null { return this.#directory.describe(wire); }
   /** Counters by name (never content), for tests and status. */
   counters(): Record<string, number> { return Object.fromEntries(this.#ctx.counters); }
   private peerOf(id: Buffer): PeerInfo {
     const k = id.toString('hex');
     let p = this.#ctx.peers.get(k);
-    if (!p) { p = { hex: k, id, lastSeen: this.#ctx.clock.now(), heads: new Map(), acks: new Map() }; this.#ctx.peers.set(k, p); }
+    if (!p) { p = { hex: k, id, lastSeen: this.#ctx.clock.now(), heads: new Map(), acks: new Map(), introAsks: 0, introPeriodStart: this.#ctx.clock.now(), answers: new RateLimiter(0.5, () => this.#ctx.clock.now(), 6) }; this.#ctx.peers.set(k, p); }
     return p;
   }
 
@@ -142,10 +197,30 @@ export class Replicator {
     for (const wire of this.#directory.list()) await this.adopt(wire);
     this.#directory.onChange((wire) => { void this.adopt(wire).catch((e: unknown) => reportFailure({ what: 'start copying a new chat version', cause: e, where: 'mesh.replicator' })); });
     this.hello();
+    this.armScrub();
+  }
+  /** Review 1, F9: the store finds rot past its scrub mark only when something reads it. One slice of one version is scrubbed per tick (round robin, 4 MiB at most), so a copy that rots at rest is found while peers still hold the lines. */
+  private armScrub(): void {
+    const every = this.#o.scrubEveryMs ?? DEFAULT_SCRUB_MS;
+    if (this.#stopped || every <= 0) return;
+    this.#scrub = this.#ctx.clock.setTimeout(() => { void this.scrubTick().catch((e: unknown) => reportFailure({ what: 'scrub a chat copy in the background', cause: e, where: 'mesh.replicator' })).finally(() => this.armScrub()); }, every);
+  }
+  private async scrubTick(): Promise<void> {
+    const list = this.#directory.list();
+    if (list.length === 0) return;
+    const wire = list[this.#scrubIdx++ % list.length];
+    await this.queue(wire, async () => {
+      const v = await this.localOf(wire);
+      if (!v) return;
+      const r = await this.#o.store.scrubStep(v.local, { maxBytes: SCRUB_SLICE_BYTES });
+      this.#ctx.bump('scrub-slice');
+      if (r.damagedFromLine !== null) { this.#ctx.bump('scrub-found-damage'); await checkRepair(this.#ctx, wire); }
+    });
   }
   stop(): void {
     this.#stopped = true;
     this.#discovery?.cancel();
+    this.#scrub?.cancel();
     for (const s of this.#ctx.sessions.values()) s.timer?.cancel();
     this.#ctx.sessions.clear();
     for (const r of this.#ctx.runs.values()) r.stall?.cancel();
@@ -164,8 +239,8 @@ export class Replicator {
   hello(): void {
     if (this.#stopped) return;
     for (const s of this.#ctx.sessions.values()) s.timer?.cancel();
-    this.#ctx.sessions.clear(); // WHY: "reconnect: drop all sessions and in-memory acks"; the receiver re-asks
-    for (const p of this.#ctx.peers.values()) p.acks.clear();
+    this.#ctx.sessions.clear(); // WHY: "reconnect: drop all sessions"; the receiver re-asks
+    // WHY acks are NOT wiped here any more (review 1, F2): a quiet, in-sync system must still be able to list them. An ack is valid only while the holder's latest heads agree with it (see peerAcks), and `solicitAcks` asks again.
     for (const r of this.#ctx.runs.values()) { r.rewanted.clear(); r.skip.clear(); r.lastSigned.clear(); }
     dropReassembly(this.#ctx);
     this.#introAsked.clear();
@@ -196,8 +271,8 @@ export class Replicator {
     const entries = await this.myEntries();
     this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries), ask: true }));
   }
-  private async sendHeads(to: PeerInfo | null, ask: boolean): Promise<void> {
-    const entries = await this.myEntries();
+  private async sendHeads(to: PeerInfo | null, ask: boolean, known?: HeadEntry[]): Promise<void> {
+    const entries = known ?? await this.myEntries();
     const pages = Math.max(1, Math.ceil(entries.length / HEADS_PER_PAGE));
     for (let i = 0; i < pages; i++) this.#ctx.sendLive(KIND_HEADS, headsBodyOf({ page: i, of: pages, ask: ask && i === 0, heads: entries.slice(i * HEADS_PER_PAGE, (i + 1) * HEADS_PER_PAGE) }), to?.id);
   }
@@ -228,6 +303,8 @@ export class Replicator {
   }
 
   private async onSum(peer: PeerInfo, digest: Buffer, ask: boolean): Promise<void> {
+    // F6: one tiny frame must not cost a full read of every version; a peer gets a few answers, then one every two seconds
+    if (!peer.answers.take()) { this.#ctx.bump('sum-rate-limited'); return; }
     const entries = await this.myEntries();
     if (ask) this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries), ask: false }), peer.id); // answer a hello with mine, once
     if (digestOf(entries).equals(digest)) {
@@ -243,22 +320,29 @@ export class Replicator {
       }
       return;
     }
-    await this.sendHeads(peer, true); // the summaries differ: say what I hold and ask for theirs
+    await this.sendHeads(peer, true, entries); // the summaries differ: say what I hold and ask for theirs
   }
   private async onHeads(peer: PeerInfo, b: HeadsBody): Promise<void> {
-    if (b.ask) await this.sendHeads(peer, false);
+    if (b.ask) { if (peer.answers.take()) await this.sendHeads(peer, false); else this.#ctx.bump('heads-rate-limited'); }
     const now = this.#ctx.clock.now();
+    if (now - peer.introPeriodStart > INTRO_PERIOD_MS) { peer.introPeriodStart = now; peer.introAsks = 0; }
+    let askedInFrame = 0;
     for (const e of b.heads) {
       const k = e.version.toString('hex');
+      if (!this.#directory.describe(e.version)) {
+        // F6: a version nobody announced to me costs at most an intro request (capped per frame and per period) and no stored claim beyond a small allowance
+        const ik = `${peer.hex}/${k}`;
+        if (!this.#introAsked.has(ik) && askedInFrame < MAX_INTRO_ASKS_PER_FRAME && peer.introAsks < MAX_INTRO_ASKS_PER_PERIOD) {
+          this.#introAsked.add(ik); askedInFrame++; peer.introAsks++; askIntro(this.#ctx, peer, e.version);
+          peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now }); // kept so the announcement, when it comes, can be acted on at once
+        } else this.#ctx.bump('heads-unknown-version-ignored');
+        continue;
+      }
       // a peer that now says fewer lines than it acknowledged has rolled back: its ack no longer counts (acks may fall)
       const ack = peer.acks.get(k);
       if (ack && (e.lines < ack.lines || e.state !== 'ok')) peer.acks.delete(k);
+      if (peer.heads.size >= MAX_PEER_HEADS && !peer.heads.has(k)) { this.#ctx.bump('peer-heads-full'); continue; }
       peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
-      if (!this.#directory.describe(e.version)) {
-        const ik = `${peer.hex}/${k}`;
-        if (!this.#introAsked.has(ik)) { this.#introAsked.add(ik); askIntro(this.#ctx, peer, e.version); }
-        continue;
-      }
       await this.reconsider(e.version);
     }
   }
@@ -268,11 +352,12 @@ export class Replicator {
     if (r === 'new') { await this.adopt(body.version); return; }
     if (r === 'known') return;
     if (r === 'unknown-writer') { this.#ctx.bump('intro-unknown-writer'); return; } // the roster has not arrived yet; the next heads ask again
-    if (r === 'conflict') { this.#ctx.runOf(body.version).stuck = 'directory-conflict'; reportFailure({ what: 'accept a version announcement (it contradicts the one already held)', where: 'mesh.replicator' }); return; }
+    if (r === 'conflict') { this.#ctx.bump('intro-conflict'); reportFailure({ what: 'accept a version announcement (it contradicts the one already held; the version is marked faulted)', where: 'mesh.replicator' }); return; }
     this.#ctx.bump(`intro-${r}`);
     throw new FrameReject(`intro-${r}`);
   }
   private async onNak(peer: PeerInfo, n: NakBody): Promise<void> {
+    if (!this.#directory.describe(n.version)) { this.#ctx.bump('nak-unknown-version-ignored'); return; } // F6: nothing is created for a version nobody announced
     const run = this.#ctx.runOf(n.version);
     this.#ctx.bump(`nak-${n.why}`);
     // WHY a nak never changes a copy (invariant 4/5): it is unsigned. `not-a-prefix` only makes me ask this peer for the version from line 0, where every batch is signature-checked and `append` decides.
@@ -286,7 +371,7 @@ export class Replicator {
   }
 
   // ------------------------------------------------------------------ comparing and asking
-  private async want(wire: Buffer, peer: PeerInfo, opts: { haveLines?: number; through?: number | null } = {}): Promise<void> {
+  private async want(wire: Buffer, peer: PeerInfo, opts: { haveLines?: number; through?: number | null; solicit?: boolean } = {}): Promise<void> {
     const v = await this.localOf(wire);
     if (!v) return;
     const run = this.#ctx.runOf(wire);
@@ -296,6 +381,7 @@ export class Replicator {
     try { hash = await this.#o.store.hashAt(v.local, 0, have); } catch (e) { if (!(e instanceof StoreError && e.code === 'evicted')) throw e; }
     if (hash === null) { have = 0; hash = await this.#o.store.hashAt(v.local, 0, 0); } // a chain value I cannot give is replaced by the public start
     this.#ctx.sendLive(KIND_WANT, wantBodyOf({ version: wire, haveLines: have, haveHash: unhex(hash as string), through: opts.through ?? null, intro: false }), peer.id);
+    if (opts.solicit) return; // asking a peer to confirm what it holds is not a pull
     run.pull = { peer: peer.hex, haveLines: have, at: this.#ctx.clock.now() };
     run.stall?.cancel();
     run.stall = this.#ctx.clock.setTimeout(() => { void this.stalled(wire, have); }, this.#o.stallMs ?? DEFAULT_STALL_MS);
@@ -344,6 +430,8 @@ export class Replicator {
         // ask the WRITER (or the divergent peer) from line 0 once: signed batches decide what is true, never a count
         if (!run.rewanted.has(diverged.hex)) { run.rewanted.add(diverged.hex); await this.want(wire, diverged, { haveLines: 0 }); }
       } else if (!pulls.length && allSync && anySeen) { run.diverged = null; run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
+      // a copy that was recopied (or restarted after being recopied) counts as caught up once at least one fresh peer claim exists and none of them holds more or something else (F1)
+      if (anySeen && !pulls.length && !diverged) run.caughtUp = true;
       // WHY separate: nobody claims more than I hold, so nothing is being pulled, even if some peer's (older) claim is still shorter than mine
       if (!pulls.length && !diverged && run.pull) { run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
       if (pulls.length) {
@@ -357,7 +445,7 @@ export class Replicator {
       // children waiting for this version as their parent
       for (const w of this.#directory.list()) {
         const d = this.#directory.describe(w);
-        if (d?.parent?.equals(wire) && !(await ctx.ids.current(w).then((c) => c.registered, () => true))) void this.adopt(w);
+        if (d?.parent?.equals(wire) && !this.#adopting.has(w.toString('hex')) && !(await ctx.ids.current(w).then((c) => c.registered, () => true))) { this.#adopting.add(w.toString('hex')); void this.adopt(w).finally(() => this.#adopting.delete(w.toString('hex'))); } // F6: one adoption in flight per child
       }
     } catch (e) {
       if (e instanceof StoreError && e.code === 'damaged') { await this.queue(wire, () => retireAndRecopy(ctx, wire, 'store-damaged')); return; }
@@ -373,6 +461,7 @@ export class Replicator {
     if (!lines) { run.stuck = 'refill-no-source'; return; }
     const res = await this.queue(wire, () => this.#o.store.append(local, 0, r.from, lines));
     if (res !== 'ok') { run.stuck = 'refill-rejected'; return; }
+    run.caughtUp = true; // the writer's own chat file is the authority on its own lines
     await this.queue(wire, () => checkRepair(this.#ctx, wire));
   }
 
@@ -387,18 +476,32 @@ export class Replicator {
   }
   /** Adapter entry point: append lines to a version this device is the writer of. Refuses otherwise (invariant 7). The new lines are pushed to every device. */
   async appendLocal(wire: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string }> {
+    // a line the wire cannot carry is refused BEFORE anything is written (review 1, F5): the store takes 512 MiB, a peer parses 64 MiB; a line only I could ever read is a quiet loss
+    for (const l of lines) if (l.length > MAX_LINE_BYTES) throw new Error('line-too-large');
     const out = await this.queue(wire, async () => {
       const desc = this.#directory.describe(wire);
       if (!desc) throw new Error('unknown version');
       if (!desc.writer.equals(this.#ctx.crypto.self)) throw new Error('not-the-writer');
+      const run = this.#ctx.runOf(wire);
+      // (a conflicting announcement does not stop the version's own writer: first-wins kept ITS announcement, and a paired device must not be able to freeze the writer by contradicting it)
+      if (run.fault) throw new Error(`writer-faulted-${run.fault}`);
       // a version that is announced but cannot be opened yet (a takeover's child while its parent copy is still being repaired) refuses by NAME; the caller tries again later
       const v = await this.localOf(wire);
       if (!v) throw new Error('version-not-ready');
       const head = await this.#o.store.head(v.local);
       if (repairFrom(head) !== null) throw new Error('refilling');
+      // WRITER-SIDE (review 1, F1): the writer appends only while it is provably at its own latest signed head. A fresh incarnation that has not been refilled, or any fresh peer claim of more lines
+      // of this version (or of the same count with another chain value), means this device lost lines it signed; a new line now would start a second history at the same position. Loud refusal.
+      if (v.incarnation > 0 && !run.caughtUp) throw new Error('writer-recopy-not-confirmed');
+      const wk = wire.toString('hex'); const now = this.#ctx.clock.now();
+      for (const p of this.#ctx.peers.values()) {
+        const h = p.heads.get(wk);
+        if (!h || now - h.at > PEER_FRESH_MS || h.state !== 'ok') continue;
+        if (h.lines > head.lines) throw new Error('writer-behind-peer-holds-more');
+        if (h.lines === head.lines && h.hash !== head.hash) throw new Error('writer-diverged-from-peer');
+      }
       const res = await this.#o.store.append(v.local, 0, head.lines, lines);
       if (res !== 'ok') throw new Error(`append answered ${res}`);
-      const run = this.#ctx.runOf(wire);
       if (run.pushedThrough === null) run.pushedThrough = head.lines;
       const h = await this.#o.store.head(v.local);
       return { lines: h.lines, hash: h.hash };
@@ -408,36 +511,63 @@ export class Replicator {
     return out;
   }
 
-  /** Where a version stands, in one named state with a reason. */
+  /** Where a version stands, in one named state with a reason. Sticky faults and blocked work come first and need no store call (a hung store must not hang the answer). */
   async status(wire: Buffer): Promise<VersionStatus> {
-    const ctx = this.#ctx; const run = ctx.runOf(wire);
+    // a store call that never answers must not make the answer itself hang (F8): the store half is raced against the same real-time ceiling as a queued step
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const blocked = new Promise<VersionStatus>((resolve) => { timer = setTimeout(() => resolve({ state: 'stuck', reason: 'store-call-blocked', lines: this.#ctx.runOf(wire).lastHead.lines, incarnation: this.#ctx.runOf(wire).lastHead.incarnation }), Math.min(this.#o.stepLimitMs ?? QUEUE_STEP_LIMIT_MS, 10_000)); timer.unref?.(); });
+    try { return await Promise.race([this.statusNow(wire), blocked]); } finally { clearTimeout(timer); }
+  }
+  private async statusNow(wire: Buffer): Promise<VersionStatus> {
+    const ctx = this.#ctx;
+    if (!this.#directory.describe(wire)) return { state: 'unknown', reason: null, lines: 0, incarnation: 0 };
+    const run = ctx.runOf(wire);
+    const early = (state: VersionStatus['state'], reason: string): VersionStatus => ({ state, reason, lines: run.lastHead.lines, incarnation: run.lastHead.incarnation });
+    const conflict = this.#directory.conflict?.(wire);
+    if (conflict) return early('faulted', 'directory-conflict');
+    if (run.fault) return early('faulted', run.fault);
+    if (run.stuck) return early('stuck', run.stuck);
     const cur = await ctx.ids.current(wire).catch(() => null /* benign: a version the store cannot open yet is reported below as having no lines; the state then comes from the other fields */);
     let lines = 0; let refilling = false;
     if (cur?.registered) { try { const h = await this.#o.store.head(cur.local); lines = h.lines; refilling = repairFrom(h) !== null; } catch (e) { if (!(e instanceof StoreError)) throw e; } }
     const mk = (state: VersionStatus['state'], reason: string | null = null): VersionStatus => ({ state, reason, lines, incarnation: cur?.incarnation ?? 0 });
-    if (!this.#directory.describe(wire)) return mk('unknown');
-    if (run.stuck) return mk('stuck', run.stuck);
     if (run.diverged) return mk('diverged', run.diverged);
     if (refilling || run.refill) return mk('refilling');
     if (run.retiredRecopy) return mk('retired-recopy');
-    if (run.pull) return mk('pulling');
-    if ([...ctx.sessions.values()].some((s) => s.wire.equals(wire))) return mk('serving');
-    const wk = wire.toString('hex');
-    const known = [...ctx.peers.values()].filter((p) => p.heads.has(wk));
+    if (run.pull) return mk('pulling', run.skip.size > 0 ? 'peers-not-answering' : null);
+    if ([...ctx.sessions.values()].some((s) => s.wire.equals(wire))) return mk('serving', run.serveWait ? 'waiting-for-read-memory' : null);
+    const wk = wire.toString('hex'); const now = ctx.clock.now();
+    const known = [...ctx.peers.values()].flatMap((p) => { const h = p.heads.get(wk); return h ? [h] : []; });
     if (known.length === 0) return mk('comparing');
-    // in sync = I hold everything any peer has claimed (a peer that claims fewer is behind me, which is its status to name, not mine)
-    return known.every((p) => { const h = p.heads.get(wk); return h && h.lines <= lines; }) ? mk('in-sync') : mk('comparing');
+    // F7: `in-sync` is only claimed from FRESH claims, none of which says the peer is repairing or cannot be compared with my chain
+    const fresh = known.filter((h) => now - h.at <= PEER_FRESH_MS);
+    if (fresh.length === 0) return mk('stale', 'no peer has said anything recently');
+    if (fresh.some((h) => h.state !== 'ok')) return mk('peer-repairing');
+    for (const h of fresh) {
+      if (h.lines <= lines && cur?.registered) {
+        try { await this.#o.store.hashAt(cur.local, 0, h.lines); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') return mk('uncomparable', 'my chain value at a peer\'s count was evicted'); throw e; }
+      }
+    }
+    // in sync = I hold everything any fresh claim names (a peer that claims fewer is behind me, which is its status to name, not mine)
+    return fresh.every((h) => h.lines <= lines) ? mk('in-sync') : mk('comparing');
   }
 
-  /** Signed statements by other devices that they hold the first `lines` lines of `wire`, in the shape of an eviction proof's acks. Peers that are repairing are left out. */
+  /** Signed statements by other devices that they hold the first `lines` lines of `wire`, in the shape of an eviction proof's acks.
+   *  CONTRACT (review 1, F2): an ack is listed only while that device's own latest heads agree with it (fresh, `ok`, at least as many lines, and the same chain value where the counts are equal), so a
+   *  listed ack means "this device held exactly those lines at a time no earlier than its last heads". It is a statement SIGNED BY THAT DEVICE: another device of the set can sign anything for itself. */
   peerAcks(wire: Buffer): PeerAck[] {
-    const wk = wire.toString('hex'); const out: PeerAck[] = [];
+    const wk = wire.toString('hex'); const out: PeerAck[] = []; const now = this.#ctx.clock.now();
     for (const p of this.#ctx.peers.values()) {
       const a = p.acks.get(wk); const h = p.heads.get(wk);
-      if (!a || (h && h.state !== 'ok')) continue;
+      if (!a || !h || h.state !== 'ok' || now - h.at > PEER_FRESH_MS) continue;
+      if (h.lines < a.lines || (h.lines === a.lines && h.hash !== a.hash)) continue;
       out.push({ holder: p.hex, version: wk, lines: a.lines, hash: a.hash, signature: a.sig.toString('hex') });
     }
     return out;
+  }
+  /** Ask every peer to confirm what it holds of `wire` (each answers with a signed ack of its head when it is level with me). Answers arrive through the normal ack path. */
+  async solicitAcks(wire: Buffer): Promise<void> {
+    for (const p of this.#ctx.peers.values()) await this.want(wire, p, { solicit: true });
   }
   /** Seam S9 (design): make sure the bodies of this version are present. NOT BUILT: restoring evicted bodies belongs to the storage policy; this only says whether they are readable. */
   async ensureBody(wire: Buffer): Promise<'present' | 'evicted'> {

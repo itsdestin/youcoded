@@ -47,7 +47,7 @@ export class VirtualClock implements Clock {
 }
 
 export interface WDev { name: string; id: DeviceIdentity; dir: string; carrier: MemoryCarrier; link: Link; store: ChatStore; rep: Replicator; roster: RosterStore }
-export interface WorldOptions { fsFor?: (name: string) => Fs | undefined; storeOpts?: StoreOptions; discoveryMs?: number; stallMs?: number; autoStart?: boolean }
+export interface WorldOptions { scrubEveryMs?: number; stepLimitMs?: number; fsFor?: (name: string) => Fs | undefined; storeOpts?: StoreOptions; discoveryMs?: number; stallMs?: number; autoStart?: boolean }
 
 const secret = newSetSecret();
 
@@ -79,7 +79,7 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
     });
     await link.start([]);
     rep = await Replicator.create({
-      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs,
+      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs, scrubEveryMs: o.scrubEveryMs ?? 0, stepLimitMs: o.stepLimitMs,
       crypto: {
         self: ids[n].deviceId, sign: (m) => signWith(ids[n], m), knows: (d) => roster.signKeyFor(d) !== undefined && !roster.isRemoved(d),
         verify: (d, m, s) => { const k = roster.signKeyFor(d); return !!k && verifySig(k, m, s); },
@@ -130,6 +130,8 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
       }
       return null;
     },
+    /** `localOf` that must exist. */
+    async local(n: string, v: Buffer): Promise<Buffer> { const l = await world.localOf(n, v); if (!l) throw new Error(`${n} holds no copy of the version`); return l; },
     async heads(n: string, v: Buffer): Promise<{ lines: number; hash: string; conv: string }> {
       const local = await world.localOf(n, v);
       if (!local) return { lines: 0, hash: '', conv: '' };
