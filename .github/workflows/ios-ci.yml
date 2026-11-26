@@ -58,6 +58,9 @@ jobs:
           [ -n "$NAME" ] || NAME="$(xcrun simctl list devices available | grep -oE 'iPhone [0-9A-Za-z ]+' | head -1 | sed 's/ *$//')"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "Using simulator: $NAME"
+      # WHY signed "to run locally" (identity "-") rather than unsigned: the iPhone's Keychain refuses an app with no
+      # signature at all, and the app keeps its secrets key there, so an unsigned build can only show "couldn't start".
+      # This signature needs no Apple account and is what Xcode itself uses for a simulator.
       - name: Build, unit-test and start the app
         run: |
           mkdir -p "$RUNNER_TEMP/ios-shots"
@@ -67,7 +70,7 @@ jobs:
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -resultBundlePath "$RUNNER_TEMP/ios-result.xcresult" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
             2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | grep -vE '^\s*(CompileC|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|CpResource|Copy|builtin-|cd |export |/Applications/Xcode|\s*$)' | tail -400
       - name: Collect the app's logs
         if: always()

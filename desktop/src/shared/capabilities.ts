@@ -62,6 +62,12 @@ export interface Capabilities {
    *  computer's own window — the browser runs there, and its live picture and controls are not sent to phones in this
    *  release (spec docs/active/specs/2026-10-13-assistant-browser-design.md §3). */
   assistantBrowser: boolean;
+  /** This device can start other programs: Claude Code sessions, the terminal, git, shell commands, local models.
+   *  False ONLY on the iPhone app's own backend (2026-11-25, card #89): iOS forbids an app from starting any program,
+   *  so the assistant there is the app's own engine with its file tools, and anything that is "run a program" is not
+   *  offered. WHY the default is TRUE, unlike every other key here: a host that says nothing is older than the iPhone
+   *  app, so it is a computer or an Android phone, and both can. (Backend twin: headless/host-bridge.ts canRunPrograms.) */
+  programs: boolean;
 }
 
 /** What the computer's own window can do. The preload copies this and overrides `nativeSessions` from the
@@ -83,6 +89,7 @@ export const DESKTOP_WINDOW_CAPABILITIES: Capabilities = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: true,
+  programs: true,
 };
 
 /** What a screen watching a computer over the network can do (a phone's browser, or the Android app paired to a
@@ -111,6 +118,8 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   // lines itself. A host WITH a record says true explicitly in its handshake (remote-server.ts), never by this default (review fix, R5-4a F3).
   sessionRecord: false,
   assistantBrowser: false,
+  // TRUE on purpose (see the key's comment): an older host is never an iPhone.
+  programs: true,
 };
 
 /** What the Android app's own page can do on the phone's own backend (not paired to a computer).
@@ -135,6 +144,31 @@ export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: false,
+  programs: true,
+};
+
+/** What the iPhone app's own page can do on the phone's own backend (not paired to a computer).
+ *  WHY these values (2026-11-25, card #89): the same backend as Android, minus everything that is a separate program
+ *  (`programs`): no git, no terminal to read, no ripgrep for searching inside files. Sent in the local handshake
+ *  (remote-server.ts authOkMessage) when the host app says it is an iPhone. */
+export const IOS_LOCAL_CAPABILITIES: Capabilities = {
+  nativeWindows: false,
+  openInOs: false,
+  openExternal: true,
+  git: false,
+  themePictures: true,
+  themeRigs: false,
+  terminalTransport: 'text',
+  terminalScreenRead: false,
+  nativeSessions: true,
+  chatgptAccount: true,
+  buddy: false,
+  projectWrites: true,
+  contentSearch: false,
+  liveHandoff: true,
+  sessionRecord: true,
+  assistantBrowser: false,
+  programs: false,
 };
 
 const KEYS = Object.keys(REMOTE_SCREEN_CAPABILITIES) as Array<keyof Capabilities>;

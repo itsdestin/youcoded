@@ -43,7 +43,7 @@ import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUC
 import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
 import { prepareProjectInstructions, type ProjectInstructionFile } from './injection/project-instructions';
 import { resolveProfile, effectiveContextForModel, IMAGE_LIMITS_DEFAULT, type CapabilityProfile, type ProfileProviderType, type ImageLimits } from './capability-profile';
-import { CORE_TOOLS } from './tools';
+import { deviceTools } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
 import { timeSessionSetup } from '../session-setup-timing';
 import { createSkillCatalog, SkillNotFound, type SkillCatalog } from './skills/skill-catalog';
@@ -2940,7 +2940,7 @@ export class NativeSessionHost extends EventEmitter {
       // same convention as `shells` above.
       ...(this.adminPasswordEnvValue ? { adminPasswordEnv: this.adminPasswordEnvValue } : {}),
       ...(this.adminPasswordService ? { adminPasswordService: this.adminPasswordService } : {}),
-      tools: CORE_TOOLS,
+      tools: deviceTools(),
       // Task 4 (plan 1c) — this project folder's roster, read live off the
       // catalog's in-memory state at every roster()/list()/resolve() call
       // (catalog.ts's own contract), never a snapshot frozen here. Callers
@@ -3875,7 +3875,7 @@ export class NativeSessionHost extends EventEmitter {
         // TOOLS: the spawn-time effective list, filtered from CORE_TOOLS.
         // Task stays absent by definition (depth 1); Bash companions are usable
         // only when Bash is in that definition, never through an unrelated grant.
-        tools: CORE_TOOLS.filter((t) => allowed.has(t.name)),
+        tools: deviceTools().filter((t) => allowed.has(t.name)),
         // G-1: children get their OWN registry; their runs die with the child
         // under 'conversation-closed' when destroyChildrenOf tears them down.
         shells: this.shellsFor(childId),

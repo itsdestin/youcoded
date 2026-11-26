@@ -48,6 +48,16 @@ export function hostOs(): 'android' | 'ios' {
   return (process.platform as string) === 'ios' ? 'ios' : 'android';
 }
 
+/** Can this device start other programs at all (Claude Code, a terminal, git, a shell command)?
+ *  WHY this exists (2026-11-25, iPhone app, card #89): iOS forbids an app from starting any program, so on an
+ *  iPhone the backend runs alone inside the app. Everything that is "the app runs a program" — Claude Code
+ *  sessions, the terminal, git, shell commands, local models — cannot exist there, and each of those features asks
+ *  this ONE question instead of guessing. True on every computer and on Android (which bundles its programs).
+ *  The page learns the same answer as `capabilities.programs` (shared/capabilities.ts). */
+export function canRunPrograms(): boolean {
+  return process.env.YOUCODED_HOST_OS !== 'ios' && (process.platform as string) !== 'ios';
+}
+
 function connect(): Promise<net.Socket | null> {
   if (socket) return Promise.resolve(socket);
   if (connecting) return connecting;

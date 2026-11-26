@@ -605,6 +605,7 @@ const DESKTOP_WINDOW_CAPABILITIES = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: true,
+  programs: true,
 } as const;
 // <<< GENERATED-CAPABILITIES
 

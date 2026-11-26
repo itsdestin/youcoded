@@ -7,6 +7,7 @@
 // dir + .claude (async, for the context UI). Production now supplies the
 // asynchronously captured ancestor inventory; the sync reader remains for
 // legacy single-file callers and Claude Code context compatibility.
+import { canRunPrograms } from '../headless/host-bridge';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFile, execFileSync } from 'child_process';
@@ -200,6 +201,9 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
         ENV_OPEN,
         `Working directory: ${i.cwd}`,
         `Platform: ${process.platform} (${process.arch})`,
+        // WHY said outright (2026-11-25, iPhone app): the model's habit is to reach for a shell or tell the person to
+        // run a command. On an iPhone neither exists, and saying so once stops both.
+        ...(canRunPrograms() ? [] : ['This device is an iPhone. It cannot run shell commands, git or any other program, and neither can the person using it here. Work with the file and web tools; do not ask them to run commands.']),
         `Date: ${new Date().toDateString()}`,
         i.gitSnapshot ?? gitSnapshot(i.cwd),
         `YouCoded version: ${i.appVersion}`,

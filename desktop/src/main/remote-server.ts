@@ -25,7 +25,8 @@ import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import { VITE_DEV_PORT } from '../shared/ports';
-import { ANDROID_LOCAL_CAPABILITIES, PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
+import { ANDROID_LOCAL_CAPABILITIES, IOS_LOCAL_CAPABILITIES, PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
+import { hostOs } from './headless/host-bridge';
 import { isOldFillClient, CLOSE_OLD_CLIENT, OLD_APP_REASON, REFRESH_NOTICE } from '../shared/fill-protocol';
 import { createSessionChatState, serializeChatState } from '../renderer/state/chat-types';
 import type { NativeSendResult } from '../shared/types';
@@ -192,7 +193,8 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     sessionNaming: true,
     protocolVersion: PROTOCOL_VERSION,
     capabilities: {
-      ...(local ? ANDROID_LOCAL_CAPABILITIES : REMOTE_SCREEN_CAPABILITIES),
+      // The phone app's own page gets its phone's set: an iPhone cannot start programs (shared/capabilities.ts).
+      ...(local ? (hostOs() === 'ios' ? IOS_LOCAL_CAPABILITIES : ANDROID_LOCAL_CAPABILITIES) : REMOTE_SCREEN_CAPABILITIES),
       sessionRecord: true,
       nativeSessions: process.env.YOUCODED_NATIVE !== '0',
       // WHY: account visibility belongs to the host, not the transport. The local

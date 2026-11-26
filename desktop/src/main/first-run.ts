@@ -7,6 +7,7 @@ import { returnToApp } from './headless/host-bridge';
 // WHY: first launch and "Sign in again" open Claude's login through the same function (1.3.4 bug:
 // two copies of these steps drifted and the newer one broke in the installed app).
 import { openClaudeLogin, NO_LOGIN_LINK_MESSAGE } from './claude-sign-in';
+import { canRunPrograms } from './headless/host-bridge';
 import {
   FirstRunState,
   FirstRunStep,
@@ -384,6 +385,10 @@ export class FirstRunManager extends EventEmitter {
       // 2026-10-02): built-in skills, syncing and the Git panel need it.
     ];
 
+    // WHY (2026-11-25, iPhone app): an iPhone cannot install or run Git, Node or Claude Code at all, so there is
+    // nothing to install and nothing to wait for; setup goes straight on to choosing an assistant.
+    if (!canRunPrograms()) installable.length = 0;
+
     for (const { name, install, detect, label } of installable) {
       const prereq = this.state.prerequisites.find((p) => p.name === name);
       if (prereq?.status === 'installed') continue;
@@ -435,7 +440,7 @@ export class FirstRunManager extends EventEmitter {
     // Claude Code (and, for most people, Node) was not installed above; mark
     // them so progress can reach the end and the checklist does not wait on
     // them (FirstRunView hides skipped rows).
-    for (const name of ['claude', 'node']) {
+    for (const name of canRunPrograms() ? ['claude', 'node'] : ['claude', 'node', 'git']) {
       const p = this.state.prerequisites.find((q) => q.name === name);
       if (p && p.status !== 'installed') this.updatePrereq(name, { status: 'skipped' });
     }

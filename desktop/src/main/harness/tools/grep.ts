@@ -7,6 +7,8 @@ import { defineTool, SEARCH_TIMEOUT_MS } from './registry';
 import { resolveP, toPosix, shellCwdMissHint, lunaPathRefused } from './guards';
 import { CREDENTIAL_EXCLUDE_GLOBS } from './credential-paths';
 import type { ResultBounds } from './types';
+import { canRunPrograms } from '../../headless/host-bridge';
+import { inProcessSearch } from './in-process-search';
 
 /** The ripgrep this install ships. WHY lazy, and the override (2026-10-14, Android clean rebuild): the Android app
  *  runs this backend with its own bundled rg (YOUCODED_RG_PATH), and `@vscode/ripgrep` throws at IMPORT on a
@@ -380,7 +382,7 @@ export const GrepTool = defineTool({
       //     ambient cwd (the original PR #172 fix; still correct).
       //  2. `resolveRgPath()` — rewrite an inside-asar rgPath to the unpacked
       //     binary (the ACTUAL root cause; see resolveRgPath above).
-      const rgBin = resolveRgPath();
+      const rgBin = canRunPrograms() ? resolveRgPath() : '(in-app search)';
       // spawn() throws SYNCHRONOUSLY when the command path or cwd has a
       // non-directory prefix (e.g. an inside-asar binary path). That throw happens
       // before the 'error' handler below can attach, so it must be caught here —
@@ -396,7 +398,12 @@ export const GrepTool = defineTool({
         // stdin input that would never arrive, hanging every default Grep
         // call. Explicit path/absolute targets never hit this (rg only applies
         // the heuristic when no path is given), so this is safe for those too.
-        child = spawn(rgBin, rgArgs, { cwd: ctx.cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        // WHY the second branch (2026-11-25, iPhone app): an iPhone cannot start ripgrep (or any program), so the same
+        // search runs inside the backend and answers in ripgrep's own output shape (in-process-search.ts). Everything
+        // below — caps, notes, error wording — is one path for both.
+        child = canRunPrograms()
+          ? spawn(rgBin, rgArgs, { cwd: ctx.cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+          : inProcessSearch(rgArgs, ctx.cwd);
       } catch (e: any) {
         resolve({ text: `Grep failed: could not start ripgrep (${e?.message ?? e}; rg=${rgBin}; cwd=${ctx.cwd}).`, isError: true });
         return;
