@@ -26,11 +26,11 @@ export const PAYLOAD_BUDGET_BYTES = 640 * 1024;
 /** One line larger than the budget travels alone, cut into parts of this size. */
 export const PART_BYTES = 512 * 1024;
 /** The most a single reassembled line may be (the store caps one append call too). */
-export const MAX_LINE_BYTES = 64 * 1024 * 1024;
-export const MAX_PARTS = Math.ceil(MAX_LINE_BYTES / PART_BYTES);
-export const MAX_HEADS_PER_PAGE = 2000;
-export const MAX_VERSION_ID_BYTES = 64;
-export const MAX_PAGES = 64;
+const MAX_LINE_BYTES = 64 * 1024 * 1024;
+const MAX_PARTS = Math.ceil(MAX_LINE_BYTES / PART_BYTES);
+const MAX_HEADS_PER_PAGE = 2000;
+const MAX_VERSION_ID_BYTES = 64;
+const MAX_PAGES = 64;
 
 export type NakWhy = 'gap' | 'evicted' | 'not-a-prefix' | 'unavailable' | 'disk-full' | 'unknown-version';
 const NAK_WHYS: readonly NakWhy[] = ['gap', 'evicted', 'not-a-prefix', 'unavailable', 'disk-full', 'unknown-version'];

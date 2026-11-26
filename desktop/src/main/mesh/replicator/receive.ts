@@ -14,6 +14,7 @@
 // loudly (`chain-mismatch`) and the version is re-asked for from line 0, whose starting value is public (the seed).
 import { chainStep, hex, unhex } from '../store/chain';
 import { StoreError } from '../store';
+import { isDiskFull } from '../store/storeutil';
 import type { AppendResult, Head } from '../store';
 import { FrameReject, FrameWait } from '../link';
 import { reportFailure } from '../../report-failure';
@@ -29,7 +30,7 @@ export function sendNak(ctx: RepCtx, peer: PeerInfo, wire: Buffer, at: number, w
   ctx.sendLive(KIND_NAK, nakBodyOf({ version: wire, at, why, hashAtYourCount: mine ? unhex(mine) : null }), peer.id);
 }
 
-export async function sendAck(ctx: RepCtx, peer: PeerInfo, wire: Buffer, local: Buffer): Promise<void> {
+async function sendAck(ctx: RepCtx, peer: PeerInfo, wire: Buffer, local: Buffer): Promise<void> {
   const h = await ctx.store.head(local);
   const raw = unhex(h.hash);
   ctx.sendLive(KIND_ACK, ackBodyOf({ version: wire, lines: h.lines, hash: raw, sig: ctx.crypto.sign(ackMessage(ctx.crypto.self, wire, h.lines, raw)) }), peer.id);
@@ -122,7 +123,9 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   // 5. keep the signed point (a non-writer needs it to serve; the writer signs on demand)
   if (!iAmWriter) {
     let span = 0; for (const l of lines) span += l.length;
-    const kept = await ctx.heads.add(wire, { lines: b.head.lines, hash: b.head.hash, sig: b.head.sig, spanBytes: span > 0xfffffffe ? UNKNOWN_SPAN : span });
+    // WHY the catch: this file is a write too, and a full disk fails it BEFORE the store is touched; it must end the same way (no ack, a nak, the named status), not as an unnamed handler error
+    let kept: Awaited<ReturnType<typeof ctx.heads.add>>;
+    try { kept = await ctx.heads.add(wire, { lines: b.head.lines, hash: b.head.hash, sig: b.head.sig, spanBytes: span > 0xfffffffe ? UNKNOWN_SPAN : span }); } catch (e) { await storeFailed(ctx, peer, wire, e, b.from); return; }
     if (kept === 'conflict') { run.diverged = 'writer-signed-two-histories'; ctx.bump('writer-equivocation'); throw new FrameReject('writer-equivocation'); }
   }
   // 6. append, and every outcome of it
@@ -161,7 +164,7 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
 /** A store call failed while applying a batch: each typed failure ends in a named status (invariant 9), never in silence and never in an ack. */
 async function storeFailed(ctx: RepCtx, peer: PeerInfo, wire: Buffer, e: unknown, at: number): Promise<void> {
   const run = ctx.runOf(wire);
-  const code = e instanceof StoreError ? e.code : 'unknown';
+  const code = e instanceof StoreError ? e.code : isDiskFull(e) ? 'disk-full' : 'unknown';
   if (code === 'disk-full') {
     run.stuck = 'disk-full'; ctx.bump('disk-full');
     sendNak(ctx, peer, wire, at, 'disk-full');

@@ -37,7 +37,7 @@ import { askIntro, dropReassembly, receiveLines, sendNak } from './receive';
 import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
 import { onAck, onWant, pushNew } from './serve';
 import { SignedHeads } from './signed-heads';
-import { headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, parseAckBody, parseHeadsBody, parseIntroBody, parseLinesBody, parseNakBody, parseSumBody, parseWantBody, REPLICATOR_KINDS, sumBody, wantBodyOf, type AdvertisedState, type HeadEntry, type NakBody, type HeadsBody } from './wire';
+import { GROUP_LIVE, headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, parseAckBody, parseHeadsBody, parseIntroBody, parseLinesBody, parseNakBody, parseSumBody, parseWantBody, REPLICATOR_KINDS, sumBody, wantBodyOf, type AdvertisedState, type HeadEntry, type NakBody, type HeadsBody } from './wire';
 
 const HEADS_PER_PAGE = 500;
 const DEFAULT_DISCOVERY_MS = 60_000;
@@ -96,7 +96,7 @@ export class Replicator {
       runOf: (wire) => { const k = wire.toString('hex'); let r = self.#ctx.runs.get(k); if (!r) { r = newRun(); self.#ctx.runs.set(k, r); } return r; },
       localOf: (wire) => self.localOf(wire),
       bump: (c) => { self.#ctx.counters.set(c, (self.#ctx.counters.get(c) ?? 0) + 1); },
-      sendLive: (kind, body, to) => o.link.sendLive({ group: 'rep.live', kind, body, ...(to ? { to } : {}) }),
+      sendLive: (kind, body, to) => o.link.sendLive({ group: GROUP_LIVE, kind, body, ...(to ? { to } : {}) }),
       want: (wire, peer, opts) => self.want(wire, peer, opts),
       reconsider: (wire) => self.reconsider(wire),
       advertise: () => { void self.broadcastHeads().catch((e: unknown) => reportFailure({ what: 'tell the other devices what this device holds', cause: e, where: 'mesh.replicator' })); },
@@ -180,7 +180,7 @@ export class Replicator {
   private async myEntries(): Promise<HeadEntry[]> {
     const out: HeadEntry[] = [];
     for (const wire of this.#directory.list().sort(Buffer.compare)) {
-      const cur = await this.#ctx.ids.current(wire).catch(() => null);
+      const cur = await this.#ctx.ids.current(wire).catch(() => null /* benign: an id the store cannot answer for yet is simply not advertised; the next hello asks again */);
       if (!cur || !cur.registered) continue;
       let h: Head;
       try { h = await this.#o.store.head(cur.local); } catch (e) { if (!(e instanceof StoreError)) throw e; continue; }
@@ -324,7 +324,7 @@ export class Replicator {
       const wk = wire.toString('hex');
       const head = await this.#o.store.head(v.local);
       const from = repairFrom(head);
-      const mine: HeadView = from === null ? { lines: head.lines, hash: head.hash, state: 'ok' } : { lines: from, hash: (await this.#o.store.hashAt(v.local, 0, from).catch(() => null)) ?? head.hash, state: 'refilling' };
+      const mine: HeadView = from === null ? { lines: head.lines, hash: head.hash, state: 'ok' } : { lines: from, hash: (await this.#o.store.hashAt(v.local, 0, from).catch(() => null /* benign: no chain value at that count (evicted): my own head's value stands in, which only makes this comparison more cautious */)) ?? head.hash, state: 'refilling' };
       const now = ctx.clock.now();
       const pulls: PeerInfo[] = []; let diverged: PeerInfo | null = null; let anySeen = false; let allSync = true;
       for (const p of ctx.peers.values()) {
@@ -410,7 +410,7 @@ export class Replicator {
   /** Where a version stands, in one named state with a reason. */
   async status(wire: Buffer): Promise<VersionStatus> {
     const ctx = this.#ctx; const run = ctx.runOf(wire);
-    const cur = await ctx.ids.current(wire).catch(() => null);
+    const cur = await ctx.ids.current(wire).catch(() => null /* benign: a version the store cannot open yet is reported below as having no lines; the state then comes from the other fields */);
     let lines = 0; let refilling = false;
     if (cur?.registered) { try { const h = await this.#o.store.head(cur.local); lines = h.lines; refilling = repairFrom(h) !== null; } catch (e) { if (!(e instanceof StoreError)) throw e; } }
     const mk = (state: VersionStatus['state'], reason: string | null = null): VersionStatus => ({ state, reason, lines, incarnation: cur?.incarnation ?? 0 });

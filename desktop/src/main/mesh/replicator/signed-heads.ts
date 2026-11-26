@@ -22,10 +22,10 @@ export interface Point { lines: number; hash: Buffer; sig: Buffer; spanBytes: nu
 export const RECORD_BYTES = 112;
 export const UNKNOWN_SPAN = 0xffffffff;
 export const THIN_AT = 256;
-export const KEEP_EVERY_LINES = 32;
-export const KEEP_EVERY_BYTES = 64 * 1024;
+const KEEP_EVERY_LINES = 32;
+const KEEP_EVERY_BYTES = 64 * 1024;
 /** Most points kept per version after a thinning; a version this long needs a coarser rule (loud: `add` refuses with 'full' rather than grow without bound). */
-export const MAX_POINTS = 1 << 16;
+const MAX_POINTS = 1 << 16;
 
 function encodeRecord(p: Point): Buffer {
   const b = Buffer.alloc(RECORD_BYTES);
