@@ -29,6 +29,9 @@ export async function scrubAll(ctx: RepCtx, local: Buffer): Promise<number | nul
 export async function retireAndRecopy(ctx: RepCtx, wire: Buffer, why: string): Promise<void> {
   const run = ctx.runOf(wire);
   const cur = await ctx.ids.current(wire);
+  // Nothing registered at the current incarnation: the copy that was found damaged has already been retired and replaced under us (the store retired it, or another step did). There is nothing to
+  // set aside, and marking the NEXT, never-registered incarnation retired would skip it and leave two live copies (fuzz seed 605068).
+  if (!cur.registered) { ctx.bump('retire-already-done'); await ctx.reconsider(wire); return; }
   if (cur.registered) {
     try { await ctx.store.setAsideDamaged(cur.local); } catch (e) {
       // an id that is already retired answers the same: idempotent. Anything else is a real failure and stays loud.

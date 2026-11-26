@@ -10,6 +10,14 @@ const START = Number(process.env.MESH_REPLICATOR_FUZZ_START ?? 1);
 const LONG = N > 0;
 const SEEDS = LONG ? N : 10;
 
+// Seeds that once failed, kept as regression tests (each takes about a second): 605068 two live incarnations after an out-of-band retire raced a step; 616864 and 505206 an in-sync claim with
+// lines missing; 601614 a serve session still open at the end; 300584 a second history after the only peer heard was repairing; 300026 a recopy that finished by forking.
+describe('replicator fuzz: seeds that once failed', () => {
+  for (const seed of [605068, 616864, 505206, 601614, 300584, 300026, 400382, 400398, 400712]) {
+    it(`seed ${seed} passes`, async () => { await runSeed(seed); }, 300_000);
+  }
+});
+
 describe('replicator fuzz', () => {
   it(`${SEEDS} seeds from ${START}: prefix of the oracle, in-sync means complete, nothing acknowledged is silently lost, nothing parked`, async () => {
     const ops: Record<string, number> = {}; const excuses: Record<string, number> = {};

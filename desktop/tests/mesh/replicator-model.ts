@@ -190,7 +190,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       }
       await world.elapse(30_000, 10_000, true);
       // WHY also the status: a rotted copy has the same head as a healthy one; "equal heads" alone would stop waiting before its repair ran
-      const agree = await Promise.all(vs.map(async (v) => { const hs = await Promise.all(NAMES.map((n) => world.heads(n, v))); const sts = await Promise.all(NAMES.map((n) => world.devs[n].rep.status(v))); return hs.every((h) => h.hash === hs[0].hash && h.lines === (oracle.get(v.toString('hex'))?.length ?? -1)) && sts.every((x) => x.state !== 'refilling' && x.state !== 'pulling' && x.state !== 'retired-recopy'); }));
+      const agree = await Promise.all(vs.map(async (v) => { const hs = await Promise.all(NAMES.map((n) => world.heads(n, v))); const sts = await Promise.all(NAMES.map((n) => world.devs[n].rep.status(v))); return hs.every((h) => h.hash === hs[0].hash && h.lines === (oracle.get(v.toString('hex'))?.length ?? -1)) && sts.every((x) => x.state !== 'refilling' && x.state !== 'pulling' && x.state !== 'retired-recopy' && x.state !== 'serving'); }));
       if (agree.every(Boolean)) break;
     }
     await world.settle();
@@ -208,9 +208,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         if (dmg !== Infinity) readable = Math.min(readable, dmg);
         const got = readable > 0 ? await dev.store.read(local, 0, 0, readable).catch(() => 'unreadable' as const) : [];
         if (got === 'unreadable') { if (st.state === 'in-sync') { let firstBad = -1; for (let i = 0; i < readable; i++) { const r1 = await dev.store.read(local, 0, i, i + 1).catch(() => 'bad'); if (r1 === 'bad') { firstBad = i; break; } } fail(`${n} reads corrupt (first bad line ${firstBad}) but says in-sync (P3/P4) head=${JSON.stringify(h)} counters=${JSON.stringify(dev.rep.counters())}`); }; }
-        else if (got !== 'evicted') for (let i = 0; i < readable; i++) if (!got[i].equals(O[i])) fail(`${n} line ${i} of ${v.toString('hex').slice(0, 6)} (version #${vs.indexOf(v)}, writer ${writer.get(v.toString('hex'))}, oracle ${O.length}, holds ${h.lines}) differs from what the writer appended (P1): got ${got[i].toString().slice(0, 70)} want ${O[i].toString().slice(0, 70)} counters ${JSON.stringify(dev.rep.counters())}`);
+        else if (got !== 'evicted') for (let i = 0; i < readable; i++) if (!got[i].equals(O[i])) fail(`${n} line ${i} of ${v.toString('hex').slice(0, 6)} (version #${vs.indexOf(v)}, writer ${writer.get(v.toString('hex'))}, oracle ${O.length}, holds ${h.lines}) differs from what the writer appended (P1): got ${got[i].toString().slice(0, 70)} want ${O[i].toString().slice(0, 70)} counters ${JSON.stringify(dev.rep.counters())} incarnations ${(await Promise.all([0, 1, 2, 3].map(async (k) => `${k}:` + (await world.devs[writer.get(v.toString('hex')) as string].store.head(incarnationId(v, k)).then((x) => `${x.lines}L dmg=${x.damagedFromLine} rb=${JSON.stringify(x.rolledBack)}`, (e: { code?: string }) => e.code ?? 'err')))) ).join(' ')}`);
         if (st.state === 'in-sync') {
-          if (h.lines !== O.length || readable !== h.lines) fail(`${n} says in-sync but holds ${h.lines}/${O.length} lines, readable ${readable} (P2)`);
+          if (h.lines !== O.length || readable !== h.lines) fail(`${n} says in-sync but holds ${h.lines}/${O.length} lines, readable ${readable} (P2); version #${vs.indexOf(v)} writer ${writer.get(v.toString('hex'))} holds ${(await Promise.all(NAMES.map(async (x) => `${x}:${(await world.heads(x, v)).lines}/${(await world.devs[x].rep.status(v)).state}`))).join(' ')} peers ${JSON.stringify(dev.rep.peerView(v))} counters ${JSON.stringify(dev.rep.counters())}`);
           if (dmg !== Infinity) fail(`${n} says in-sync while the store reports a refill (P4)`);
         } else {
           // every device that held the lines is itself repairing or retired: all copies were damaged one fault at a time, each fault harmless alone (inventory limit 1: a fault that destroys the ONLY copy destroys it). Loud on every device, never in-sync.

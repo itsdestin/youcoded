@@ -86,6 +86,12 @@ describe('the incarnation map', () => {
     retired.clear(); retired.add(second.local.toString('hex'));
     expect((await m.current(wire)).incarnation).toBe(2);
   });
+  it('on a fresh map the current incarnation is the HIGHEST live one before the first absent one, not the lowest not-retired one', async () => {
+    const state = new Map<string, 'live' | 'retired'>([[incarnationId(wire, 0).toString('hex'), 'retired'], [incarnationId(wire, 1).toString('hex'), 'live'], [incarnationId(wire, 2).toString('hex'), 'live']]);
+    const probe: Probe = async (l) => state.get(l.toString('hex')) ?? 'absent';
+    const cur = await new IdMap(probe).current(wire);
+    expect(cur).toMatchObject({ incarnation: 2, registered: true });
+  });
   it('a version retired more often than the limit stops loudly', async () => {
     const m = new IdMap(async () => 'retired');
     await expect(m.current(wire)).rejects.toThrow(/too many/);

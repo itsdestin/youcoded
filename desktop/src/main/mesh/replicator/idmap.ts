@@ -26,13 +26,21 @@ export class IdMap {
   /** The local id to use now for `wire` (the lowest incarnation that is not retired; it may be absent, meaning "register it here"). */
   async current(wire: Buffer): Promise<{ local: Buffer; incarnation: number; registered: boolean }> {
     const key = wire.toString('hex');
-    for (let n = this.#cache.get(key) ?? 0; n <= MAX_INCARNATIONS; n++) {
+    const start = this.#cache.get(key);
+    // WHY the first look in a process scans past the first live incarnation (fuzz seed 605068): incarnations are made one after another, so the CURRENT one is the highest live one before the first
+    // absent one. "Lowest not retired" went wrong when a lower incarnation was left live behind a higher one, and a restart then picked the older, shorter copy.
+    const scanAll = start === undefined;
+    let live: { n: number; local: Buffer } | null = null;
+    for (let n = start ?? 0; n <= MAX_INCARNATIONS; n++) {
       const local = incarnationId(wire, n);
       const p = await this.probe(local);
       if (p === 'retired') continue;
+      if (p === 'live') { live = { n, local }; if (!scanAll) break; continue; }
+      if (live) break;
       this.#cache.set(key, n);
-      return { local, incarnation: n, registered: p === 'live' };
+      return { local, incarnation: n, registered: false };
     }
+    if (live) { this.#cache.set(key, live.n); return { local: live.local, incarnation: live.n, registered: true }; }
     throw new RangeError('too many retired incarnations');
   }
   /** Call after the store retired `local`: the next `current` starts above it. Only raises. */
