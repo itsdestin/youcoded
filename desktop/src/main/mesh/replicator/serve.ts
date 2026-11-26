@@ -13,6 +13,7 @@ import { reportFailure } from '../../report-failure';
 import { MAX_SESSIONS, WINDOW_FRAMES } from './budget';
 import { chatGroup, repairFrom, type PeerInfo, type RepCtx, type ServeSession } from './ctx';
 import { sendNak } from './receive';
+import { onCorruptRead } from './repair';
 import { headMessage, KIND_INTRO, KIND_LINES, linesBody, MAX_LINES_PER_FRAME, introBodyOf, PART_BYTES, PAYLOAD_BUDGET_BYTES, type AckBody, type NakWhy, type SignedHead, type WantBody, ackMessage } from './wire';
 
 const SESSION_STALL_MS = 30_000;
@@ -24,6 +25,13 @@ const keyOf = (peerHex: string, wire: Buffer): string => `${peerHex}/${wire.toSt
 
 /** Build one batch starting at `from`, ending at a signed point and at or below `cap` (the writer's end is free; a non-writer's is its next held point). */
 async function buildBatch(ctx: RepCtx, wire: Buffer, local: Buffer, writer: Buffer, from: number, cap: number, head: Head): Promise<Batch | { nak: NakWhy }> {
+  try { return await buildBatchOnce(ctx, wire, local, writer, from, cap, head); } catch (e) {
+    // a corrupt read is the damage signal: this copy cannot serve (say so), and it starts repairing itself (plan: "read throws corrupt: enter refilling and send nak unavailable")
+    if (e instanceof StoreError && e.code === 'corrupt') { await onCorruptRead(ctx, wire, local); return { nak: 'unavailable' }; }
+    throw e;
+  }
+}
+async function buildBatchOnce(ctx: RepCtx, wire: Buffer, local: Buffer, writer: Buffer, from: number, cap: number, head: Head): Promise<Batch | { nak: NakWhy }> {
   const me = writer.equals(ctx.crypto.self);
   if (me) {
     const lines: Buffer[] = []; let bytes = 0; let end = from;

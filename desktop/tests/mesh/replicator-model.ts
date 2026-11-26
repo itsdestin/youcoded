@@ -46,8 +46,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const acked: Array<{ holder: string; v: Buffer; lines: number }> = [];
   const online = new Set(NAMES);
   let noisy = false; let counter = 0; let forked = false;
-  const note = (k: string): void => { ops[k] = (ops[k] ?? 0) + 1; };
-  const fail = (msg: string): never => { throw new Error(`replicator fuzz seed ${seed}: ${msg}`); };
+  const trace: string[] = [];
+  const note = (k: string): void => { ops[k] = (ops[k] ?? 0) + 1; trace.push(k); };
+  const fail = (msg: string): never => { throw new Error(`replicator fuzz seed ${seed}: ${msg} [ops: ${trace.join(',')}]`); };
   try {
     for (const [i, wr] of ['A', 'B'].entries()) {
       const v = wireId(`fuzz-${seed}-${i}`);
@@ -89,7 +90,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close();
             const raw = fs.readFileSync(body); raw[Math.floor(rand() * (raw.length - 1))] ^= 0xff; fs.writeFileSync(body, raw);
             const dev = await world.restart(d, { graceful: true });
-            await dev.store.scrubStep(local, { maxBytes: 1 << 24 }).catch(() => undefined /* benign (fuzz): a copy too damaged to scrub is exactly what the replicator must repair */);
+            // what a reader (a screen, an adapter) does: read the lines; a `corrupt` answer is reported to the replicator, the only way the store tells damage past its scrub mark
+            const hd = await dev.store.head(local);
+            if (hd.lines > 0) await dev.store.read(local, 0, 0, hd.lines).catch(async (e: { code?: string }) => { if (e?.code === 'corrupt') await dev.rep.reportCorrupt(v); });
             dev.rep.hello(); if (!online.has(d)) dev.carrier.setOnline(false); note('rot');
           }
         }
@@ -120,7 +123,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     for (const n of NAMES) world.devs[n].rep.hello();
     for (let round = 0; round < 12; round++) {
       await world.elapse(30_000, 10_000, true);
-      const agree = await Promise.all(vs.map(async (v) => { const hs = await Promise.all(NAMES.map((n) => world.heads(n, v))); return hs.every((h) => h.hash === hs[0].hash && h.lines === (oracle.get(v.toString('hex'))?.length ?? -1)); }));
+      // WHY also the status: a rotted copy has the same head as a healthy one; "equal heads" alone would stop waiting before its repair ran
+      const agree = await Promise.all(vs.map(async (v) => { const hs = await Promise.all(NAMES.map((n) => world.heads(n, v))); const sts = await Promise.all(NAMES.map((n) => world.devs[n].rep.status(v))); return hs.every((h) => h.hash === hs[0].hash && h.lines === (oracle.get(v.toString('hex'))?.length ?? -1)) && sts.every((x) => x.state !== 'refilling' && x.state !== 'pulling' && x.state !== 'retired-recopy'); }));
       if (agree.every(Boolean)) break;
     }
     await world.settle();
@@ -137,7 +141,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         let readable = h.lines; const dmg = Math.min(h.damagedFromLine ?? Infinity, h.rolledBack?.from ?? Infinity, h.partial?.from ?? Infinity);
         if (dmg !== Infinity) readable = Math.min(readable, dmg);
         const got = readable > 0 ? await dev.store.read(local, 0, 0, readable).catch(() => 'unreadable' as const) : [];
-        if (got === 'unreadable') { if (st.state === 'in-sync') fail(`${n} reads corrupt but says in-sync (P3/P4)`); }
+        if (got === 'unreadable') { if (st.state === 'in-sync') { let firstBad = -1; for (let i = 0; i < readable; i++) { const r1 = await dev.store.read(local, 0, i, i + 1).catch(() => 'bad'); if (r1 === 'bad') { firstBad = i; break; } } fail(`${n} reads corrupt (first bad line ${firstBad}) but says in-sync (P3/P4) head=${JSON.stringify(h)} counters=${JSON.stringify(dev.rep.counters())}`); }; }
         else if (got !== 'evicted') for (let i = 0; i < readable; i++) if (!got[i].equals(O[i])) fail(`${n} line ${i} of ${v.toString('hex').slice(0, 6)} differs from what the writer appended (P1)`);
         if (st.state === 'in-sync') {
           if (h.lines !== O.length || readable !== h.lines) fail(`${n} says in-sync but holds ${h.lines}/${O.length} lines, readable ${readable} (P2)`);

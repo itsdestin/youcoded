@@ -34,7 +34,7 @@ import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type V
 import { setupVersion } from './forks';
 import { IdMap, type Probe } from './idmap';
 import { askIntro, dropReassembly, receiveLines, sendNak } from './receive';
-import { checkRepair, retireAndRecopy } from './repair';
+import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
 import { onAck, onWant, pushNew } from './serve';
 import { SignedHeads } from './signed-heads';
 import { headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, parseAckBody, parseHeadsBody, parseIntroBody, parseLinesBody, parseNakBody, parseSumBody, parseWantBody, REPLICATOR_KINDS, sumBody, wantBodyOf, type AdvertisedState, type HeadEntry, type NakBody, type HeadsBody } from './wire';
@@ -443,6 +443,12 @@ export class Replicator {
   peerView(wire: Buffer): Array<{ peer: string; lines: number; hash: string; state: AdvertisedState }> {
     const wk = wire.toString('hex');
     return [...this.#ctx.peers.values()].flatMap((p) => { const h = p.heads.get(wk); return h ? [{ peer: p.hex, lines: h.lines, hash: h.hash, state: h.state }] : []; });
+  }
+  /** THE SEAM FOR READERS. The store tells damage apart only when something reads it (`read` throws `corrupt`; head().damagedFromLine can stay null past the scrub mark). A screen, an adapter or
+   *  anything else that gets `corrupt` from the store for a version calls this, and the replicator scrubs, sets the repair going and asks a peer for the lines. */
+  async reportCorrupt(wire: Buffer): Promise<void> {
+    await this.queue(wire, async () => { const v = await this.localOf(wire); if (v) await onCorruptRead(this.#ctx, wire, v.local); });
+    await this.reconsider(wire);
   }
   /** The store's id for the current incarnation of a version (for the rig's read and verify routes). */
   async localId(wire: Buffer): Promise<Buffer> { const v = await this.localOf(wire); if (!v) throw new Error('unknown version'); return v.local; }

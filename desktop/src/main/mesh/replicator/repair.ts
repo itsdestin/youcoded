@@ -12,6 +12,7 @@ import type { RepCtx } from './ctx';
 import { repairFrom } from './ctx';
 
 const SCRUB_SLICE_BYTES = 4 * 1024 * 1024;
+const READ_SLICE_LINES = 128;
 
 /** Run the integrity scrub in slices until it has covered the version or found damage; yields between slices so the main thread is never held (plan risk 6). Returns the first damaged line or null. */
 export async function scrubAll(ctx: RepCtx, local: Buffer): Promise<number | null> {
@@ -79,8 +80,13 @@ export async function checkRepair(ctx: RepCtx, wire: Buffer): Promise<void> {
   if (run.refill) {
     const r = run.refill;
     try {
-      const upto = Math.min(r.end, head.lines);
-      if (upto > r.from) { const got = await ctx.store.read(v.local, 0, r.from, upto); if (got === 'evicted') throw new StoreError('evicted', 'range evicted'); }
+      // WHY the WHOLE version and not just [from, end): a second fault below the line the store first named (it reports the FIRST damaged line) is invisible to the report, and a refill cleared on the
+      // repaired range alone left a rotted line 0 declared healthy (fuzz seed 2563). Every read checks its lines against the chain, so reading it all is the store's own evidence.
+      for (let n = 0; n < head.lines; n += READ_SLICE_LINES) {
+        const got = await ctx.store.read(v.local, 0, n, Math.min(head.lines, n + READ_SLICE_LINES));
+        if (got === 'evicted') break; // evicted bodies cannot be re-read here; they are the storage policy's
+        await new Promise<void>((res) => setImmediate(res));
+      }
       if (head.lines >= r.end) { run.refill = null; ctx.bump('refill-cleared'); ctx.advertise(); }
       else await ctx.reconsider(wire); // reads work but the source's head is not reached yet
     } catch (e) {
@@ -90,4 +96,14 @@ export async function checkRepair(ctx: RepCtx, wire: Buffer): Promise<void> {
       await ctx.reconsider(wire);
     }
   }
+}
+
+/** A `read` threw `corrupt`: the store's damage signal (head().damagedFromLine can stay null until a scrub). Scrub to make the store say where, then repair from what it says; if the scrub
+ *  finds nothing the read failure is unexplained and the version says so (stuck), never "fine". Runs inside the version's queue. */
+export async function onCorruptRead(ctx: RepCtx, wire: Buffer, local: Buffer): Promise<void> {
+  const run = ctx.runOf(wire);
+  ctx.bump('corrupt-read');
+  const dmg = await scrubAll(ctx, local);
+  if (dmg === null) { run.stuck = 'corrupt-read-unexplained'; reportFailure({ what: 'explain a damaged read of a chat copy (the scrub found nothing)', where: 'mesh.replicator' }); return; }
+  await checkRepair(ctx, wire);
 }

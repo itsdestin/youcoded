@@ -35,9 +35,12 @@ export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescr
         await ctx.store.forkVersion(parent.local, forkLine, cur.local);
         ctx.link.follow(chatGroup(ctx.setId, desc.chatId));
         ctx.bump('fork-local');
+        if (run.stuck === 'corrupt' || run.stuck === 'fork-error') run.stuck = null; // an earlier, transient refusal is over
         return { local: cur.local, incarnation: cur.incarnation };
       } catch (e) {
         if (e instanceof StoreError && e.code === 'evicted') { ctx.bump('fork-evicted-copy-all'); return register(); }
+        // the PARENT is being repaired (the store refuses to copy from a copy it reports as damaged): wait; the parent's repair revisits its waiting children. Not a stuck state.
+        if (e instanceof StoreError && (e.code === 'corrupt' || e.code === 'damaged')) { ctx.bump('fork-waits-for-parent-repair'); return null; }
         if (e instanceof StoreError && e.code === 'version-conflict') { run.stuck = 'fork-conflict'; reportFailure({ what: 'make a local fork (the id is used for something else)', cause: e, where: 'mesh.replicator' }); return null; }
         throw e;
       }
@@ -47,6 +50,7 @@ export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescr
     for (const p of ctx.peers.values()) if (p.heads.has(desc.parent.toString('hex'))) { await ctx.want(desc.parent, p, { through: forkLine }); break; }
     return null;
   } catch (e) {
+    if (e instanceof StoreError && (e.code === 'corrupt' || e.code === 'damaged')) { ctx.bump('fork-waits-for-parent-repair'); return null; }
     run.stuck = e instanceof StoreError ? e.code : 'fork-error';
     reportFailure({ what: 'set up a forked chat version', cause: e, where: 'mesh.replicator' });
     return null;
