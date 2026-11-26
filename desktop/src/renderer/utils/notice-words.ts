@@ -95,3 +95,7 @@ export const CHAT_COULDNT_TAKE_MESSAGE = "This chat couldn't take your message. 
 /** Resuming/handing off a chat when this device cannot do a live handoff. */
 export const LIVE_HANDOFF_UNAVAILABLE = 'Live handoff is available from a computer or a remote connection to one.';
 export const HANDOFF_TAKEOVER_FAILED = "Couldn't take over from your other computer. Close the conversation there, then try again.";
+/** R-fyi (approved row W-asked/fyi): a command ran but its attachments were not part of it. Short floating notice. */
+export const attachmentsLeftOut = (command: string): string => `Attachments were left out of ${command}.`;
+/** R-fyi: /copy with nothing to copy yet. Short floating notice. */
+export const NO_REPLY_TO_COPY = "There's no reply to copy yet.";

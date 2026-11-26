@@ -168,13 +168,13 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  },
  {
   "id": "attachments-ignored",
-  "text": "Attachments ignored with /compact",
+  "text": "Attachments were left out of /compact.",
   "button": null,
   "strip": null
  },
  {
   "id": "no-response-to-copy",
-  "text": "No response to copy",
+  "text": "There's no reply to copy yet.",
   "button": null,
   "strip": null
  },

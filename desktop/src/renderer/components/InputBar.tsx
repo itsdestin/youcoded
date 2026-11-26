@@ -101,7 +101,7 @@ interface Props {
   getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null;
   // /config (chat view) — App opens the PreferencesPopup
   onOpenPreferences?: () => void;
-  // Toast channel for dispatcher warnings ("Attachments ignored with /clear", etc.)
+  // Toast channel for dispatcher warnings ("Attachments were left out of /clear.", etc.)
   onToast?: (message: string) => void;
   // Pending-prompt send was refused. App surfaces a "Send anyway" affordance
   // wired to `retry`, which presses ESC (to neutralize any genuinely-live Ink

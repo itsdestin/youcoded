@@ -21,6 +21,7 @@ import { copyText } from '../components/context-menu/clipboard';
 import { claudeAliasForModelId, type ClaudeAlias } from '../../shared/model-ids';
 import { getCapabilities } from '../platform';
 import { reportFailure } from '../utils/report-failure';
+import { attachmentsLeftOut, NO_REPLY_TO_COPY } from '../utils/notice-words';
 
 /** The host keeps a record and draws the shared lines itself (one-core R5-4a): this screen must not draw them as well. */
 const hostDraws = (): boolean => getCapabilities().sessionRecord;
@@ -39,7 +40,7 @@ export interface DispatcherCallbacks {
   getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null;
   /** Open Preferences popup (/config in chat view). */
   onOpenPreferences?: () => void;
-  /** Show a transient toast (e.g. "Attachments ignored with /clear"). */
+  /** Show a transient toast (e.g. "Attachments were left out of /clear."). */
   onToast?: (message: string) => void;
   /** Read-access to a session's full chat state — used by /copy to walk assistant turns. */
   getSessionState?: (sessionId: string) => SessionChatState | undefined;
@@ -155,7 +156,7 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       // detected via transcript-shrink watcher in App.tsx.
       if (!input.sessionId) return { handled: false };
       if (input.files.length > 0 && input.callbacks.onToast) {
-        input.callbacks.onToast('Attachments ignored with /compact');
+        input.callbacks.onToast(attachmentsLeftOut('/compact'));
       }
       // Snapshot current context tokens so COMPACTION_COMPLETE can show a diff.
       // null is fine — marker falls back to "Conversation compacted" with no number.
@@ -190,7 +191,7 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       // warn the user but proceed with the clear since that's the dominant intent.
       if (!input.sessionId) return { handled: false };
       if (input.files.length > 0 && input.callbacks.onToast) {
-        input.callbacks.onToast('Attachments ignored with /clear');
+        input.callbacks.onToast(attachmentsLeftOut('/clear'));
       }
       // See deferUiEffectsToRuntime: for a runtime-driven session the clear is
       // applied when the durable barrier echoes back, not before.
@@ -285,7 +286,7 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       // navigator.clipboard for cross-platform consistency.
       if (!input.sessionId || !input.callbacks.getSessionState) return { handled: false };
       if (input.files.length > 0 && input.callbacks.onToast) {
-        input.callbacks.onToast('Attachments ignored with /copy');
+        input.callbacks.onToast(attachmentsLeftOut('/copy'));
       }
       // Parse optional N (default 1 = most recent)
       const n = args ? Math.max(1, parseInt(args.trim(), 10) || 1) : 1;
@@ -293,7 +294,7 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       const payload = buildCopyPayload(session, n);
 
       if (payload.mode === 'empty') {
-        input.callbacks.onToast?.('No response to copy');
+        input.callbacks.onToast?.(NO_REPLY_TO_COPY);
         return { handled: true };
       }
       if (payload.mode === 'single') {

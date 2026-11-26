@@ -45,10 +45,14 @@ describe('the Download notice says what the computer decided', () => {
     expect(await noticeFor({ ok: false, error: 'busy' })).toMatch(/two downloads are already running/);
   });
 
-  it('the general refusal names no cause, and an unknown code is shown as the host gave it', async () => {
+  it('the general refusal names no cause, and an unknown code is logged, not shown', async () => {
     const general = await noticeFor({ ok: false, error: 'not-allowed' });
     expect(general).not.toMatch(/outside|private|folder/);
-    expect(await noticeFor({ ok: false, error: 'EIO: i/o error' })).toContain('EIO: i/o error');
+    // WHY (waiting-notice R-words): technical text never reaches the notice; it goes to the log.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await noticeFor({ ok: false, error: 'EIO: i/o error' })).toBe('Couldn’t download report.pdf.');
+    expect(warn).toHaveBeenCalledWith('[download] refused:', 'EIO: i/o error');
+    warn.mockRestore();
   });
 });
 

@@ -40,11 +40,16 @@ export async function downloadFile(absolutePath: string, opts?: { projectRoot?: 
     if (res && res.ok) {
       announce(`Saving ${name} to this device…`);
     } else {
-      // The host's own reason when it gives one; never a guess.
-      const reason = typeof res?.error === 'string' ? (REFUSALS[res.error] ?? res.error) : null;
+      // The host's own reason when it is one we can put in plain words; never a guess.
+      // WHY (waiting-notice R-words): an unknown host string is technical text, so it goes to the log, not the notice.
+      const code = typeof res?.error === 'string' ? res.error : null;
+      const reason = code ? (REFUSALS[code] ?? null) : null;
+      if (code && !reason) console.warn('[download] refused:', code);
       announce(reason ? `Couldn’t download ${name}: ${reason}` : `Couldn’t download ${name}.`, { durationMs: 5000 });
     }
   } catch (err: any) {
-    announce(err?.message ? `Couldn’t download ${name}: ${String(err.message)}` : `Couldn’t download ${name}.`, { durationMs: 5000 });
+    // WHY (waiting-notice R-words): a thrown error's message is technical text; log it, show the plain sentence.
+    console.warn('[download] failed:', err);
+    announce(`Couldn’t download ${name}.`, { durationMs: 5000 });
   }
 }
