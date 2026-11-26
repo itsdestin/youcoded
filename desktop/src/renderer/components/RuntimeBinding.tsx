@@ -135,7 +135,14 @@ function isNativeSupported(): boolean {
 // replaces it is honest and reaches the same place in one tap — the model menu
 // says "You have not set up any model providers." and offers Add provider,
 // which opens Assistant settings (ModelPicker, P-3).
+//
+// WHY 'native' ALWAYS WHERE NO PROGRAM CAN RUN (2026-11-25, iPhone app, card #89): Claude Code is a program, and an
+// iPhone cannot start one (capabilities.programs). There the base state cannot be 'claude': a form opening on
+// "Sonnet · Claude Code" offers a session that can never start (seen when setup was skipped, so nothing had stored
+// 'native'). This is not the substitution the rule above forbids — no engine the person chose is being replaced; the
+// one engine that cannot exist on the device is simply never the starting point.
 export function defaultRuntime(): Runtime {
+  if (!getCapabilities().programs) return 'native';
   try {
     if (localStorage.getItem('youcoded-runtime-default') === 'native') return 'native';
   } catch { /* storage blocked -- fall through to the base state */ }
