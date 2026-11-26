@@ -15,7 +15,7 @@
 import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
-import { isRemoteMode } from '../../platform';
+import { isRemoteMode, deviceNoun } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
 import { Button, CARD_LEVEL_1, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
@@ -128,7 +128,8 @@ const PROGRAM_MEANS = [
  *  the chats line, only when such a second connection exists. A program counts:
  *  it can reach the internet. Starting a conversation does not: you see and
  *  send that message yourself. */
-const CHATS_COMBINED = 'With its other permissions, this page could send your chat list outside this computer.';
+// WHY a function: the noun depends on the device at call time (phone vs computer).
+const chatsCombined = () => `With its other permissions, this page could send your chat list outside this ${deviceNoun()}.`;
 function reachesOutside(c: PageConnection): boolean {
   return c.kind !== 'chats' && c.kind !== 'session';
 }
@@ -539,7 +540,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
               </ul>
             )}
             {c.kind === 'chats' && all.some(reachesOutside) && (
-              <div className="text-xs text-fg-muted leading-relaxed" data-chats-combined>{CHATS_COMBINED}</div>
+              <div className="text-xs text-fg-muted leading-relaxed" data-chats-combined>{chatsCombined()}</div>
             )}
             {c.kind === 'device' && (
               <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />

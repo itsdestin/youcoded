@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { setConnectionMode } from '../src/renderer/platform';
 import { describeStep, isStopped, stoppedSentence } from '../src/renderer/components/first-run/describe-step';
 import type { FirstRunState } from '../src/shared/first-run-types';
 
@@ -92,5 +93,27 @@ describe('isStopped / stoppedSentence — the failure card', () => {
     });
     expect(isStopped(s)).toBe(true);
     expect(stoppedSentence(s)).toBe("Signing in didn't finish.");
+  });
+});
+
+describe('describeStep — the detect line names the device it runs on', () => {
+  afterEach(() => { delete (globalThis as any).window?.__PLATFORM__; setConnectionMode('local'); });
+  const detect = () => describeStep(state(), false).line;
+  it('says "computer" on desktop', () => {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (globalThis as any).window.__PLATFORM__ = 'electron';
+    expect(detect()).toBe("Checking what's already on this computer…");
+  });
+  it('says "phone" in the Android app talking to its own backend', () => {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (globalThis as any).window.__PLATFORM__ = 'android';
+    setConnectionMode('local');
+    expect(detect()).toBe("Checking what's already on this phone…");
+  });
+  it('keeps "computer" for a phone paired to a computer', () => {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (globalThis as any).window.__PLATFORM__ = 'android';
+    setConnectionMode('remote');
+    expect(detect()).toBe("Checking what's already on this computer…");
   });
 });

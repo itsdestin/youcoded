@@ -29,7 +29,7 @@ import React, {
 } from "react";
 import type { MarketplaceUser } from "../../main/marketplace-auth-store";
 import { useOnRemoteReconnect } from "../hooks/useOnRemoteReconnect";
-import { getCapabilities } from "../platform";
+import { getCapabilities, deviceNoun } from "../platform";
 import { announceSessionLost } from "../utils/session-lost-notice";
 
 // ── Context shape ─────────────────────────────────────────────────────────────
@@ -193,7 +193,8 @@ export function AccountProvider({
       while (true) {
         if (cancelledRef.current || signInEpoch.current !== epoch) return; // unmounted / cancelled — stop loop
         if (Date.now() > deadline) {
-          throw new Error("Sign-in didn't finish. Finish signing in with your web browser on this computer, then try again.");
+          // WHY deviceNoun(): a phone running its own backend has no "computer" in the picture.
+          throw new Error(`Sign-in didn't finish. Finish signing in with your web browser on this ${deviceNoun()}, then try again.`);
         }
 
         const pollRes = await window.claude.account.poll(device_code);

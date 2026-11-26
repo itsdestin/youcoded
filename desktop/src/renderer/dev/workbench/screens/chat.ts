@@ -230,6 +230,8 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
   // The sign-in step's second page, one kind opened (deck first-run-2 P2-3).
   { name: 'first-run#signin-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signInPick: 'payg' } },
+  // The sign-in choices in the Android app: the free row shows as "Coming soon" and cannot be opened (2026-11-25).
+  { name: 'first-run#authenticate-phone', tags: ['first-run', 'view', 'narrow'], viewport: { width: 390, height: 844 }, params: { firstRun: 'AUTHENTICATE', platform: 'android' }, newIn: 'after' as const },
   { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },

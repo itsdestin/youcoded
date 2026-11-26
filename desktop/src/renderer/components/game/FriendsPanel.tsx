@@ -21,6 +21,7 @@ import { useScrollFade } from '../../hooks/useScrollFade';
 import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, ErrorState, FieldError, InputGroup, LoadingState, Menu, MenuRadioItem, Pill, PillButton, SectionLabel } from '../ui';
 import { workbenchFriendsOpen } from '../../workbench-mode';
 import { useScreenOpen } from '../../shoot-mode';
+import { deviceNoun } from '../../platform';
 
 interface Props {
   incognito?: boolean;
@@ -77,7 +78,7 @@ function ConnectionErrorCard({ social, onRetry }: { social: 'offline' | 'server'
     // its Try again inside, filled — it is the box's main action).
     <Callout tone={offline ? 'warning' : 'danger'} actions={<Button variant="primary" size="sm" onClick={onRetry}>Try again</Button>}>
       {offline
-        ? 'No internet connection. Your friends, Connect 4 and Chess come back when this computer reconnects; Flappy and 2048 still play.'
+        ? `No internet connection. Your friends, Connect 4 and Chess come back when this ${deviceNoun()} reconnects; Flappy and 2048 still play.`
         : "Can't reach the game server. Your friends, Connect 4 and Chess are unavailable until it answers; Flappy and 2048 still play."}
     </Callout>
   );

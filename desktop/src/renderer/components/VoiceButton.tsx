@@ -42,22 +42,23 @@ import type { VoiceNotice, VoicePhase } from '../hooks/useVoiceInput';
 /** What the card says when a dictation came back empty. Each line states what
  *  the microphone actually sent (useVoiceInput VoiceNotice) and the one thing
  *  the person can do about it — never a guessed cause. */
-const NOTICE_COPY: Record<VoiceNotice, { title: string; body: string }> = {
+// WHY a function (2026-11-25): the Android app has voice typing too, and its sound settings are the phone's.
+const noticeCopy = (): Record<VoiceNotice, { title: string; body: string }> => ({
   'no-sound': {
     title: 'No sound from your microphone',
-    body: "Your microphone sent only silence, so nothing could be heard. Check that it isn't muted, and that the right microphone is chosen in your computer's sound settings.",
+    body: `Your microphone sent only silence, so nothing could be heard. Check that it isn't muted, and that the right microphone is chosen in your ${deviceNoun()}'s sound settings.`,
   },
   'too-quiet': {
     title: 'Your microphone was too quiet',
-    body: "Some sound arrived, but too quietly to make out words. Try speaking closer, or turn up your microphone's volume in your computer's sound settings.",
+    body: `Some sound arrived, but too quietly to make out words. Try speaking closer, or turn up your microphone's volume in your ${deviceNoun()}'s sound settings.`,
   },
   'no-words': {
     title: 'No words were heard',
     body: 'Try again, speaking clearly and a little closer to the microphone.',
   },
-};
+});
 import { ErrorState, FoldRow, Tooltip } from './ui';
-import { getCapabilities } from '../platform';
+import { getCapabilities, deviceNoun } from '../platform';
 import { featureWorks } from '../feature-gate';
 import { useScreenOpen } from '../shoot-mode';
 import VocabularyPanel from './voice/VoiceVocabulary';
@@ -294,7 +295,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
         <p className="text-xs font-semibold text-fg mb-1.5">Speak your messages</p>
         <p className="text-2xs text-fg-2 leading-snug">
           Tap the mic, talk, and your words appear here with punctuation, ready to fix or send.
-          Your voice is turned into text on this computer and never leaves it.
+          Your voice is turned into text on this {deviceNoun()} and never leaves it.
         </p>
         {/* The limit, said BEFORE half a gigabyte is fetched rather than after
             (reopen deck V-11): someone who speaks a language it cannot hear
@@ -348,7 +349,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
         {/* WHY the reason's first line only, the rest under Details: an unknown failure appends
             the browser's own words on a second line (useVoiceInput captureFailureReadiness) —
             machine words never in the sentence (guide "Status and notices"). */}
-        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? firstLine(readiness.reason) : 'Still checking whether this computer can listen.'}</p>
+        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? firstLine(readiness.reason) : `Still checking whether this ${deviceNoun()} can listen.`}</p>
         {readiness?.state === 'unavailable' && <ErrorDetails text={restLines(readiness.reason)} className="mt-2" />}
         <div className="flex justify-end gap-2 mt-3">
           {/* WHY secondary (decisions "Secondary buttons"; guide Buttons — nothing bare-text reads
@@ -380,7 +381,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
     // WHY (Destin, 2026-11-03): an empty dictation used to end with the spinner
     // stopping and nothing else — a muted mic looked exactly like a broken app.
     // Not ErrorState: nothing failed; the mic worked and heard what it heard.
-    const copy = NOTICE_COPY[notice];
+    const copy = noticeCopy()[notice];
     card = (
       <>
         <p className="text-xs font-semibold text-fg mb-1.5">{copy.title}</p>

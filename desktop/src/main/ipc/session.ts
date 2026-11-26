@@ -192,7 +192,8 @@ function nativeLiveFor(host: NativeSessionHost, sessionId: string): NativeLive |
 /** Also used for late mod receipts after an invoke timed out; these updates are idempotent. */
 export function recordClaudeControlResult(records: Pick<SessionRecords, 'noteSend' | 'noteSendRefused'> | undefined, sessionId: string, request: ClaudeControlRequest, result: ClaudeControlResult, mayClearRefusal = true): void {
   if (!records || request.kind !== 'send-text') return;
-  if (result.status === 'accepted') records.noteSend(sessionId, request.sendId);
+  // WHY noteMilestone (2026-11-25): a control send-text bypasses `session:input`, so it counted as no message.
+  if (result.status === 'accepted') { records.noteSend(sessionId, request.sendId); noteMilestone('first_message'); }
   else if (mayClearRefusal && (result.status === 'rejected' || result.status === 'unavailable')) records.noteSendRefused(sessionId, request.sendId);
 }
 

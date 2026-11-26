@@ -41,7 +41,7 @@ describe('an old phone page against the new host', () => {
     oldShim = await import('./fixtures/old-remote-shim/remote-shim');
     oldShim.installShim();
   });
-  afterEach(() => { delete (globalThis as any).WebSocket; vi.resetModules(); });
+  afterEach(() => { vi.useRealTimers(); delete (globalThis as any).WebSocket; vi.resetModules(); });
 
   async function host() {
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -53,6 +53,9 @@ describe('an old phone page against the new host', () => {
   }
 
   it('the old page asks for a snapshot with a seq and no version, and the new host answers it with the session list and a degraded snapshot holding one refresh notice per conversation', async () => {
+    // WHY fake timeouts: the old page's 10 s "no snapshot came" timer fired on a loaded machine before the snapshot was
+    // handed over, announcing 'incomplete' twice (verify.sh, load ~100). Frozen time makes the order the test's, not the machine's.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const p = oldShim.connect('pw', false);
     const sock = FakeWebSocket.instances[0];
     sock.open();
