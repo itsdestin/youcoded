@@ -37,7 +37,15 @@ export default function ToastPractice() {
     const heads = which?.startsWith('k7:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(3)) : undefined;
     if (heads) { announce(heads.text, undefined, heads.button ? { label: heads.button, onClick: () => {} } : undefined, { untilClosed: true }); setShown(true); return; }
     const listed = which?.startsWith('n:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(2)) : undefined;
-    if (listed) announce(listed.text, 60_000, listed.button ? { label: listed.button, onClick: () => {} } : undefined);
+    // A notice that now lives in the chat's strip is raised there (the practice chat `wb-1`), exactly as the real code raises it;
+    // one that stays floating keeps announce(), and one that stays until closed shows with its button.
+    if (listed?.strip) {
+      showChatNotice('wb-1', {
+        key: listed.id, text: listed.text, tone: listed.strip.tone, leave: listed.strip.leave,
+        actions: listed.strip.buttons.map((label, i, all) => ({ label, onClick: noop, primary: i === all.length - 1 })),
+      });
+    } else if (listed?.untilClosed) announce(listed.text, undefined, listed.button ? { label: listed.button, onClick: () => {} } : undefined, { untilClosed: true });
+    else if (listed) announce(listed.text, 60_000, listed.button ? { label: listed.button, onClick: () => {} } : undefined);
     else if (which === 'turned-off') announcePluginTurnedOff(60_000);
     else if (which === 'none') { /* the same screen with no notice: the "Before" picture for card #216 */ }
     else if (which === 'settings-repaired') announceSettingsRepaired('/home/me/.claude/settings.json.corrupt-2026-11-12T04-30-00-000Z', 60_000); // card #11 a

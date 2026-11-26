@@ -82,6 +82,9 @@ export function subscribeChatNotice(sessionId: string | null | undefined, listen
 export function showChatNotice(sessionId: string, notice: ChatNotice): void {
   if (!sessionId) return;
   notices.set(sessionId, notice);
+  // WHY here (R-elsewhere, owner chose "a red dot on that chat in the list"): a failure raised for a chat nobody is looking at
+  // would sit unseen in a strip nobody can see. Marking it here covers every caller with one rule.
+  if (notice.tone === 'error' && !isViewed(sessionId)) addUnseenFailure(sessionId);
   notify(sessionId);
 }
 
@@ -93,6 +96,8 @@ export function clearChatNotice(sessionId: string, key?: string): void {
   const current = notices.get(sessionId);
   if (!current || (key && current.key !== key)) return;
   notices.delete(sessionId);
+  // The notice is gone, so there is nothing left for the dot to point at.
+  dropUnseenFailure(sessionId);
   notify(sessionId);
 }
 
@@ -110,4 +115,43 @@ export function recheckChatNotice(sessionId: string): boolean {
 /** Your next action in this chat (typing, sending, switching away): next-action notices leave. */
 export function chatNoticeUserActed(sessionId: string): void {
   if (notices.get(sessionId)?.leave === 'next-action') clearChatNotice(sessionId);
+}
+
+// ---- The red dot for a failure in a chat you are not looking at (waiting-notice T2, R-elsewhere) ----
+//
+// WHY store-level and not per list row (review S1/N5): one subscription in App reads the whole set and paints the dots, so no
+// row subscribes and no chat's streaming reaches the list. The set is only ever replaced when it really changes, so the
+// subscriber re-renders once per failure, never per word. It is per window: a failure marks the list in the window it happened in.
+
+let unseenFailures: ReadonlySet<string> = new Set();
+const unseenListeners = new Set<() => void>();
+const setUnseen = (next: ReadonlySet<string>) => { unseenFailures = next; for (const l of unseenListeners) l(); };
+function addUnseenFailure(id: string): void {
+  if (unseenFailures.has(id)) return;
+  setUnseen(new Set([...unseenFailures, id]));
+}
+function dropUnseenFailure(id: string): void {
+  if (!unseenFailures.has(id)) return;
+  const next = new Set(unseenFailures);
+  next.delete(id);
+  setUnseen(next);
+}
+
+/** Which chat each window is looking at right now (null: none, or it is in terminal view). Only used to decide "not visible". */
+const viewers = new Map<string, string | null>();
+const isViewed = (id: string): boolean => { for (const seen of viewers.values()) if (seen === id) return true; return false; };
+
+/** A window says which chat's message area is on screen. Opening a chat also counts it as seen (clears its dot). */
+export function setNoticeViewer(windowKey: string, sessionId: string | null): void {
+  viewers.set(windowKey, sessionId);
+  if (sessionId) dropUnseenFailure(sessionId);
+}
+
+/** The chat was opened or looked at (where the list's own "viewed" mark is set, and the buddy's seen callback): its dot goes. */
+export function markFailureSeen(sessionId: string): void { dropUnseenFailure(sessionId); }
+
+export function getUnseenFailureIds(): ReadonlySet<string> { return unseenFailures; }
+export function subscribeUnseenFailures(listener: () => void): () => void {
+  unseenListeners.add(listener);
+  return () => { unseenListeners.delete(listener); };
 }

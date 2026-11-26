@@ -54,6 +54,22 @@ export function viewedAfterSummaries(prev: ReadonlySet<string>, summaries: Recor
 }
 
 /**
+ * A red dot for every chat that has a failure its owner has not seen (waiting-notice T2). Pure, and applied AFTER the other merges.
+ * Hands back the same map when there is nothing to add, so an unchanged list costs nothing.
+ */
+export function withFailureDots(base: Map<string, SessionStatusColor>, unseenFailureIds: ReadonlySet<string>): Map<string, SessionStatusColor> {
+  if (unseenFailureIds.size === 0) return base;
+  let m: Map<string, SessionStatusColor> | undefined;
+  for (const id of unseenFailureIds) {
+    // Only chats this window lists: a failure for a chat that has since closed must not invent a dot.
+    if (!base.has(id) || base.get(id) === 'red') continue;
+    m ??= new Map(base);
+    m.set(id, 'red');
+  }
+  return m ?? base;
+}
+
+/**
  * Every session's colour on a phone: the summary's where the computer has one, else what this screen derived itself.
  * Pure so the precedence is unit-testable without mounting App.
  */

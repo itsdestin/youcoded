@@ -8,6 +8,7 @@ import { setConnectionMode } from '../src/renderer/platform';
 import * as controls from '../src/renderer/state/claude-control';
 import { APP_NOTICE_EVENT } from '../src/renderer/utils/announce';
 import { screenInputBlock } from '../src/renderer/state/pty-input-gate';
+import { clearChatNotice, getChatNotice } from '../src/renderer/state/chat-notice-store';
 
 // This test isolates transport choice from terminal-layout heuristics; the actual retry hook/store run.
 vi.mock('../src/renderer/state/pty-input-gate', () => ({ canRetrySubmit: () => true, screenInputBlock: vi.fn(() => null) }));
@@ -51,14 +52,37 @@ describe('explicit command routing',()=>{
     expect(sendInput).toHaveBeenCalledWith(S,'\x1b');
     expect(control).not.toHaveBeenCalled();
   });
-  it('announces an ambiguous command outcome rather than replaying it',async()=>{
+  it('says in that chat\'s strip that it cannot tell, rather than replaying the command',async()=>{
     const sendInput=vi.fn(),control=vi.fn(async()=>({status:'unknown',message:'Not confirmed'}));
     (window as any).claude={session:{sendInput,control}};
     const notice=vi.fn();window.addEventListener(APP_NOTICE_EVENT,notice);
     try{
-      expect(typeof controls.sendClaudeCommand).toBe('function');controls.sendClaudeCommand(S,'/clear\r');
-      await vi.advanceTimersByTimeAsync(0);expect(sendInput).not.toHaveBeenCalled();expect(notice).toHaveBeenCalledTimes(1);
-    }finally{window.removeEventListener(APP_NOTICE_EVENT,notice);}
+      controls.sendClaudeCommand(S,'/clear\r');
+      await vi.advanceTimersByTimeAsync(0);expect(sendInput).not.toHaveBeenCalled();
+      expect(notice).not.toHaveBeenCalled(); // no floating toast over whichever chat is open
+      expect(getChatNotice(S)?.text).toBe("Can't tell if /clear went through. Check the chat before trying again.");
+    }finally{window.removeEventListener(APP_NOTICE_EVENT,notice);clearChatNotice(S);}
+  });
+  it('never shows the computer\'s own technical text, only the shared sentence (it goes to the console)',async()=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    const control=vi.fn(async()=>({status:'rejected',message:'Stale send epoch 41 (queue root mismatch)'}));
+    (window as any).claude={session:{sendInput:vi.fn(),control}};
+    try{
+      controls.sendClaudeCommand(S,'/compact\r');
+      await vi.advanceTimersByTimeAsync(0);
+      const shown=getChatNotice(S)?.text??'';
+      expect(shown).toBe("/compact didn't go through. Try again.");
+      expect(shown).not.toMatch(/epoch|queue root/i);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('/compact'),'Stale send epoch 41 (queue root mismatch)');
+    }finally{warn.mockRestore();clearChatNotice(S);}
+  });
+  it('a Stop the computer did not confirm says one sentence in the strip, and a lost reply says the same',async()=>{
+    (window as any).claude={session:{sendInput:vi.fn(),queue:{action:vi.fn(async()=>{throw new Error('socket closed');})}}};
+    vi.spyOn(console,'warn').mockImplementation(()=>{});
+    controls.stopClaudeTurn(S);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getChatNotice(S)?.text).toBe("Can't tell if Stop went through. If Claude is still working, press Stop again.");
+    clearChatNotice(S);
   });
 });
 

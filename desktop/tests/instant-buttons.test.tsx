@@ -26,6 +26,8 @@ import { stopTurn, answerPermission, STOP_SETTLE_MS } from '../src/renderer/stat
 import { closeSession, setNativeModeNow, cycleClaudeModeNow } from '../src/renderer/state/phone-session-actions';
 import { sendToNative, sendToClaudeCode, canDrawSendNow, CC_SEND_CHECK_MS } from '../src/renderer/state/submit-outgoing';
 import { APP_NOTICE_EVENT } from '../src/renderer/utils/announce';
+import { clearChatNotice, getChatNotice } from '../src/renderer/state/chat-notice-store';
+import { MODE_UNCHANGED, STOP_OFFLINE, STOP_UNSURE } from '../src/renderer/utils/notice-words';
 import StopButton from '../src/renderer/components/StopButton';
 import ToolCard from '../src/renderer/components/ToolCard';
 
@@ -59,6 +61,8 @@ function deferred<T = unknown>() {
 }
 const lostAnswer = () => Object.assign(new Error('Lost the connection before the computer answered.'), { outcomeUnknown: true });
 
+// The chat's own strip: Stop and the permission mode now say what happened there, not in a floating toast (waiting-notice T2).
+const chatNotice = () => getChatNotice(S)?.text;
 let up = true;
 let notices: string[] = [];
 const onNotice = (e: Event) => notices.push((e as CustomEvent).detail.message);
@@ -88,6 +92,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   window.removeEventListener(APP_NOTICE_EVENT, onNotice);
+  clearChatNotice(S);
   setConnectionMode('local');
   resetPendingForTests();
   delete (window as any).claude;
@@ -158,7 +163,8 @@ describe('Stop', () => {
     act(() => stopTurn({ sessionId: S, provider: 'claude', turn: turnWatch(p) }));
     expect(isPending(`stop:${S}`)).toBe(false);
     expect(w.session.sendInput).not.toHaveBeenCalled();
-    expect(notices).toEqual(["Not connected — Stop wasn't sent. Press it again once you're back online."]);
+    expect(notices).toEqual([]);
+    expect(chatNotice()).toBe(STOP_OFFLINE);                   // in THIS chat's strip (not a toast), with the offline hint
   });
 
   it('UNDO: the turn is still running after the wait and a look at the record: the mark goes, the person is told, and Stop can be pressed again', async () => {
@@ -168,7 +174,8 @@ describe('Stop', () => {
     act(() => stopTurn({ sessionId: S, provider: 'claude', turn: turnWatch(p) }));
     await act(async () => { await vi.advanceTimersByTimeAsync(STOP_SETTLE_MS + 10); });
     expect(isPending(`stop:${S}`)).toBe(false);
-    expect(notices).toEqual(["Your computer hasn't confirmed the stop. If the assistant is still working, press Stop again."]);
+    expect(notices).toEqual([]);
+    expect(chatNotice()).toBe(STOP_UNSURE);
     act(() => stopTurn({ sessionId: S, provider: 'claude', turn: turnWatch(p) }));
     expect(w.session.sendInput).toHaveBeenCalledTimes(2);      // a NEW press by the person, never an automatic resend
   });
@@ -198,7 +205,7 @@ describe('Stop', () => {
     up = true;
     await act(async () => { await reconcilePending(); });      // the fill brought nothing new: the turn is still going
     expect(isPending(`stop:${S}`)).toBe(false);
-    expect(notices).toHaveLength(1);
+    expect(chatNotice()).toBeTruthy();
   });
 
   it('THE COMPUTER\'S OWN WINDOW is unchanged: the same single write, no mark, no notice', () => {
@@ -536,7 +543,7 @@ describe('Close', () => {
     await act(async () => { await reconcilePending(); });
     expect(isPending('close:b')).toBe(false);
     expect(s.state.open).toBe('b');
-    expect(notices).toEqual(['Couldn\'t confirm "Build" closed on your computer, so it is back.']);
+    expect(notices).toEqual(['Couldn\'t close "Build" on your computer, so it\'s back in the list.']);
     expect(w.session.destroy).toHaveBeenCalledTimes(1);
   });
 
@@ -731,7 +738,8 @@ describe('Permission mode', () => {
     await act(async () => { reply.resolve({ ok: false, error: 'no' }); await Promise.resolve(); });   // the shim's shape for a host failure
     expect(md.read()).toBe('ask');
     expect(isPending(`mode:${S}`)).toBe(false);
-    expect(notices).toEqual(["The permission mode didn't change. Your computer didn't confirm it."]);
+    expect(notices).toEqual([]);
+    expect(chatNotice()).toBe(MODE_UNCHANGED);
   });
 
   it('REFUSED (native), a rejection: the same, and a newer mode the record has pushed meanwhile is NOT overwritten by the undo', async () => {
@@ -764,7 +772,7 @@ describe('Permission mode', () => {
     await act(async () => { await reconcilePending(); });          // no push arrived: only asking the computer can show the truth
     expect(md.read()).toBe('ask');
     expect(isPending(`mode:${S}`)).toBe(false);
-    expect(notices).toHaveLength(1);
+    expect(chatNotice()).toBeTruthy();
   });
 
   it('DROPPED (native), and the computer cannot be asked either: after a few tries the old mode is put back rather than a mode nobody confirmed being left on screen', async () => {
@@ -777,7 +785,7 @@ describe('Permission mode', () => {
     expect(host).toHaveBeenCalledTimes(3);
     expect(md.read()).toBe('ask');
     expect(isPending(`mode:${S}`)).toBe(false);
-    expect(notices).toHaveLength(1);
+    expect(chatNotice()).toBeTruthy();
   });
 
   it('INSTANT + CONFIRM (Claude Code): Shift+Tab is sent once and the chip shows the new mode at once; the computer\'s reading of the terminal confirms it', () => {
@@ -809,7 +817,7 @@ describe('Permission mode', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
     expect(md.read()).toBe('normal');
     expect(isPending(`mode:${S}`)).toBe(false);
-    expect(notices).toHaveLength(1);
+    expect(chatNotice()).toBeTruthy();
     expect(w.session.sendInput).toHaveBeenCalledTimes(1);          // never resent
   });
 

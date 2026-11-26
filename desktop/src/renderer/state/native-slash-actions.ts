@@ -16,27 +16,34 @@ import type React from 'react';
 import { getCapabilities } from '../platform';
 import type { ChatAction } from './chat-types';
 import type { NativeSlashAction, DispatcherResult } from './slash-command-dispatcher';
+import type { SessionChatState } from './chat-types';
+import { raiseBusy, raiseCant, raiseFailed, raiseNotRunning, browseSkillsAction } from './raise-notice';
+import { busyWith, notRunning, NOTHING_TO_COMPACT, NOT_AN_INSTALLED_SKILL, SKILL_UNREADABLE, skillAmbiguous, skillFailed } from '../utils/notice-words';
 
 /** User-facing copy per refusal reason. Specific and accurate — never a guessed
  *  cause (docs/error-message-standards.md). Keys mirror NativeSessionHost.compact
  *  and HarnessSession.compactNow. */
+// WHY only the failures are left here (waiting-notice T2): "busy", "nothing to compact" and "not running" are can't-do-now
+// notices and now go to the chat's own strip (below). These three are failures AFTER the command ran; the deck puts those in
+// the chat itself (T4), so until that card exists they keep their floating notice, unchanged.
 const COMPACT_REFUSAL: Record<string, string> = {
-  'turn-in-flight':
-    "Can't compact while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
-  'nothing-to-compact':
-    'Nothing to compact yet — there needs to be at least a couple of exchanges before there’s anything to summarize.',
   // WHY: failed summaries no longer rewrite or prune accepted history; do not
   // promise space was freed when the model's context remains unchanged.
   'summary-failed':
     'The model couldn’t write a usable summary, so the conversation was left intact. Try again later.',
-  'not-live': "This session isn't running, so there's nothing to compact.",
   'interrupted': 'Compaction stopped. The conversation was left as it was.',
 };
+
+/** Stop for a built-in assistant chat (the Stop button on a "still working" notice). */
+const stopTurn = (sessionId: string): void => { window.claude.native.interrupt(sessionId); };
 
 export interface NativeActionDeps {
   sessionId: string;
   dispatch: React.Dispatch<ChatAction>;
+  /** Floating notice, for the failures that wait for their in-chat card (compact / clear failing after they ran). */
   onToast?: (message: string) => void;
+  /** Reads a chat's state, so a "still working" notice knows when the reply ends. */
+  getSession?: (sessionId: string) => SessionChatState | undefined;
   /** Legacy hosts only: capture the screen's pending card before awaiting IPC. */
   compactionOperationId?: string;
 }
@@ -50,10 +57,10 @@ export interface NativeActionDeps {
  */
 export async function runNativeSlashAction(
   action: NativeSlashAction,
-  { sessionId, dispatch, onToast, compactionOperationId }: NativeActionDeps,
+  { sessionId, dispatch, onToast, getSession, compactionOperationId }: NativeActionDeps,
 ): Promise<boolean> {
-  if (action.kind === 'clear') return runNativeClear({ sessionId, onToast });
-  if (action.kind === 'invoke-skill') return runNativeSkill(action.skill, action.args, { sessionId, onToast });
+  if (action.kind === 'clear') return runNativeClear({ sessionId, onToast, getSession });
+  if (action.kind === 'invoke-skill') return runNativeSkill(action.skill, action.args, { sessionId, onToast, getSession });
   if (action.kind !== 'compact') return false;
 
   const hostOwned = getCapabilities().sessionRecord;
@@ -88,6 +95,10 @@ export async function runNativeSlashAction(
       aborted: true,
     });
 
+  // Can't-do-now refusals: the chat's strip, with the words shared by every notice that means the same thing.
+  if (result.reason === 'turn-in-flight') { raiseBusy(sessionId, 'compact-busy', busyWith('compact'), { getSession, stop: () => stopTurn(sessionId) }); return false; }
+  if (result.reason === 'nothing-to-compact') { raiseCant(sessionId, 'compact-nothing', NOTHING_TO_COMPACT); return false; }
+  if (result.reason === 'not-live') { raiseNotRunning(sessionId, 'compact-not-live', notRunning('compact'), getSession); return false; }
   const known = COMPACT_REFUSAL[result.reason];
   onToast?.(
     known ??
@@ -98,12 +109,6 @@ export async function runNativeSlashAction(
   return false;
 }
 
-/** Copy for a refused /clear. Same discipline as COMPACT_REFUSAL above. */
-const CLEAR_REFUSAL: Record<string, string> = {
-  'turn-in-flight':
-    "Can't clear while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
-  'not-live': "This session isn't running, so there's nothing to clear.",
-};
 
 /**
  * /clear for a native session — a context BARRIER, not a deletion.
@@ -121,7 +126,7 @@ const CLEAR_REFUSAL: Record<string, string> = {
  * when the durable `context-clear` event comes back, which means a refused clear
  * leaves the conversation exactly as it was.
  */
-async function runNativeClear({ sessionId, onToast }: Omit<NativeActionDeps, 'dispatch'>): Promise<boolean> {
+async function runNativeClear({ sessionId, onToast, getSession }: Omit<NativeActionDeps, 'dispatch'>): Promise<boolean> {
   let result: { ok: true } | { ok: false; reason: string; detail?: string };
   try {
     result = await window.claude.native.clear(sessionId);
@@ -131,34 +136,11 @@ async function runNativeClear({ sessionId, onToast }: Omit<NativeActionDeps, 'di
 
   if (result.ok) return true;
 
-  const known = CLEAR_REFUSAL[result.reason];
-  onToast?.(
-    known ??
-      (result.detail ? `Couldn't clear: ${result.detail}` : "Couldn't clear this conversation."),
-  );
+  if (result.reason === 'turn-in-flight') { raiseBusy(sessionId, 'clear-busy', busyWith('clear'), { getSession, stop: () => stopTurn(sessionId) }); return false; }
+  if (result.reason === 'not-live') { raiseNotRunning(sessionId, 'clear-not-live', notRunning('clear'), getSession); return false; }
+  onToast?.(result.detail ? `Couldn't clear: ${result.detail}` : "Couldn't clear this conversation.");
   return false;
 }
-
-/** Copy for a refused /skill-name. Same discipline as the maps above.
- *
- *  `not-a-skill` covers TWO real cases with one honest sentence, because the
- *  dispatcher cannot tell them apart: the user typed a skill that isn't
- *  installed, OR they typed a Claude Code command (/doctor, /login) that has no
- *  YouCoded-runtime equivalent. Claiming either one specifically would be a
- *  guess, so the copy states what we know and points at what to do next. */
-const SKILL_REFUSAL: Record<string, string> = {
-  'not-a-skill':
-    "That isn't an installed skill, and it isn't a command YouCoded-runtime sessions support yet. Browse the marketplace to install skills.",
-  'unreadable':
-    "That skill is installed, but its instructions couldn't be read. Reinstalling it from the marketplace usually fixes this.",
-  // Deliberately falls through to the error's own detail below, which names the
-  // conflicting ids — a generic sentence here would hide the one thing the user
-  // needs in order to pick.
-  'ambiguous': '',
-  'turn-in-flight':
-    "Can't start a skill while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
-  'not-live': "This session isn't running, so there's nothing to run the skill in.",
-};
 
 /** Load a skill's instructions into the conversation as one turn.
  *
@@ -168,7 +150,7 @@ const SKILL_REFUSAL: Record<string, string> = {
 async function runNativeSkill(
   skill: string,
   args: string | undefined,
-  { sessionId, onToast }: Omit<NativeActionDeps, 'dispatch'>,
+  { sessionId, getSession }: Omit<NativeActionDeps, 'dispatch'>,
 ): Promise<boolean> {
   let result: { ok: true } | { ok: false; reason: string; detail?: string };
   try {
@@ -180,12 +162,21 @@ async function runNativeSkill(
 
   if (result.ok) return true;
 
-  // An empty entry means "prefer the specific detail" (see 'ambiguous').
-  const known = SKILL_REFUSAL[result.reason] || undefined;
-  onToast?.(
-    known ??
-      (result.detail ? `Couldn't run /${skill}: ${result.detail}` : `Couldn't run /${skill}.`),
-  );
+  // WHY these are strip notices now (waiting-notice T2): each is about THIS chat. 'not-a-skill' covers two real cases with one honest
+  // sentence (a skill that isn't installed, OR a Claude Code command with no YouCoded-runtime equivalent), because the dispatcher
+  // cannot tell them apart; it now carries the button to go and install one.
+  switch (result.reason) {
+    case 'not-a-skill': raiseCant(sessionId, 'skill-not-a-skill', NOT_AN_INSTALLED_SKILL, { actions: [browseSkillsAction()] }); return false;
+    case 'turn-in-flight': raiseBusy(sessionId, 'skill-busy', busyWith('start a skill'), { getSession, stop: () => stopTurn(sessionId) }); return false;
+    case 'not-live': raiseNotRunning(sessionId, 'skill-not-live', notRunning('run the skill in'), getSession); return false;
+  }
+  const retry = { label: 'Try again', primary: true, onClick: () => { void runNativeSkill(skill, args, { sessionId, getSession }); } };
+  if (result.reason === 'unreadable') { raiseFailed(sessionId, 'skill-unreadable', SKILL_UNREADABLE, { actions: [retry] }); return false; }
+  // Two skills with one name is the only detail worth showing (it names the choices). Any other detail is the computer's own
+  // technical text: it goes to the console, never the screen (review A5).
+  if (result.reason === 'ambiguous' && result.detail) { raiseFailed(sessionId, 'skill-error-detail', skillAmbiguous(skill, result.detail)); return false; }
+  if (result.detail) console.warn(`[skill] /${skill} failed:`, result.reason, result.detail);
+  raiseFailed(sessionId, 'skill-failed', skillFailed(skill), { actions: [retry] });
   return false;
 }
 

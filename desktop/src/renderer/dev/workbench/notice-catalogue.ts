@@ -2,7 +2,13 @@
 // WHY a list here: most of these fire only after a failure deep in the code, so no click reaches them; ToastPractice raises each
 // through the app's own announce() so the real notice draws it. Photo-only build only (index.tsx). Never ships.
 // Words copied from the code on 2026-11-23 (catalogue in docs/active/design/2026-11-22-waiting-notice/notices.json).
-export interface PracticeNotice { id: string; text: string; button: string | null }
+// strip: where the notice now lives (the chat's own strip, raised through showChatNotice) with its tone, when it leaves and its buttons;
+// null/absent: still a floating notice (untilClosed: stays until closed).
+export interface PracticeNotice {
+  id: string; text: string; button: string | null;
+  strip?: { tone: 'warn' | 'error'; leave: 'resolved' | 'next-action'; buttons: string[] } | null;
+  untilClosed?: boolean;
+}
 export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "escape-didnt-close",
@@ -51,13 +57,23 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  },
  {
   "id": "send-unconfirmed",
-  "text": "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.",
-  "button": null
+  "text": "Can't tell if your message was sent. Check the chat before sending it again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "send-failed-generic",
-  "text": "The message could not be sent.",
-  "button": null
+  "text": "Your message wasn't sent. It's still in the box.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "queue-not-answering",
@@ -71,43 +87,79 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  },
  {
   "id": "queue-availability-changed",
-  "text": "Queue availability changed. Check the conversation before sending again.",
-  "button": null
+  "text": "Can't tell if your message was sent. Check the chat before sending it again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "queue-maybe-not-sent",
-  "text": "Your message may not have been sent. Check the chat before sending it again.",
-  "button": null
+  "text": "Can't tell if your message was sent. Check the chat before sending it again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "queue-outcome-unknown",
-  "text": "Message outcome is unknown. Check the queue and conversation before trying again.",
-  "button": null
+  "text": "Can't tell if your message was sent. Check the chat before sending it again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "lost-send-restored",
-  "text": "An earlier message didn't reach your computer. It's back in the message box.",
-  "button": null
+  "text": "Your message wasn't sent. It's back in the box.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "maybe-lost-send-restored",
-  "text": "An earlier message may not have reached your computer. It's back in the message box — check the conversation before sending it again.",
-  "button": null
+  "text": "Can't tell if your message was sent. It's back in the box. Check the chat before sending it again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "resolved",
+   "buttons": []
+  }
  },
  {
   "id": "not-in-native-runtime",
   "text": "/doctor isn't available in YouCoded-runtime sessions yet.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "not-in-terminal-session",
   "text": "/compact isn't available in a terminal session — it's a Claude Code command.",
-  "button": null
+  "button": null,
+  "strip": null
  },
  {
   "id": "skill-cant-start-native",
   "text": "That skill can't be started from here in a YouCoded-runtime session yet.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "open-conversation-first",
@@ -117,12 +169,14 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "attachments-ignored",
   "text": "Attachments ignored with /compact",
-  "button": null
+  "button": null,
+  "strip": null
  },
  {
   "id": "no-response-to-copy",
   "text": "No response to copy",
-  "button": null
+  "button": null,
+  "strip": null
  },
  {
   "id": "copied-to-clipboard",
@@ -137,12 +191,24 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "compact-busy",
   "text": "Can't compact while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": [
+    "Stop"
+   ]
+  }
  },
  {
   "id": "compact-nothing",
   "text": "Nothing to compact yet — there needs to be at least a couple of exchanges before there’s anything to summarize.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "compact-summary-failed",
@@ -152,7 +218,12 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "compact-not-live",
   "text": "This session isn't running, so there's nothing to compact.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "compact-interrupted",
@@ -172,12 +243,24 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "clear-busy",
   "text": "Can't clear while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": [
+    "Stop"
+   ]
+  }
  },
  {
   "id": "clear-not-live",
   "text": "This session isn't running, so there's nothing to clear.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "clear-error-detail",
@@ -192,32 +275,68 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "skill-not-a-skill",
   "text": "That isn't an installed skill, and it isn't a command YouCoded-runtime sessions support yet. Browse the marketplace to install skills.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": [
+    "Browse skills"
+   ]
+  }
  },
  {
   "id": "skill-unreadable",
   "text": "That skill is installed, but its instructions couldn't be read. Reinstalling it from the marketplace usually fixes this.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "error",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "skill-busy",
   "text": "Can't start a skill while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": [
+    "Stop"
+   ]
+  }
  },
  {
   "id": "skill-not-live",
   "text": "This session isn't running, so there's nothing to run the skill in.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "skill-error-detail",
   "text": "Couldn't run /review: two skills match (a:review, b:review)",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "error",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "skill-failed",
   "text": "Couldn't run /review.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "error",
+   "leave": "next-action",
+   "buttons": [
+    "Try again"
+   ]
+  }
  },
  {
   "id": "terminal-waiting-for-answer",
@@ -226,48 +345,84 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  },
  {
   "id": "claude-did-not-confirm",
-  "text": "Claude did not confirm this action. Check the conversation before trying again.",
-  "button": null
+  "text": "Can't tell if /compact went through. Check the chat before trying again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "control-unconfirmed",
-  "text": "This action could not be confirmed. Check the conversation before trying again.",
-  "button": null
+  "text": "Can't tell if /compact went through. Check the chat before trying again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "clear-not-confirmed",
-  "text": "Clear was not confirmed; queued messages remain paused.",
-  "button": null
+  "text": "Can't tell if /clear went through. Check the chat before trying again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "clear-outcome-unknown",
-  "text": "Clear outcome is unknown. Do not repeat it without checking the conversation.",
-  "button": null
+  "text": "Can't tell if /clear went through. Check the chat before trying again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "stop-not-confirmed",
-  "text": "Stop was not confirmed.",
-  "button": null
+  "text": "Can't tell if Stop went through. If Claude is still working, press Stop again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "stop-outcome-unknown",
-  "text": "Stop outcome is unknown. Check the conversation.",
-  "button": null
+  "text": "Can't tell if Stop went through. If Claude is still working, press Stop again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "stop-task-failed",
   "text": "Couldn't stop this task.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "model-switch-failed",
-  "text": "Couldn't switch to Opus",
-  "button": null
+  "text": "Couldn't switch to Opus.",
+  "button": "Try again",
+  "strip": null,
+  "untilClosed": true
  },
  {
   "id": "model-switch-failed-again",
-  "text": "Model switch failed again. Ask Claude to diagnose with /model, or report a bug.",
-  "button": null
+  "text": "Couldn't switch to Opus again.",
+  "button": "Report bug",
+  "strip": null,
+  "untilClosed": true
  },
  {
   "id": "save-fast-mode",
@@ -282,7 +437,9 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "reload-model",
   "text": "Couldn't reload the model.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "plan-tier",
@@ -362,7 +519,9 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "remove-from-list",
   "text": "Couldn't remove this from the list.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "load-whole-file",
@@ -436,38 +595,66 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  },
  {
   "id": "stop-not-sent-offline",
-  "text": "Not connected — Stop wasn't sent. Press it again once you're back online.",
-  "button": null
+  "text": "Stop wasn't sent: you're offline. Press it again once you reconnect.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "stop-refused",
   "text": "Stop didn't go through. Press it again.",
-  "button": null
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "stop-unconfirmed-phone",
-  "text": "Your computer hasn't confirmed the stop. If the assistant is still working, press Stop again.",
-  "button": null
+  "text": "Can't tell if Stop went through. If Claude is still working, press Stop again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": []
+  }
  },
  {
   "id": "close-refused-detail",
   "text": "Couldn't close \"Bug hunt\": session is busy",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "close-refused",
   "text": "Couldn't close \"Bug hunt\". Your computer didn't accept the request.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "close-unconfirmed",
-  "text": "Couldn't confirm \"Bug hunt\" closed on your computer, so it is back.",
-  "button": null
+  "text": "Couldn't close \"Bug hunt\" on your computer, so it's back in the list.",
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "mode-unconfirmed",
-  "text": "The permission mode didn't change. Your computer didn't confirm it.",
-  "button": null
+  "text": "The permission mode didn't change. Try again.",
+  "button": null,
+  "strip": {
+   "tone": "warn",
+   "leave": "next-action",
+   "buttons": [
+    "Try again"
+   ]
+  }
  },
  {
   "id": "voice-ready",
@@ -517,17 +704,23 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "save-tag-change",
   "text": "Couldn't save this tag change.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "save-note",
   "text": "Couldn't save the note.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "save-change",
   "text": "Couldn't save this change.",
-  "button": null
+  "button": null,
+  "strip": null,
+  "untilClosed": false
  },
  {
   "id": "open-link",

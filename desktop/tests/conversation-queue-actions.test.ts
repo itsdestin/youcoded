@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createConversationQueueActions } from '../src/renderer/state/conversation-queue-actions';
+import { clearChatNotice, getChatNotice } from '../src/renderer/state/chat-notice-store';
+import { QUEUE_ACTION_UNSURE } from '../src/renderer/utils/notice-words';
 import type { QueuedItem } from '../src/shared/session-live-types';
 
 // Edit on a message waiting behind a running reply, in a chat on YouCoded's own engine.
@@ -61,5 +63,22 @@ describe('native queued message — Edit puts it back in the message box', () =>
     await actions().edit('s1', 'q1', '/a.png hi');
     expect(toast).toHaveBeenLastCalledWith('Already sending — too late to edit.');
     expect(fillDraft).not.toHaveBeenCalled();
+  });
+});
+
+// A queue action the computer would not confirm: its own words never reach the screen (waiting-notice, review A5).
+describe('Claude Code queued message — an action the computer does not confirm', () => {
+  afterEach(() => { delete (window as any).claude; clearChatNotice('s9'); vi.restoreAllMocks(); });
+
+  it('shows one plain sentence in that chat\'s strip and sends the computer\'s own text to the console', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude = { session: { queue: { action: vi.fn(async () => ({ status: 'rejected', message: 'Stale send epoch 7 (queue root mismatch)' })) } } };
+    const toast = vi.fn();
+    const a = createConversationQueueActions({ provider: () => 'claude', composer: () => null, session: () => ({ queuedMessages: [] } as never), dispatch: vi.fn(), toast });
+    await a.sendNow('s9', 'q1');
+    expect(toast).not.toHaveBeenCalled();
+    expect(getChatNotice('s9')?.text).toBe(QUEUE_ACTION_UNSURE);
+    expect(getChatNotice('s9')?.text).not.toMatch(/epoch|queue root/i);
+    expect(warn).toHaveBeenCalledWith('[queue-action] not confirmed:', expect.objectContaining({ message: 'Stale send epoch 7 (queue root mismatch)' }));
   });
 });

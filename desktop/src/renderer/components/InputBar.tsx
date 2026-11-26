@@ -47,7 +47,8 @@ import { sendClaudeCommand } from '../state/claude-control';
 import { clearRecoveryDraft } from '../state/draft-recovery';
 import { readComposerDraft, writeComposerDraft, tokenizeComposeRefs } from './composer-draft-recovery';
 import { optimisticScreen, connected } from '../state/pending-action';
-import { sendFailureCopy } from '../state/native-send-copy';
+import { reportSendFailure } from '../state/native-send-copy';
+import { raiseCommandNotHere } from '../state/raise-notice';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
@@ -850,7 +851,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const route = routeSlashResult(provider, dispatchResult);
       if (route.via === 'native') {
         const compactionOperationId = getSessionState?.(sessionId)?.compactionPending?.id; // WHY: capture before awaiting IPC.
-        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast, compactionOperationId });
+        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast, getSession: getSessionState, compactionOperationId });
         return true;
       }
       if (route.via === 'pty') {
@@ -861,7 +862,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       if (route.via === 'none-native-no-pty') {
         // Native sessions have no PTY to forward to, and this command has no
         // harness equivalent yet. Tell the user rather than silently dropping.
-        onToast?.(`${route.command} isn't available in YouCoded-runtime sessions yet.`);
+        // WHY the strip (waiting-notice T2): it is about THIS chat, so it shows in this chat's own strip, not as a floating toast.
+        raiseCommandNotHere(sessionId, route.command);
         return true;
       }
       if (route.via === 'none') return true;
@@ -911,7 +913,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           const instant = optimisticScreen() && connected() && canDrawSendNow(getSessionState?.(sessionId));
           const out = await sendToNative({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch, instant });
           if (out.status !== 'failed') return; // sent / queued / unsure: the bubble (or the host's queue strip) says it, and an unsure one says so on itself
-          onToast?.(sendFailureCopy(out.result));
+          reportSendFailure(sessionId, out.result, (message) => onToast?.(message)); // not-sent / can't-tell go to this chat's strip; held-back keeps its toast
           if (activeSessionRef.current !== sessionId || (inputRef.current?.value ?? textRef.current).trim() || attachmentsRef.current.length) {
             retainFailedOutgoing({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map(file => file.path), dispatch }, out);
             return;

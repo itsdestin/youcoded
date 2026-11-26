@@ -13,6 +13,8 @@ import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 import { queueBrowserStorage } from '../../../tests/helpers/queue-browser-storage';
 import { flushRecoveryDrafts, writeRecoveryDraft } from '../state/draft-recovery';
+import { getChatNotice, clearChatNotice } from '../state/chat-notice-store';
+import { MESSAGE_UNSURE } from '../utils/notice-words';
 
 beforeEach(() => { flushRecoveryDrafts(); sessionStorage.clear(); });
 
@@ -54,6 +56,7 @@ describe('InputBar — context-menu image paste', () => {
   });
 
   afterEach(() => {
+    clearChatNotice('sess-1');
     cleanup();
     vi.restoreAllMocks();
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
@@ -414,9 +417,7 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
     // is the timeout, and the request may still have run (error inventory 2026-09-10,
     // false message 5). Same copy as an empty ack; the draft is still restored below.
     await waitFor(() => {
-      expect(onToast).toHaveBeenCalledWith(
-        "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.",
-      );
+      expect(getChatNotice('sess-1')?.text).toBe(MESSAGE_UNSURE); // the chat's own strip (waiting-notice T2)
     });
     await waitFor(() => {
       expect(textarea.value).toBe('hello world');

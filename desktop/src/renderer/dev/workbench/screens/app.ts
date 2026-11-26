@@ -53,6 +53,11 @@ export const APP: readonly ScreenEntry[] = [
   // Review 2026-11-13: the same notice over the terminal view, whose message bar is inert and zero-size (the notice must not move off screen).
   { name: 'dev/toast#settings-repaired-terminal', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, open: ['Terminal'], newIn: 'after' as const },
   // Waiting-notice review deck (2026-11-23): every floating notice in the app, one picture each (dev/workbench/notice-catalogue.ts).
-  ...NOTICE_CATALOGUE.map((n) => ({ name: `dev/toast#n-${n.id}`, tags: ['dev', 'notice'], session: 'wb-1', params: { toast: `n:${n.id}` }, newIn: 'after' as const })),
+  // WHY sameAs for repeats: notices that mean the same thing now share ONE sentence (owner's R-words rule), so their pictures are identical on purpose.
+  ...NOTICE_CATALOGUE.map((n, i) => {
+    const first = NOTICE_CATALOGUE.slice(0, i).find((o) => o.text === n.text && JSON.stringify(o.strip ?? null) === JSON.stringify(n.strip ?? null) && !!o.untilClosed === !!n.untilClosed);
+    return { name: `dev/toast#n-${n.id}`, tags: ['dev', 'notice'], session: 'wb-1', params: { toast: `n:${n.id}` }, newIn: 'after' as const,
+      ...(first ? { sameAs: { name: `dev/toast#n-${first.id}`, why: 'Merged notices: the same sentence is shared on purpose.' } } : {}) };
+  }),
   { name: 'dev/toast#turned-off-phone', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
 ];

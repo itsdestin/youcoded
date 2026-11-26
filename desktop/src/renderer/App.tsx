@@ -8,7 +8,9 @@ import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { applyCloseChoices } from './state/close-prompt-writes';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
-import { clearChatNotice } from './state/chat-notice-store';
+import { clearChatNotice, getUnseenFailureIds, markFailureSeen, setNoticeViewer, subscribeUnseenFailures } from './state/chat-notice-store';
+import { raiseCant, raiseCommandNotHere, OPEN_MARKETPLACE_EVENT } from './state/raise-notice';
+import { SKILL_CANT_START_NATIVE } from './utils/notice-words';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
 import { SessionTerminal } from './components/SessionTerminal';
@@ -83,7 +85,7 @@ import { usePartyGame } from './hooks/usePartyGame';
 import { useChessGame } from './hooks/useChessGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
-import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses } from './hooks/useSessionAttention';
+import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses, withFailureDots } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useSessionSummaries } from './hooks/useSessionSummaries';
 import { useAttentionSound } from './hooks/useAttentionSound';
@@ -131,7 +133,9 @@ import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } fr
 import { phoneTerminalLayout } from './device';
 import { deferredScreen } from './components/deferred-screen';
 import { markScreensReady, useScreensReady } from './state/screens-ready';
-import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
+import { APP_NOTICE_EVENT, announce, type AppNoticeDetail } from './utils/announce';
+import { modelSwitchFailed, modelSwitchFailedAgain } from './utils/notice-words';
+import { BugReportPopup } from './components/development/BugReportPopup';
 import { reconcilePending, confirmPending } from './state/pending-action';
 import { usePhoneSessionActions } from './hooks/usePhoneSessionActions';
 import { useTakeoverPrompts } from './hooks/use-takeover-prompts';
@@ -573,6 +577,13 @@ function AppInner() {
     setActiveView('marketplace');
   }, []);
 
+  // A notice's "Browse skills" button (state/raise-notice.ts) has no prop path here, so it asks by event.
+  useEffect(() => {
+    const open = () => openMarketplace('skills');
+    window.addEventListener(OPEN_MARKETPLACE_EVENT, open);
+    return () => window.removeEventListener(OPEN_MARKETPLACE_EVENT, open);
+  }, [openMarketplace]);
+
   // Stable callback so MarketplaceScreen's useEffect doesn't re-fire every
   // render. Prior inline lambda recreated every parent render → the child's
   // effect saw a new dep identity → re-ran → caused a setState-during-render
@@ -841,6 +852,12 @@ function AppInner() {
   // declaration order, and this helper is called from several places.
   // Returns true when the result was consumed here, so callers know whether to
   // fall through to their own send path.
+  // "/x isn't available here": the chat's strip for a built-in assistant chat; a plain terminal session has no message box (so no strip),
+  // so there it stays a floating notice — and says its own sentence, since the native-runtime one would be a lie there.
+  const commandNotHere = useCallback((sid: string, command: string) => {
+    if (sessionsRef.current.find((x) => x.id === sid)?.provider === 'shell') setToast(`${command} isn't available in a terminal session — it's a Claude Code command.`);
+    else raiseCommandNotHere(sid, command);
+  }, []);
   const runSlashResult = useCallback((sid: string, result: DispatcherResult): boolean => {
     const provider = sessionsRef.current.find((x) => x.id === sid)?.provider;
     const route = routeSlashResult(provider, result);
@@ -850,8 +867,9 @@ function AppInner() {
           sessionId: sid,
           dispatch,
           compactionOperationId: chatStateMapRef.current.get(sid)?.compactionPending?.id, // WHY: capture before awaiting IPC.
-          // Toast owns its own dismissal.
+          // Toast owns its own dismissal (only compact / clear failures still use it; the rest go to the chat's strip).
           onToast: (msg: string) => setToast(msg),
+          getSession: (id: string) => chatStateMapRef.current.get(id),
         });
         return true;
       case 'pty':
@@ -861,19 +879,17 @@ function AppInner() {
         // Was a silent drop: guardedPtySend refuses for native sessions and its
         // own toast only fires for the pending-interaction case, so a native user
         // choosing this command got no feedback at all (handoff §2.3).
-        setToast(provider === 'shell'
-          // A shell session is a plain terminal — the command would have been
-          // typed into the user's shell, which is not what they asked for. Say
-          // that, rather than the native-runtime sentence, which would be a lie.
-          ? `${route.command} isn't available in a terminal session — it's a Claude Code command.`
-          : `${route.command} isn't available in YouCoded-runtime sessions yet.`);
+        // WHY raiseCommandNotHere: the words go to THIS chat's strip (a shell session has no message box, so there they float).
+        // A shell session is a plain terminal — the command would have been typed into the user's shell, which is not what
+        // they asked for, so it gets its own sentence rather than the native-runtime one, which would be a lie.
+        commandNotHere(sid, route.command);
         return true;
       case 'none':
         return true;
       case 'passthrough':
         return false;
     }
-  }, [guardedPtySend, dispatch]);
+  }, [guardedPtySend, dispatch, commandNotHere]);
 
   // Task 11 (cancel/edit queued messages), rewired for Task 12's docked strip
   // (was UserMessage's Cancel/Edit affordances — now QueuedMessagesStrip's):
@@ -990,6 +1006,8 @@ function AppInner() {
   // re-renders only when a triple changes, not on every dispatch (see
   // useSessionAttention). sessionStatuses keeps its old shape for HeaderBar.
   const sessionAttention = useSessionAttention(sessions, viewedSessions, sessionId);
+  // ONE subscription for every chat's failure dot (waiting-notice T2): the set is replaced only when a failure is raised or seen.
+  const unseenFailureIds = useSyncExternalStore(subscribeUnseenFailures, getUnseenFailureIds, getUnseenFailureIds);
   const attentionSummary = useAttentionSummary();
   // WHY (one-core R5-3): a phone watches only the conversation on its screen and a few it looked at lately, so every other
   // conversation's dot (and the attention sound, which reads the dots) comes from the computer's per-session summary, not from events
@@ -1029,8 +1047,12 @@ function AppInner() {
       summaryPerSession: attentionSummary.perSession,
       attentionMap: statusData.attentionMap,
     });
-    return mergeSummaryStatuses({ base: merged, sessionIds: sessions.map((s: any) => s.id), summaries: sessionSummaries, viewedSessions, activeSessionId: sessionId });
-  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap, sessionSummaries, viewedSessions, sessionId]);
+    const withSummaries = mergeSummaryStatuses({ base: merged, sessionIds: sessions.map((s: any) => s.id), summaries: sessionSummaries, viewedSessions, activeSessionId: sessionId });
+    // WHY its own step AFTER both merges (review 2, B1): mergeSummaryStatuses hands back its input untouched when `summaries`
+    // is null (always so on the computer's own window), so a dot added before it would be skipped there. A failure the person
+    // has not seen is red whatever the chat's own colour is.
+    return withFailureDots(withSummaries, unseenFailureIds);
+  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap, sessionSummaries, viewedSessions, sessionId, unseenFailureIds]);
 
   // Play the 'attention' sound when any session transitions to red (awaiting approval). WHY once per burst on a phone: a reconnect
   // can report many already-waiting sessions at once; see useAttentionSound. The computer's windows are unchanged.
@@ -1153,6 +1175,7 @@ function AppInner() {
   // (Destin, 2026-10-30: "clicking into a session never clears blue status dots in the buddy").
   useEffect(() => {
     const off = window.claude?.buddy?.onSeenInBuddy?.((sid: string) => {
+      markFailureSeen(sid); // looking at it in the buddy clears its red dot too
       setViewedSessions((prev) => {
         if (prev.has(sid)) return prev;
         const next = new Set(prev);
@@ -2127,6 +2150,7 @@ function AppInner() {
   // Mark session as viewed when the user switches to it
   useEffect(() => {
     if (sessionId) {
+      markFailureSeen(sessionId); // its red failure dot goes when you open the chat (same moment as its blue one)
       setViewedSessions((prev) => {
         if (prev.has(sessionId)) return prev;
         const next = new Set(prev);
@@ -2281,6 +2305,11 @@ function AppInner() {
     return 'sent';
   }, [guardedPtySend, sessions]);
 
+  // The "Try again" on a failed model switch reaches the latest switcher through this (the verify effect below must not re-subscribe for it).
+  const switchModelRef = useRef<typeof switchSessionModel | null>(null);
+  switchModelRef.current = switchSessionModel;
+  const [modelReportOpen, setModelReportOpen] = useState(false);
+
   // Shift+Space cycles model in chat view
   const cycleModelRef = useRef<(() => void) | null>(null);
   const cycleModel = useCallback(() => {
@@ -2364,10 +2393,15 @@ function AppInner() {
         const failures = consecutiveFailures.current + 1;
         consecutiveFailures.current = failures;
         setPendingModel(null);
+        // WHY announce + untilClosed (waiting-notice T2, owner's "needs you" rule): the next message quietly uses the old model, so
+        // this stays until closed, with a button that does the useful thing — Try again, or (a second time) Report bug instead of
+        // telling the person to type a diagnose command.
+        const wanted = pendingModel.charAt(0).toUpperCase() + pendingModel.slice(1);
+        const failedSid = sessionId;
         if (failures >= 2) {
-          setToast({ message: "Model switch failed again. Ask Claude to diagnose with /model, or report a bug.", durationMs: 4000 });
+          announce(modelSwitchFailedAgain(wanted), undefined, { label: 'Report bug', onClick: () => setModelReportOpen(true) }, { untilClosed: true });
         } else {
-          setToast({ message: "Couldn't switch to " + pendingModel.charAt(0).toUpperCase() + pendingModel.slice(1), durationMs: 4000 });
+          announce(modelSwitchFailed(wanted), undefined, { label: 'Try again', onClick: () => { if (failedSid) switchModelRef.current?.(failedSid, pendingModel as ModelAlias); } }, { untilClosed: true });
         }
       }
     });
@@ -2514,7 +2548,7 @@ function AppInner() {
         // Was a bare `return`: guardedPtySend refuses for native sessions and
         // toasts only for the pending-interaction case, so a native user clicking
         // a drawer command got nothing at all (handoff §2.3).
-        setToast(`${entry.name} isn't available in YouCoded-runtime sessions yet.`);
+        commandNotHere(sessionId, entry.name);
         return;
       }
       dispatch({
@@ -2577,7 +2611,7 @@ function AppInner() {
         // Native sessions have no PTY. A skill's natural-language prompt has no
         // harness path yet (that is the Skill tool's job, model-invoked), so say
         // so rather than dropping it silently (handoff §2.3).
-        setToast("That skill can't be started from here in a YouCoded-runtime session yet.");
+        raiseCant(sessionId, 'skill-cant-start-native', SKILL_CANT_START_NATIVE);
         return;
       }
       dispatch({
@@ -2908,6 +2942,9 @@ function AppInner() {
   useEffect(() => {
     document.documentElement.dataset.viewMode = currentViewMode;
   }, [currentViewMode]);
+  // Tells the notice store which chat's message area is on screen, so a red failure for any OTHER chat gets its dot in the list
+  // (in terminal view the strip is hidden, so no chat counts as seen).
+  useEffect(() => { setNoticeViewer('main', currentViewMode === 'chat' ? (sessionId ?? null) : null); }, [currentViewMode, sessionId]);
 
   // SWITCH MARKS (2026-10-05): tell the hitch recorder every time the active session changes, so it can time the switch
   // (state/switch-marks.ts, docs/hitch-recorder.md). WHY a LAYOUT effect: it runs in the same commit that makes the new pane the
@@ -4206,7 +4243,7 @@ function AppInner() {
           // Claude Code fallback: not a dispatcher command, so hand the raw text
           // to the PTY the way this button always did.
           if (!guardedPtySend(sessionId, `${command} \r`)) {
-            setToast(`${command} isn't available in YouCoded-runtime sessions yet.`);
+            commandNotHere(sessionId, command);
           }
         }}
         hasActiveSession={!!sessionId}
@@ -4436,6 +4473,8 @@ function AppInner() {
           dismissible={typeof toast !== 'string' && !!toast.dismissible}
         />
       )}
+      {/* "Report bug" on a model switch that failed twice (memoWhileClosed would be overkill: it renders nothing while closed). */}
+      {modelReportOpen && <BugReportPopup open onClose={() => setModelReportOpen(false)} context={{ surface: 'Model switch' }} />}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,
           Destin sign-off 2026-07-23). L2 popup via the shared Scrim/OverlayPanel
           primitives (theme-driven scrim/blur/shadow; PITFALLS → Overlays). Plain

@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
-import { useSessionAttention, statusFromSummary, mergeSummaryStatuses, viewedAfterSummaries } from '../src/renderer/hooks/useSessionAttention';
+import { useSessionAttention, statusFromSummary, mergeSummaryStatuses, viewedAfterSummaries, withFailureDots } from '../src/renderer/hooks/useSessionAttention';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import { SessionRecords } from '../src/main/session-record';
@@ -154,5 +154,26 @@ describe('a conversation resumed from disk (history loaded as a page, no live ev
     expect(result.current.get('old')!.status).toBe('blue');
     expect(statusFromSummary(records.summary('old')!, true)).toBe('blue');
     expect(statusFromSummary(records.summary('old')!, false)).toBe('gray');
+  });
+});
+
+describe('a failure you have not seen is a red dot on that chat', () => {
+  const base = () => new Map<string, SessionStatusColor>([['a', 'gray'], ['b', 'blue'], ['c', 'green'], ['d', 'red']]);
+  it.each([['gray'], ['blue'], ['green']] as const)('turns a %s chat red', (was) => {
+    const m = new Map<string, SessionStatusColor>([['x', was]]);
+    expect(withFailureDots(m, new Set(['x'])).get('x')).toBe('red');
+  });
+  it('leaves every other chat alone, ignores a chat this window does not list, and hands back the same map when nothing changes', () => {
+    const m = base();
+    const out = withFailureDots(m, new Set(['a', 'gone']));
+    expect([...out]).toEqual([['a', 'red'], ['b', 'blue'], ['c', 'green'], ['d', 'red']]);
+    expect(m.get('a')).toBe('gray');                              // the input is never edited
+    expect(withFailureDots(m, new Set())).toBe(m);
+    expect(withFailureDots(m, new Set(['d']))).toBe(m);           // already red
+  });
+  it('works after the phone merge AND on the computer\'s own window, where there are no summaries to merge', () => {
+    const b = new Map<string, SessionStatusColor>([['a', 'gray']]);
+    const noSummaries = mergeSummaryStatuses({ base: b, sessionIds: ['a'], summaries: null, viewedSessions: new Set(), activeSessionId: null });
+    expect(withFailureDots(noSummaries, new Set(['a'])).get('a')).toBe('red');
   });
 });

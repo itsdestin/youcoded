@@ -3,6 +3,8 @@
 //
 // Every function here returns false (or does the plain old thing) on the computer's own window, so the caller keeps its existing code for that case.
 import { announce } from '../utils/announce';
+import { raiseUnsureNextAction } from './raise-notice';
+import { MODE_UNCHANGED, closeUnconfirmed } from '../utils/notice-words';
 import { runPending, optimisticScreen, connected } from './pending-action';
 
 /** A reply-less change (Claude Code's mode key) waits this long for the record's reading before the screen asks the computer. */
@@ -38,7 +40,8 @@ export function closeSession(o: {
       restore();
       announce(reason.kind === 'refused'
         ? `Couldn't close ${label}${reason.detail && !/^remote-unsupported/.test(reason.detail) ? `: ${reason.detail}` : '. Your computer didn\'t accept the request.'}`
-        : `Couldn't confirm ${label} closed on your computer, so it is back.`);
+        // WHY floating and short (deck): it is about a chat in the list, which may not be the one open, and the chat is visibly back.
+        : closeUnconfirmed(label), 5000);
     },
     async check() { return (await o.list()).some((s) => s.id === o.id) ? 'absent' : 'present'; },
   });
@@ -67,7 +70,8 @@ export function setNativeModeNow(o: ModeScreen & { set: () => Promise<unknown>; 
     undo() {
       // Only put the old mode back if nothing newer (the computer's own answer or push) has replaced the one this change drew.
       if (o.read() === o.to) o.write(o.from);
-      announce("The permission mode didn't change. Your computer didn't confirm it.");
+      // The strip of THIS chat, with a Try again that repeats the same change (the old mode was just put back above).
+      raiseUnsureNextAction(o.sessionId, 'mode-unconfirmed', MODE_UNCHANGED, { actions: [{ label: 'Try again', primary: true, onClick: () => { setNativeModeNow(o); } }] });
     },
     async check() {
       const mode = await o.readHost();      // a failed read throws: the helper tries again, then puts the old mode back
@@ -95,7 +99,7 @@ export function cycleClaudeModeNow(o: ModeScreen & { sendKey: () => void }): boo
     send() { o.sendKey(); return 'sent'; },
     undo() {
       if (o.read() === o.to) o.write(o.from);
-      announce("The permission mode didn't change. Your computer didn't confirm it.");
+      raiseUnsureNextAction(o.sessionId, 'mode-unconfirmed', MODE_UNCHANGED, { actions: [{ label: 'Try again', primary: true, onClick: () => { cycleClaudeModeNow(o); } }] });
     },
     // Reached only when no reading has arrived (a reading confirms the change before this runs).
     check: () => 'absent',

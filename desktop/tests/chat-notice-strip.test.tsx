@@ -9,7 +9,11 @@ import { ChatNoticeStrip } from '../src/renderer/components/ChatNoticeStrip';
 import { ChatProvider, useChatStore } from '../src/renderer/state/chat-context';
 import {
   showChatNotice, clearChatNotice, getChatNotice, stillBusy, stillNotLive, stillTransferring, type ChatNotice,
+  setNoticeViewer, markFailureSeen, getUnseenFailureIds, subscribeUnseenFailures,
 } from '../src/renderer/state/chat-notice-store';
+import { raiseFailed, raiseCant, raiseBusy, raiseNotRunning } from '../src/renderer/state/raise-notice';
+import { runNativeSlashAction } from '../src/renderer/state/native-slash-actions';
+import { busyWith, MESSAGE_UNSURE, STOP_UNSURE } from '../src/renderer/utils/notice-words';
 import { setScreenInputBlock, getScreenInputBlock, clearScreenInputBlocks, subscribeScreenInputBlocks } from '../src/renderer/state/screen-input-store';
 import { isTurnBusy } from '../src/renderer/hooks/useStreamingGate';
 import { REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
@@ -201,5 +205,96 @@ describe('tone and layout', () => {
     mount();
     act(() => showChatNotice(SID, base));
     expect(document.querySelector('.status-strip')!.className).not.toContain('flex-col');
+  });
+});
+
+
+describe('a notice is raised for the chat the action was for', () => {
+  afterEach(() => { clearChatNotice('bg'); clearChatNotice('fg'); setNoticeViewer('main', null); markFailureSeen('bg'); markFailureSeen('fg'); });
+
+  it('a failure raised for a background chat lands in that chat\'s strip and marks its dot; the chat on screen gets neither', () => {
+    setNoticeViewer('main', 'fg');
+    raiseFailed('bg', 'skill-failed', "Couldn't run /review.");
+    expect(getChatNotice('bg')?.text).toBe("Couldn't run /review.");
+    expect(getChatNotice('fg')).toBeUndefined();
+    expect([...getUnseenFailureIds()]).toEqual(['bg']);
+  });
+
+  it('opening the chat clears its dot, and a failure for the chat you are looking at never marks one', () => {
+    setNoticeViewer('main', 'fg');
+    raiseFailed('bg', 'skill-failed', 'x');
+    setNoticeViewer('main', 'bg');                       // switched to it
+    expect(getUnseenFailureIds().has('bg')).toBe(false);
+    raiseFailed('bg', 'skill-failed', 'again');           // raised while looking at it
+    expect(getUnseenFailureIds().has('bg')).toBe(false);
+  });
+
+  it('a notice the person dismisses takes its dot with it, and a can\'t-do-now notice never makes one', () => {
+    setNoticeViewer('main', 'fg');
+    raiseFailed('bg', 'k', 'x');
+    clearChatNotice('bg');
+    expect(getUnseenFailureIds().has('bg')).toBe(false);
+    raiseCant('bg', 'c', 'Not here.');
+    expect(getUnseenFailureIds().size).toBe(0);
+  });
+
+  it('tells its one subscriber only when the set really changes', () => {
+    const seen = vi.fn();
+    const off = subscribeUnseenFailures(seen);
+    setNoticeViewer('main', 'fg');
+    raiseFailed('bg', 'k', 'x'); raiseFailed('bg', 'k', 'y');   // the second changes nothing
+    expect(seen).toHaveBeenCalledTimes(1);
+    markFailureSeen('bg'); markFailureSeen('bg');
+    expect(seen).toHaveBeenCalledTimes(2);
+    off();
+  });
+});
+
+describe('"still working" notices leave when the reply ends', () => {
+  afterEach(() => { clearChatNotice(SID); delete (window as any).claude; });
+
+  it('compacting while a reply is being written shows a Stop button, and the notice goes when the turn ends', async () => {
+    let session: any = { isThinking: true, attentionState: 'ok' };
+    (window as any).claude = { native: { compact: vi.fn().mockResolvedValue({ ok: false, reason: 'turn-in-flight' }), interrupt: vi.fn() } };
+    mount();
+    await act(async () => { await runNativeSlashAction({ kind: 'compact' } as any, { sessionId: SID, dispatch: vi.fn(), getSession: () => session }); });
+    expect(screen.getByText(busyWith('compact'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect((window as any).claude.native.interrupt).toHaveBeenCalledWith(SID);
+    session = { isThinking: false, attentionState: 'ok' };            // the reply ended
+    act(() => storeRef.dispatch({ type: 'SESSION_INIT', sessionId: SID } as any));
+    expect(getChatNotice(SID)).toBeUndefined();
+  });
+
+  it('when this screen never saw the reply running, the notice does not vanish unread: it waits for the next action', () => {
+    raiseBusy(SID, 'clear-busy', 'busy', { getSession: () => ({ isThinking: false, attentionState: 'ok' }) as any, stop: () => {} });
+    expect(getChatNotice(SID)?.stillTrue).toBeUndefined();
+    expect(getChatNotice(SID)?.leave).toBe('next-action');
+  });
+
+  it('"not running" leaves once the chat is running again, and only if it was seen ending', () => {
+    let session: any = { isThinking: false, attentionState: 'session-died' };
+    raiseNotRunning(SID, 'compact-not-live', 'off', () => session);
+    expect(getChatNotice(SID)?.stillTrue?.()).toBe(true);
+    session = { isThinking: true, attentionState: 'ok' };
+    expect(getChatNotice(SID)?.stillTrue?.()).toBe(false);
+    raiseNotRunning(SID, 'compact-not-live', 'off', () => ({ isThinking: false, attentionState: 'ok' }) as any);
+    expect(getChatNotice(SID)?.stillTrue).toBeUndefined();            // no signal to wait for
+  });
+
+  it('a skill that fails with the computer\'s own technical text shows only a plain sentence', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude = { native: { invokeSkill: vi.fn().mockResolvedValue({ ok: false, reason: 'error', detail: 'ENOENT: /home/x/.claude/skills/review/SKILL.md' }) } };
+    await runNativeSlashAction({ kind: 'invoke-skill', skill: 'review' } as any, { sessionId: SID, dispatch: vi.fn() });
+    expect(getChatNotice(SID)?.text).toBe("Couldn't run /review.");
+    expect(getChatNotice(SID)?.tone).toBe('error');
+    expect(getChatNotice(SID)?.actions?.map((a) => a.label)).toEqual(['Try again']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('/review'), 'error', 'ENOENT: /home/x/.claude/skills/review/SKILL.md');
+    warn.mockRestore();
+  });
+
+  it('the unconfirmed Stop and the unsent message each have one approved sentence', () => {
+    expect(STOP_UNSURE).toBe("Can't tell if Stop went through. If Claude is still working, press Stop again.");
+    expect(MESSAGE_UNSURE).toBe("Can't tell if your message was sent. Check the chat before sending it again.");
   });
 });

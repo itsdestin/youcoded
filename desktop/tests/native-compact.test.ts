@@ -4,6 +4,7 @@
 // choosing /compact in a native session went to guardedPtySend, returned false,
 // and vanished. So the load-bearing assertions here are as much about honest
 // refusals as about the happy path.
+import { getChatNotice, clearChatNotice } from '../src/renderer/state/chat-notice-store';
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -416,7 +417,10 @@ describe('native /compact focus propagation', () => {
       const dispatch = vi.fn(), onToast = vi.fn();
       expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch, onToast })).toBe(false);
       expect(dispatch).not.toHaveBeenCalled();
-      expect(onToast).toHaveBeenCalledWith(expect.stringContaining('still working'));
+      // "still working" is a can't-do-now notice: it is in that chat's strip, not a floating toast (waiting-notice T2).
+      expect(onToast).not.toHaveBeenCalled();
+      expect(getChatNotice('s')?.text).toContain('still working');
+      clearChatNotice('s');
     } finally { (globalThis as any).window = previous; }
   });
 

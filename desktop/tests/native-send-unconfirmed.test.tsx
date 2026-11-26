@@ -20,6 +20,8 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
 import InputBar from '../src/renderer/components/InputBar';
+import { clearChatNotice, getChatNotice } from '../src/renderer/state/chat-notice-store';
+import { MESSAGE_NOT_SENT, MESSAGE_UNSURE } from '../src/renderer/utils/notice-words';
 
 class NoopResizeObserver { observe() {} unobserve() {} disconnect() {} }
 
@@ -52,7 +54,7 @@ function sendHello(onToast: (msg: string) => void) {
 
 describe('InputBar native send — an unanswered send is not reported as unsent', () => {
   beforeEach(() => { (global as any).ResizeObserver = NoopResizeObserver; });
-  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+  afterEach(() => { clearChatNotice('sess-1'); cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
 
   it('a send that got no answer says it could not confirm, and keeps the draft', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -60,8 +62,9 @@ describe('InputBar native send — an unanswered send is not reported as unsent'
     const onToast = vi.fn();
     const box = sendHello(onToast);
 
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringMatching(/couldn.t confirm/i)));
-    expect(onToast).not.toHaveBeenCalledWith(expect.stringMatching(/could not be sent/i));
+    // The words are in THIS chat's strip (waiting-notice T2), the shared "can't tell" sentence, never "could not be sent".
+    await waitFor(() => expect(getChatNotice('sess-1')?.text).toBe(MESSAGE_UNSURE));
+    expect(onToast).not.toHaveBeenCalled();
     await waitFor(() => expect(box.value).toBe('hello world'));
   });
 
@@ -70,8 +73,8 @@ describe('InputBar native send — an unanswered send is not reported as unsent'
     const onToast = vi.fn();
     sendHello(onToast);
 
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringMatching(/couldn.t confirm/i)));
-    expect(onToast).not.toHaveBeenCalledWith(expect.stringMatching(/no response from the session host/i));
+    await waitFor(() => expect(getChatNotice('sess-1')?.text).toBe(MESSAGE_UNSURE));
+    expect(getChatNotice('sess-1')?.text).not.toMatch(/no response from the session host/i);
   });
 
   it('a failure the host confirmed, for a reason without its own sentence, says only that', async () => {
@@ -79,6 +82,6 @@ describe('InputBar native send — an unanswered send is not reported as unsent'
     const onToast = vi.fn();
     sendHello(onToast);
 
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith('The message could not be sent.'));
+    await waitFor(() => expect(getChatNotice('sess-1')?.text).toBe(MESSAGE_NOT_SENT));
   });
 });
