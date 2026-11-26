@@ -1,6 +1,5 @@
 import Foundation
 import NodeMobile
-import os
 
 /// Starts the desktop backend inside this app and reports when it is ready.
 ///
@@ -26,7 +25,6 @@ final class BackendRunner {
     var onState: ((State) -> Void)?
     private(set) var state: State = .starting
 
-    private let log = Logger(subsystem: "com.youcoded.app", category: "backend")
     private var started = false
     private var token = ""
     private var port = 0
@@ -41,7 +39,8 @@ final class BackendRunner {
         started = true
         AppPaths.ensureDirectories()
 
-        let entry = AppPaths.backendDir.appendingPathComponent("dist/main/headless/ios-main.js")
+        // ios-boot.js loads the real bundle (ios-main.js) inside a try: see ios/runtime/build-backend.mjs.
+        let entry = AppPaths.backendDir.appendingPathComponent("dist/main/headless/ios-boot.js")
         guard FileManager.default.fileExists(atPath: entry.path) else {
             setState(.failed("The app is missing its assistant files. Reinstalling YouCoded should fix this."))
             return
@@ -189,8 +188,9 @@ final class BackendRunner {
     }
 
     private func handleConsoleLine(_ line: String) {
-        // The unified log too, so a test run (or Console.app) can follow the backend without reading the file.
-        log.info("\(line, privacy: .public)")
+        // WHY nothing is logged from here (found in the first simulator runs): this process's stderr IS the pipe
+        // being read, and the system log echoes to stderr under Xcode — so logging a line here fed it straight back
+        // in, each copy longer than the last, until the log file was megabytes of one line. backend.log is the record.
         if line.hasPrefix("YOUCODED_HEADLESS_READY") {
             DispatchQueue.main.async { self.setState(.ready(port: self.port, token: self.token)) }
         } else if line.hasPrefix("YOUCODED_HEADLESS_EXIT") {

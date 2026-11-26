@@ -12,6 +12,7 @@
 // path `tsc` would have given it under <outDir>/dist — the layout below is exactly Android's:
 //
 //   <outDir>/package.json                         name + version (electron-headless.ts reads the version)
+//   <outDir>/dist/main/headless/ios-boot.js       what the app starts: loads ios-main.js inside a try (written below)
 //   <outDir>/dist/main/headless/ios-main.js       the backend (entry: desktop/src/main/headless/ios-main.ts)
 //   <outDir>/dist/main/**/<worker>.js             each worker thread, self-contained, where its starter looks
 //   <outDir>/dist/renderer/data/skill-registry.json
@@ -165,6 +166,21 @@ async function main() {
     const size = (await fs.promises.stat(outfile)).size;
     console.log(`[ios-backend] ${path.relative(OUT, outfile)}  ${(size / 1e6).toFixed(1)} MB  (${inputs} modules)`);
   }
+
+  // WHY a separate, tiny first file (2026-11-25, found in the simulator): if the big bundle cannot even be PARSED on
+  // the phone's Node (a syntax the old V8 rejects), nothing inside it runs — including the guard that stops Node
+  // from exiting — and Node's own answer to a failed main script is exit(1), which on an iPhone ends the whole app
+  // without a word. This file always parses, loads the bundle inside a try, and reports a failure the way the app
+  // understands (the YOUCODED_HEADLESS_EXIT line → "close and reopen"), with the real error in backend.log.
+  await fs.promises.writeFile(path.join(OUT, 'dist/main/headless/ios-boot.js'), `'use strict';
+process.on('uncaughtException', function (e) { console.error('[ios] uncaught exception:', (e && e.stack) || e); });
+try {
+  require('./ios-main.js');
+} catch (e) {
+  console.error('[ios] the backend could not be loaded:', (e && e.stack) || e);
+  try { require('fs').writeSync(1, 'YOUCODED_HEADLESS_EXIT 1\\n'); } catch (_) {}
+}
+`);
 
   const pkg = JSON.parse(await fs.promises.readFile(path.join(DESKTOP, 'package.json'), 'utf8'));
   await fs.promises.writeFile(path.join(OUT, 'package.json'), JSON.stringify({ name: pkg.name, version: pkg.version }, null, 2) + '\n');
