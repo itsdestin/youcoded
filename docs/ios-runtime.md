@@ -76,6 +76,12 @@ is cut off. What the shell does today:
 - "Needs you" alerts and the icon badge are shown from the backend's `status` call, but only while the app is
   still running; nothing can wake a suspended app without a push service, which YouCoded does not have.
 
+- **Coming back.** iOS can take a suspended app's listening sockets away, so on return the shell reopens its own
+  listener on the same port (`HostSocketServer.reopenIfNeeded`), tells the backend the app is visible, and the
+  backend knocks on its own door and reopens it if nobody answers (`RemoteServer.reviveLocalListener`); the page
+  reconnects by itself. If the backend still cannot be reached after a few tries the shell says so ("iOS paused
+  YouCoded for too long…"). None of this can be reproduced in a simulator: it is the first thing to try on a phone.
+
 So an iPhone is a device you use, not one that works on its own: scheduled automations run only while the app
 is open (missed runs are handled by each job's own setting when it next opens), and a phone hosting a Mesh chat
 can only do so in the foreground. Running on a computer that is on — reached through the Mesh — is the answer
