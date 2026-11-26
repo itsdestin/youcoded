@@ -58,7 +58,9 @@ export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescr
     if (retiredNow) ctx.advertise(); // the new copy exists now, so what is advertised is what it holds
     return { local: cur.local, incarnation: cur.incarnation };
   };
-  if (desc.parent === null || cur.incarnation > 0) return register(); // a recopy of a child is a whole copy (its fork point is inside the lines)
+  // A child is (re)made by forking from its parent EVERY time, a recopy too (fuzz, review 1): a forked child's first lines were never sent as signed batches of its own (they were copied locally),
+  // so no peer can serve them; a whole copy from line 0 would wait for signed points that do not exist. The lines after the fork point do come from peers.
+  if (desc.parent === null) return register();
   const forkLine = desc.forkLine as number;
   const parentDesc = ctx.directory.describe(desc.parent);
   if (!parentDesc) { for (const p of ctx.peers.values()) askIntro(ctx, p, desc.parent); ctx.bump('fork-waits-for-parent-intro'); return null; }

@@ -203,13 +203,13 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         if (dmg !== Infinity) readable = Math.min(readable, dmg);
         const got = readable > 0 ? await dev.store.read(local, 0, 0, readable).catch(() => 'unreadable' as const) : [];
         if (got === 'unreadable') { if (st.state === 'in-sync') { let firstBad = -1; for (let i = 0; i < readable; i++) { const r1 = await dev.store.read(local, 0, i, i + 1).catch(() => 'bad'); if (r1 === 'bad') { firstBad = i; break; } } fail(`${n} reads corrupt (first bad line ${firstBad}) but says in-sync (P3/P4) head=${JSON.stringify(h)} counters=${JSON.stringify(dev.rep.counters())}`); }; }
-        else if (got !== 'evicted') for (let i = 0; i < readable; i++) if (!got[i].equals(O[i])) fail(`${n} line ${i} of ${v.toString('hex').slice(0, 6)} differs from what the writer appended (P1)`);
+        else if (got !== 'evicted') for (let i = 0; i < readable; i++) if (!got[i].equals(O[i])) fail(`${n} line ${i} of ${v.toString('hex').slice(0, 6)} (version #${vs.indexOf(v)}, writer ${writer.get(v.toString('hex'))}, oracle ${O.length}, holds ${h.lines}) differs from what the writer appended (P1): got ${got[i].toString().slice(0, 70)} want ${O[i].toString().slice(0, 70)} counters ${JSON.stringify(dev.rep.counters())}`);
         if (st.state === 'in-sync') {
           if (h.lines !== O.length || readable !== h.lines) fail(`${n} says in-sync but holds ${h.lines}/${O.length} lines, readable ${readable} (P2)`);
           if (dmg !== Infinity) fail(`${n} says in-sync while the store reports a refill (P4)`);
         } else {
           const key = `state:${st.state}`; excuses.push(`${n}:${v.toString('hex').slice(0, 6)}:${st.state}:${st.reason ?? ''}`);
-          if (!EXCUSE_LIMITS[key] && st.state !== 'stuck') fail(`${n} ends ${st.state} (${st.reason}) with no documented limit that explains it`);
+          if (!EXCUSE_LIMITS[key] && st.state !== 'stuck') fail(`${n} ends ${st.state} (${st.reason}) with no documented limit that explains it; version #${vs.indexOf(v)} writer ${writer.get(v.toString('hex'))} oracle ${O.length} lines, ${n} holds ${h.lines} (inc ${st.incarnation}) counters ${JSON.stringify(dev.rep.counters())} peers ${JSON.stringify(dev.rep.peerView(v))}`);
           if (st.state === 'stuck') fail(`${n} ends stuck (${st.reason})`);
         }
         const parked = await dev.store.parkedList(local);

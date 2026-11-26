@@ -413,7 +413,7 @@ export class Replicator {
       const from = repairFrom(head);
       const mine: HeadView = from === null ? { lines: head.lines, hash: head.hash, state: 'ok' } : { lines: from, hash: (await this.#o.store.hashAt(v.local, 0, from).catch(() => null /* benign: no chain value at that count (evicted): my own head's value stands in, which only makes this comparison more cautious */)) ?? head.hash, state: 'refilling' };
       const now = ctx.clock.now();
-      const pulls: PeerInfo[] = []; let diverged: PeerInfo | null = null; let anySeen = false; let allSync = true;
+      const pulls: PeerInfo[] = []; let diverged: PeerInfo | null = null; let anySeen = false; let allSync = true; let inSyncPeers = 0; let unsureHolders = 0;
       for (const p of ctx.peers.values()) {
         const ph = p.heads.get(wk);
         if (!ph || now - ph.at > PEER_FRESH_MS) continue;
@@ -422,6 +422,8 @@ export class Replicator {
         if (ph.lines <= head.lines) { try { at = await this.#o.store.hashAt(v.local, 0, ph.lines); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') at = 'unknown'; else throw e; } }
         const verdict = compareHeads(mine, { lines: ph.lines, hash: ph.hash, state: ph.state }, at);
         if (verdict.do !== 'in-sync') allSync = false;
+        if (verdict.do === 'in-sync' && ph.state === 'ok') inSyncPeers++;
+        if (verdict.do === 'ignore-theirs') unsureHolders++; // a peer that is repairing may hold more than it can vouch for: it proves nothing either way
         if (verdict.do === 'pull') pulls.push(p);
         if (verdict.do === 'diverged' && !diverged) diverged = p;
       }
@@ -431,7 +433,8 @@ export class Replicator {
         if (!run.rewanted.has(diverged.hex)) { run.rewanted.add(diverged.hex); await this.want(wire, diverged, { haveLines: 0 }); }
       } else if (!pulls.length && allSync && anySeen) { run.diverged = null; run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
       // a copy that was recopied (or restarted after being recopied) counts as caught up once at least one fresh peer claim exists and none of them holds more or something else (F1)
-      if (anySeen && !pulls.length && !diverged) run.caughtUp = true;
+      // WHY at least one peer must be level with me AND none unsure (fuzz seed 300584): the only fresh peer being one that was repairing made a recopied writer believe it was caught up, and it began a second history at line 0
+      if (inSyncPeers > 0 && unsureHolders === 0 && !pulls.length && !diverged) { run.caughtUp = true; run.retiredRecopy = false; } // a recopy that finished by forking (no batch to clear it) is finished all the same
       // WHY separate: nobody claims more than I hold, so nothing is being pulled, even if some peer's (older) claim is still shorter than mine
       if (!pulls.length && !diverged && run.pull) { run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
       if (pulls.length) {
