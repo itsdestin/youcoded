@@ -73,7 +73,6 @@ import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from '.
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
 import { sendBlock, canPtySend } from './state/pty-input-gate';
 import { useBlockedSend } from './hooks/useBlockedSend';
-import type { ToastAction } from './components/ui/Toast';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -133,7 +132,10 @@ import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } fr
 import { phoneTerminalLayout } from './device';
 import { deferredScreen } from './components/deferred-screen';
 import { markScreensReady, useScreensReady } from './state/screens-ready';
-import { APP_NOTICE_EVENT, announce, type AppNoticeDetail } from './utils/announce';
+import { announce } from './utils/announce';
+import FloatingNotices from './components/FloatingNotices';
+import { showRoutineToast } from './state/floating-notices';
+import type { ScreenNoticeData } from './components/ScreenNotice';
 import { modelSwitchFailed, modelSwitchFailedAgain } from './utils/notice-words';
 import { BugReportPopup } from './components/development/BugReportPopup';
 import { reconcilePending, confirmPending } from './state/pending-action';
@@ -655,35 +657,11 @@ function AppInner() {
   // Events from the in-flight turn (before the switch takes effect) use the
   // old model and would cause false "failed to switch" errors.
   const postSwitchTurnReady = useRef(false);
-  // A toast is either a plain message or a message with one action button
-  // (used by the pending-prompt "Send anyway" override). Keeping the string
-  // form means the ~8 plain setToast('…') call sites need no change.
-  //
-  // Change 44: `durationMs` moved ONTO the state because the dismiss timer now
-  // lives in the <Toast> primitive, and the call sites did not all agree — they
-  // ran 3s/4s/6s/8s depending on how much text there was to read. A single
-  // primitive default would have silently cut the 8s handoff-failure messages to
-  // 3s. Omit it for the common 3s case; the primitive supplies that default.
-  type ToastState =
-    | string
-    | { message: string; durationMs?: number | null; action?: ToastAction; actions?: ToastAction[]; dismissible?: boolean };
-  const [toast, setToast] = useState<ToastState | null>(null);
-  // Components with no prop path to this state (the file drawer's Download and
-  // Copy path, the too-big card) announce through a window event — see
-  // utils/announce.ts for why.
-  useEffect(() => {
-    const onNotice = (e: Event) => {
-      const d = (e as CustomEvent<AppNoticeDetail>).detail;
-      if (!d?.message) return;
-      // The action's own click also puts the toast away, like "Send anyway" does.
-      const action = d.action ? { label: d.action.label, onClick: () => { setToast(null); d.action!.onClick(); } } : undefined;
-      // K-7 (needs you, app-wide): no timer, an outlined Dismiss on the left, its own button filled on the right.
-      if (d.untilClosed) { setToast({ message: d.message, durationMs: null, dismissible: true, actions: action ? [{ ...action, primary: true }] : undefined }); return; }
-      setToast(d.durationMs || action ? { message: d.message, durationMs: d.durationMs, action } : d.message);
-    };
-    window.addEventListener(APP_NOTICE_EVENT, onNotice);
-    return () => window.removeEventListener(APP_NOTICE_EVENT, onNotice);
-  }, []);
+  // WHY the toast state moved out of App (waiting-notice T3): there are now two floating slots (quick notices, and notices that stay
+  // until closed), kept in state/floating-notices.ts and drawn by <FloatingNotices>. `setToast` keeps its old name and shapes (a
+  // string, a { message, durationMs, action… } object, or null) so the ~15 call sites here are unchanged; null clears only the
+  // quick slot and never removes a notice that needs you. announce() events are routed by <FloatingNotices> itself.
+  const setToast = showRoutineToast;
   // Plugin off-switch: the toast's "Show" button asks for Your library.
   useEffect(() => {
     const open = () => setActiveView('library');
@@ -2767,6 +2745,18 @@ function AppInner() {
     if (pendingRef.current?.close(pendingTab.tabId)) removeSessionLocally(pendingTab.tabId);
   }, [conversationStatus, pendingTab, removeSessionLocally]);
 
+  // Notices raised by the resume list and the chat-moving screen (Destin, waiting-notice deck R-screen): they show ON that screen with
+  // its own buttons, never in whichever chat is open behind it. With neither screen up (a deep link or a card started the resume)
+  // there is no screen to show them on, so they float: a failure stays until closed, the rest time out as they always did.
+  const [resumeNotice, setResumeNotice] = useState<ScreenNoticeData | null>(null);
+  const [handoffNote, setHandoffNote] = useState<{ tabId: string; text: string } | null>(null);
+  const resumeScreenOpenRef = useRef(false);
+  const handleResumeRef = useRef<((...a: any[]) => Promise<boolean>) | null>(null);
+  const raiseResumeNotice = useCallback((text: string, o: { tone?: 'warn' | 'error'; retry?: () => void; stay?: boolean; durationMs?: number } = {}) => {
+    if (resumeScreenOpenRef.current) { setResumeNotice({ text, tone: o.tone, retry: o.retry }); return; }
+    if (o.stay) announce(text, undefined, o.retry ? { label: 'Try again', onClick: o.retry } : undefined, { untilClosed: true });
+    else showRoutineToast({ message: text, durationMs: o.durationMs });
+  }, []);
   // True only for an acknowledged launch; aborted/failed/stale/model-picker replies keep modal/row UI open.
   const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding, savedName?: string, recovering = false): Promise<boolean> => {
     const cwd = projectPath;
@@ -2788,7 +2778,7 @@ function AppInner() {
       onHandoff: async () => {
         if (epoch !== sessionEpochRef.current) return; // host changed while consent was pending
         if (!getCapabilities().liveHandoff) { // R4-1: capability (false only on the Android app's own runtime), was a two-flag guess
-          setToast('Live handoff is available from a computer or a remote connection to one.');
+          raiseResumeNotice('Live handoff is available from a computer or a remote connection to one.', { tone: 'warn' });
           return;
         }
         // WHY: explicit consent opens a read/draft tab immediately; only the
@@ -2797,7 +2787,7 @@ function AppInner() {
         // WHY: only one transfer tab is supported; concurrent recovery must not
         // silently ignore consent or replace a transfer that may hold a draft.
         if (attempt.active) {
-          setToast({ message: 'Finish the current conversation transfer, then try reopening this one again.', durationMs: 8000 });
+          raiseResumeNotice('Finish the current conversation transfer, then try reopening this one again.', { tone: 'warn', durationMs: 8000 });
           return;
         }
         const started = attempt.begin(claudeSessionId, provider === 'native' ? 'native' : 'claude', {
@@ -2826,7 +2816,7 @@ function AppInner() {
         }
         void started;
       },
-      onWarn: (message) => setToast({ message, durationMs: 8000 }),
+      onWarn: (message) => raiseResumeNotice(message, { tone: 'warn', durationMs: 8000 }), // handoff-unconfirmed
       // WHY: creation and its claim are one backend operation, shared with remote.
       open: () => epoch === sessionEpochRef.current ? window.claude.session.create(args) : Promise.reject(new Error('Stale session request')),
     }).then((info) => {
@@ -2837,7 +2827,10 @@ function AppInner() {
       return info;
     }).catch(() => {
       if (epoch !== sessionEpochRef.current) return null;
-      setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
+      // WHY stays + Try again (deck row resume-failed): a failed resume is something to act on, so it stays until closed, and
+      // Try again runs the very same resume again (same conversation, model, window and name).
+      raiseResumeNotice("Couldn't resume this conversation.", { tone: 'error', stay: true,
+        retry: () => { void handleResumeRef.current?.(claudeSessionId, projectSlug, projectPath, resumeModel, resumeDangerous, launchInNewWindow, provider, nativeBinding, savedName, recovering); } });
       return null;
     });
     if (provider === 'native') {
@@ -2894,7 +2887,8 @@ function AppInner() {
     // pass the locator the page handler can resolve the file from.
     void loadFirstPage(newSession.id, { claudeSessionId, projectSlug });
     return true;
-  }, [askTakeover, loadFirstPage, adoptCreatedSession]);
+  }, [askTakeover, loadFirstPage, adoptCreatedSession, raiseResumeNotice]);
+  handleResumeRef.current = handleResumeSession;
 
   // Cards deep in the chat tree ask for a resume by event — the same
   // deep-component→destination pattern as youcoded:open-library (~:397).
@@ -3354,6 +3348,9 @@ function AppInner() {
   const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
     ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
     : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);
+  resumeScreenOpenRef.current = resumeRequested || !!welcomeBackMode;
+  // A notice belongs to the screen it was raised on: closing the list takes it away (the next open starts clean).
+  useEffect(() => { if (!resumeRequested && !welcomeBackMode) setResumeNotice(null); }, [resumeRequested, welcomeBackMode]);
 
   // The in-app quit warning (Welcome back S-dialog, design §4). Main asks
   // when a window that still owns sessions is closed; the answer says whether
@@ -3695,10 +3692,12 @@ function AppInner() {
                     <ErrorBoundary name="Chat"><PendingHandoffView tab={pendingTab} visible={s.id === sessionId}
                       drawerOpen={s.id === sessionId && activeDrawerOpen} expanded={artifactState.drawerExpanded}
                       gamePane={s.id === sessionId ? activeSidePane : null}
-                      onRetry={() => { void pendingRef.current?.retry(s.id); }}
+                      note={handoffNote && handoffNote.tabId === s.id ? handoffNote.text : null}
+                      onRetry={() => { setHandoffNote(null); void pendingRef.current?.retry(s.id); }}
                       onContinue={() => { void pendingRef.current?.continueWithSavedCopy(s.id,
                         (device) => askTakeover(device, 'force'),
-                        () => setToast({ message: "Couldn't take over from your other computer. Close the conversation there, then try again.", durationMs: 8000 })); }} /></ErrorBoundary>
+                        // WHY the screen's own sentence, no button (deck R-screen): this screen already has Try again and Continue.
+                        () => setHandoffNote({ tabId: s.id, text: "Couldn't take over from your other computer. Close the conversation there, then try again." })); }} /></ErrorBoundary>
                   ) : <ErrorBoundary name="Chat">
                     <ChatView
                       sessionId={s.id}
@@ -4298,6 +4297,8 @@ function AppInner() {
           defaultModel={sessionDefaults.model}
           defaultSkipPermissions={sessionDefaults.skipPermissions}
           welcomeBack={welcomeBackMode}
+          notice={resumeNotice}
+          onNoticeDismiss={() => setResumeNotice(null)}
         />
       )}
       <ResumeBrowser
@@ -4307,6 +4308,8 @@ function AppInner() {
         onResume={handleResumeSession}
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
+        notice={welcomeBackMode ? null : resumeNotice}
+        onNoticeDismiss={() => setResumeNotice(null)}
       />
       <CloseSessionPrompt
         open={closePromptFor !== null}
@@ -4461,18 +4464,7 @@ function AppInner() {
           calls came out of this file — every one of them was a chance to leak a
           timer past unmount. */}
       <StartupNotices />
-      {toast && (
-        <Toast
-          message={typeof toast === 'string' ? toast : toast.message}
-          durationMs={typeof toast === 'string' ? undefined : toast.durationMs}
-          onDismiss={() => setToast(null)}
-          action={typeof toast !== 'string' && toast.action ? (
-            <Button variant="secondary" size="sm" onClick={toast.action.onClick}>{toast.action.label}</Button>
-          ) : undefined}
-          actions={typeof toast === 'string' ? undefined : toast.actions}
-          dismissible={typeof toast !== 'string' && !!toast.dismissible}
-        />
-      )}
+      <FloatingNotices />
       {/* "Report bug" on a model switch that failed twice (memoWhileClosed would be overkill: it renders nothing while closed). */}
       {modelReportOpen && <BugReportPopup open onClose={() => setModelReportOpen(false)} context={{ surface: 'Model switch' }} />}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,

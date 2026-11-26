@@ -350,15 +350,15 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         // "can't reach". Open the phone's own runtime and say why, in the same words the pairing form uses.
         setResume('none');
         const { announce } = await import('./utils/announce');
-        window.setTimeout(() => announce(String(err.message), 8000), 1500);
+        window.setTimeout(() => announce(String(err.message), 8000, undefined, { untilClosed: true }), 1500);
         return;
       }
       if (err?.signInFailure?.kind === 'refused') {
         // A changed password will not fix itself: open the phone's own runtime and say where to fix it.
         setResume('none');
         const { announce } = await import('./utils/announce');
-        // After the app has mounted its toast.
-        window.setTimeout(() => announce(savedPasswordRefusedNotice(c.name, String(err.signInFailure.reason)), 8000), 1500);
+        // After the app has mounted its toast. WHY untilClosed (K-7): both of these need you to act (fix the password / use Tailscale), so they stay until closed.
+        window.setTimeout(() => announce(savedPasswordRefusedNotice(c.name, String(err.signInFailure.reason)), 8000, undefined, { untilClosed: true }), 1500);
         return;
       }
       setComputerTrouble(true);

@@ -2,6 +2,7 @@
 // No Office edit is dropped by an editor going away (C2), and a save that fails is never
 // silently thrown away (I1): the paths that used to unmount an editor mid-autosave, and the
 // save-failed actions the owner chose — Retry, Save a copy…, Close without saving.
+import FloatingNotices from '../../src/renderer/components/FloatingNotices';
 import React, { useRef } from 'react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -447,9 +448,13 @@ describe('quitting, closing or reloading with an Office document not saved yet',
 describe('the kept, hidden Office view', () => {
   function host(open: boolean) {
     return (
-      <ArtifactProvider value={{ state: { ...initialArtifactState, pageViewOpen: open, openPageId: OFFICE_PAGE_ID }, dispatch: vi.fn() }}>
-        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={() => {}} />
-      </ArtifactProvider>
+      // WHY FloatingNotices here: the save-failed notice goes through announce (stays until closed), which App draws with this.
+      <>
+        <ArtifactProvider value={{ state: { ...initialArtifactState, pageViewOpen: open, openPageId: OFFICE_PAGE_ID }, dispatch: vi.fn() }}>
+          <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={() => {}} />
+        </ArtifactProvider>
+        <FloatingNotices />
+      </>
     );
   }
 

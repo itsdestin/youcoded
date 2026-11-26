@@ -36,13 +36,16 @@ export type ToastProps = {
   onDismiss: () => void;
   tone?: ToastTone;
   /** global = centered above the input bar. anchored = pinned above its
-   *  relatively-positioned parent (LikeButton). */
-  variant?: 'global' | 'anchored';
+   *  relatively-positioned parent (LikeButton). stacked = sits inside <FloatingNotices>' one column, which owns the
+   *  fixed position, so two notices can never overlap. */
+  variant?: 'global' | 'anchored' | 'stacked';
   /** Auto-dismiss delay. Pass null to require an explicit dismiss. */
   durationMs?: number | null;
   /** Adds an outlined Dismiss button, leftmost (Destin, waiting-notice deck K-7: "dismiss should be the leftmost
    *  button and not filled in. primary action should be filled rightmost button"). */
   dismissible?: boolean;
+  /** Small muted words after the message ("1 more": others are waiting behind this one). */
+  footnote?: string;
 };
 
 export function Toast({
@@ -54,6 +57,7 @@ export function Toast({
   variant = 'global',
   durationMs = 3000,
   dismissible = false,
+  footnote,
 }: ToastProps) {
   // WHY a ref (the "waiting on something" notice that never went away, 2026-11-21): App passes a fresh
   // `() => setToast(null)` on every render, and with onDismiss in the timer's dependencies every App redraw
@@ -78,7 +82,10 @@ export function Toast({
       aria-live="polite"
       className={[
         'flex items-center gap-2 px-4 py-2 text-sm text-fg pointer-events-none',
-        variant === 'global'
+        variant === 'stacked'
+          // WHY (review 2, S2): the column around it is the fixed one; this just sizes to its words and wraps like the global one.
+          ? 'relative flex-wrap gap-y-2 max-w-full'
+          : variant === 'global'
           // WHY flex-wrap + the buttons' ml-auto (Destin, R3-6b: "with big notices like this, it would be a better use of space to
           // put the button under the text on the bottom right"): a short notice fits words + button on one line, button beside the
           // text as before. When the words alone fill the line (a long notice wraps), the buttons no longer fit beside them, so
@@ -106,7 +113,7 @@ export function Toast({
           // The state family's failure mark (§1.6) — same dot ErrorState uses.
           <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" aria-hidden="true" />
         )}
-        <span className="min-w-0">{message}</span>
+        <span className="min-w-0">{message}{footnote && <span className="text-fg-muted shrink-0"> · {footnote}</span>}</span>
       </span>
       {action && <span className="pointer-events-auto shrink-0 ml-auto">{action}</span>}
       {!action && (ordered.length > 0 || dismissible) && (

@@ -469,7 +469,8 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "resume-failed",
   "text": "Couldn't resume this conversation.",
-  "button": null
+  "button": null,
+  "untilClosed": true
  },
  {
   "id": "takeover-failed",
@@ -559,24 +560,40 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
   "button": null
  },
  {
+  "id": "office-save-failed",
+  "text": "An Office document couldn't be saved.",
+  "button": "Open Office",
+  "untilClosed": true
+ },
+ {
+  "id": "remote-unsupported",
+  "text": "Theme browsing only works on the computer running YouCoded for now.",
+  "button": null,
+  "untilClosed": false
+ },
+ {
   "id": "plugin-turned-off",
   "text": "We turned off a plugin that was found to be unsafe.",
-  "button": "Show"
+  "button": "Show",
+  "untilClosed": true
  },
  {
   "id": "settings-repaired",
   "text": "Your Claude Code settings couldn't be read, so YouCoded reset them. Your old settings are saved in a file.",
-  "button": "Show file"
+  "button": "Show file",
+  "untilClosed": true
  },
  {
   "id": "tailscale-only",
   "text": "YouCoded only connects to your computer over Tailscale, and this address isn’t one. Turn on Tailscale on both devices and add the computer again using its Tailscale address.",
-  "button": null
+  "button": null,
+  "untilClosed": true
  },
  {
   "id": "saved-password-rejected",
   "text": "Work PC didn't accept the saved password. Update it in Settings → Connect to Desktop.",
-  "button": null
+  "button": null,
+  "untilClosed": true
  },
  {
   "id": "saved-password-none-set",
@@ -586,12 +603,14 @@ export const NOTICE_CATALOGUE: PracticeNotice[] = [
  {
   "id": "saved-password-expired",
   "text": "Work PC signed this phone out after 90 days without use. Enter the password again in Settings → Connect to Desktop.",
-  "button": null
+  "button": null,
+  "untilClosed": true
  },
  {
   "id": "saved-password-refused-other",
   "text": "Work PC refused this sign-in.",
-  "button": null
+  "button": null,
+  "untilClosed": true
  },
  {
   "id": "stop-not-sent-offline",

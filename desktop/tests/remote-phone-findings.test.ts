@@ -69,8 +69,9 @@ describe('connecting a phone does not open with a list of what is broken', () =>
 
   it('several at once become one sentence, not a flicker of half-read ones', () => {
     const notice = read('../src/renderer/components/RemoteUnsupportedNotice.tsx');
-    expect(notice).toContain('if (prev && prev.feature !== detail.feature)');
-    expect(notice).toContain('setAlso(list =>');
+    // Now gathered for a moment and said once through announce() (deck R-remote); behaviour is tested in RemoteUnsupportedNotice.test.tsx.
+    expect(notice).toContain('GATHER_MS');
+    expect(notice).toContain('if (!batch.includes(detail.feature)) batch.push(detail.feature);');
   });
 });
 

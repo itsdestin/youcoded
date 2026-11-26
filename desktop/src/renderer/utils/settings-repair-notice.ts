@@ -22,5 +22,5 @@ export function announceSettingsRepaired(backupPath: string, durationMs = 30_000
   announce(SETTINGS_REPAIR_MESSAGE, durationMs, canShow ? {
     label: SHOW_BUTTON,
     onClick: () => { void (window as any).claude?.shell?.showItemInFolder?.(backupPath); },
-  } : undefined);
+  } : undefined, { untilClosed: true }); // WHY untilClosed (K-7): a file changed behind the person's back; it stays until closed
 }

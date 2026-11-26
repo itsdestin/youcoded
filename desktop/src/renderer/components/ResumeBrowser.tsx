@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallba
 import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
+import { ScreenNotice, type ScreenNoticeData } from './ScreenNotice';
 import { Button, Dialog, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SectionLabel, SettingRow } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
@@ -270,6 +271,10 @@ interface Props {
   /** Present = the Welcome back screen: the same browser, limited to the
    *  conversations that were open when the app last closed. */
   welcomeBack?: WelcomeBackMode;
+  /** A failure raised by this screen's own actions (a resume that failed, a handoff that isn't available), shown on the screen
+   *  itself and never in an unrelated chat's strip (Destin, waiting-notice deck R-screen). */
+  notice?: ScreenNoticeData | null;
+  onNoticeDismiss?: () => void;
 }
 
 /** What one Resume press on Welcome back did. `needModel`: rows skipped because
@@ -360,7 +365,7 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
   );
 });
 
-function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions, welcomeBack }: Props) {
+function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions, welcomeBack, notice, onNoticeDismiss }: Props) {
   const wb = welcomeBack;
   // Welcome back: which rows are ticked, and which already launched from this
   // screen (they leave the list — they are open tabs now).
@@ -1870,6 +1875,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
             </>)}
             {/* WHY no divider element: ResumeBrowser.css draws the tapered line on [data-resume-header] (R-1, 2026-09-23). */}
           </div>
+
+          {/* WHY here (R-screen): between the filters and the list, where the person is looking when a Resume press fails. */}
+          {notice && <ScreenNotice className="px-4 pb-2" notice={notice} onDismiss={onNoticeDismiss} />}
 
           {/* Session list */}
           {/* No flex-1: OverlayPanel only has max-h (indefinite height), which breaks

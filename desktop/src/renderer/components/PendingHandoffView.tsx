@@ -8,7 +8,7 @@ import { useActiveProject } from '../hooks/useActiveProject';
 
 /** WHY: the saved provider-local transcript is a read-only preview, not a
  * fabricated writer. Its pager never opens a native host or Claude process. */
-export default function PendingHandoffView({ tab, visible, onRetry, onContinue, drawerOpen, expanded, gamePane }: {
+export default function PendingHandoffView({ tab, visible, onRetry, onContinue, drawerOpen, expanded, gamePane, note }: {
   tab: PendingTab;
   visible: boolean;
   onRetry: () => void;
@@ -16,6 +16,10 @@ export default function PendingHandoffView({ tab, visible, onRetry, onContinue, 
   drawerOpen: boolean;
   expanded: boolean;
   gamePane: React.ReactNode;
+  /** A sentence about the last move attempt ("Couldn't take over from your other computer…"), shown here and nowhere else.
+   *  WHY sentence only (Destin, waiting-notice deck R-screen): this screen already has its own Try again and Continue buttons,
+   *  so a floating notice with a button of its own would show two sets of buttons for one problem. */
+  note?: string | null;
 }) {
   const gameOpen = !!gamePane;
   const activeProject = useActiveProject(tab.cwd, drawerOpen && !gameOpen);
@@ -29,6 +33,9 @@ export default function PendingHandoffView({ tab, visible, onRetry, onContinue, 
           <div className="flex-1 min-h-0 overflow-hidden" style={{ paddingTop: 'var(--top-chrome-bottom, 3rem)', paddingBottom: 'var(--bottom-chrome-height, 5rem)' }}>
             <SessionPreviewPane provider={tab.provider} id={tab.conversationId} title={tab.name} projectSlug={tab.projectSlug} backdrop={false} />
           </div>
+          {note && (
+            <div className="absolute inset-x-3 text-sm text-fg-2 layer-surface px-4 py-2" role="status" style={{ top: 'calc(var(--top-chrome-bottom, 3rem) + 0.5rem)' }}>{note}</div>
+          )}
           {tab.phase === 'failed' ? (
             <div className="handoff-freshness-toast absolute inset-x-3">
               <ErrorState message="Couldn't finish moving this conversation here." onRetry={onRetry} />

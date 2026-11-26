@@ -6,7 +6,7 @@
 // (Task 8 removed the "N Office documents couldn't be saved" close/quit prompt: a document's edits
 // reach its recovery journal as they are made, so a closing window never has to wait on its saves.)
 import React, { useEffect } from 'react';
-import { Button, Toast } from '../ui';
+import { announce } from '../../utils/announce';
 import { clearCloseFailed, useOfficeAlerts, watchUnsavedPrompt } from './office-store';
 import { UnsavedBeforeQuit } from '../UnsavedBeforeQuit';
 
@@ -14,20 +14,18 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
   const { closeFailed } = useOfficeAlerts();
   // Main's refused-quit prompt reaches every window, whether or not it ever opened Office (fix round 9).
   useEffect(() => { watchUnsavedPrompt(); }, []);
+  // WHY through announce, untilClosed (Destin, waiting-notice deck K-7): a document that could not be saved needs you, so the
+  // notice stays until you close it or press Open Office, and it waits its turn behind any other notice instead of replacing it.
+  // The alert is handed over at once and cleared, so the store never holds a notice the floating list already owns.
+  useEffect(() => {
+    if (!closeFailed) return;
+    const path = closeFailed;
+    clearCloseFailed();
+    announce("An Office document couldn't be saved.", undefined, { label: 'Open Office', onClick: () => onReview(path) }, { untilClosed: true, tone: 'error' });
+  }, [closeFailed, onReview]);
   return (
     <>
       <UnsavedBeforeQuit />
-      {closeFailed && (
-        <Toast
-          // A new key per file restarts the toast's timer when another failed close follows.
-          key={closeFailed}
-          tone="error"
-          message="An Office document couldn't be saved."
-          durationMs={10_000}
-          onDismiss={clearCloseFailed}
-          action={<Button variant="secondary" size="sm" onClick={() => { const p = closeFailed; clearCloseFailed(); onReview(p); }}>Open Office</Button>}
-        />
-      )}
     </>
   );
 }

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, act, cleanup } from '@testing-library/react';
 import RemoteUnsupportedNotice from './RemoteUnsupportedNotice';
+import FloatingNotices from './FloatingNotices';
+import { resetFloatingNotices } from '../state/floating-notices';
 import {
   REMOTE_UNSUPPORTED_EVENT, remoteFeatureName, remoteUnsupportedMessage,
 } from '../remote-unsupported';
@@ -71,33 +73,36 @@ describe('remoteFeatureName', () => {
 });
 
 describe('RemoteUnsupportedNotice', () => {
-  beforeEach(() => { cleanup(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
+  // Now a short floating notice through announce() (deck R-remote); drawn by <FloatingNotices>.
+  const mount = () => render(<><RemoteUnsupportedNotice /><FloatingNotices /></>);
+  const settle = () => act(() => { vi.advanceTimersByTime(300); });
+  beforeEach(() => { cleanup(); vi.useFakeTimers(); resetFloatingNotices(); });
+  afterEach(() => { vi.useRealTimers(); resetFloatingNotices(); });
 
-  it('renders nothing until something is unsupported', () => {
-    const { container } = render(<RemoteUnsupportedNotice />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('shows the feature message when the shim reports one', () => {
-    render(<RemoteUnsupportedNotice />);
-    announce('social:list-friends');
-    expect(screen.getByRole('status').textContent)
-      .toContain("Friends and challenges isn't available via remote access yet.");
-  });
-
-  it('auto-dismisses', () => {
-    render(<RemoteUnsupportedNotice />);
-    announce('artifacts:get');
-    expect(screen.queryByRole('status')).toBeTruthy();
-    act(() => { vi.advanceTimersByTime(6100); });
+  it('shows nothing until something is unsupported', () => {
+    mount();
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('can be dismissed by hand', () => {
-    render(<RemoteUnsupportedNotice />);
-    announce('artifacts:get');
-    fireEvent.click(screen.getByLabelText('Dismiss'));
+  it('says the feature only works on the computer running YouCoded', () => {
+    mount();
+    announce('social:list-friends'); settle();
+    expect(screen.getByRole('status').textContent).toContain('Friends and challenges only works on the computer running YouCoded for now.');
+  });
+
+  it('several features at once become one sentence', () => {
+    mount();
+    announce('artifacts:get'); announce('skills:list'); announce('theme:list'); settle();
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status').textContent).toContain('Project files, Skills and Theme editing only work on the computer running YouCoded for now.');
+  });
+
+  it('goes away by itself and is never a notice that stays until closed', () => {
+    mount();
+    announce('artifacts:get'); settle();
+    expect(screen.queryByRole('status')).toBeTruthy();
+    expect(screen.queryByText('Dismiss')).toBeNull();
+    act(() => { vi.advanceTimersByTime(6100); });
     expect(screen.queryByRole('status')).toBeNull();
   });
 });

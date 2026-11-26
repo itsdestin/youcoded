@@ -11,8 +11,10 @@ const PLUGIN_TURNED_OFF_MESSAGE = 'We turned off a plugin that was found to be u
 export const OPEN_LIBRARY_EVENT = 'youcoded:open-library';
 
 export function announcePluginTurnedOff(durationMs = 10_000): void {
+  // WHY untilClosed (Destin, waiting-notice deck K-7): it is about something done to your computer behind your back, so it stays
+  // until you close it or press Show — it must not run out while you are away (durationMs no longer matters; kept so callers compile).
   announce(PLUGIN_TURNED_OFF_MESSAGE, durationMs, {
     label: 'Show',
     onClick: () => window.dispatchEvent(new Event(OPEN_LIBRARY_EVENT)),
-  });
+  }, { untilClosed: true });
 }

@@ -21,11 +21,13 @@ export interface AppNoticeDetail {
   /** A notice that needs you, app-wide (Destin, waiting-notice deck K-7): it stays until you act or press its
    *  outlined Dismiss (leftmost); its own button becomes the filled one on the right. */
   untilClosed?: boolean;
+  /** Red dot in front of the words (a failure). */
+  tone?: 'default' | 'error';
 }
 
-export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action'], opts?: { untilClosed?: boolean }): void {
+export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action'], opts?: { untilClosed?: boolean; tone?: 'default' | 'error' }): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action, untilClosed: opts?.untilClosed } }));
+  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action, untilClosed: opts?.untilClosed, tone: opts?.tone } }));
 }
 
 /**

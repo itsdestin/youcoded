@@ -31,6 +31,15 @@ export default function ToastPractice() {
   useScreenOpen('dev/toast', () => {
     const which = new URLSearchParams(location.search).get('toast');
     // Waiting-notice review deck: any notice from the catalogue, by id (`?toast=n:<id>`), held on screen for the picture.
+    // Two notices that need you plus a quick one, all at once (`?toast=stack`): the quick one sits above, the first needs-you one
+    // shows with "1 more" (waiting-notice T3, review 2 S2).
+    if (which === 'stack') {
+      const bytes = (id: string) => NOTICE_CATALOGUE.find((n) => n.id === id)!;
+      announce(bytes('plugin-turned-off').text, undefined, { label: 'Show', onClick: () => {} }, { untilClosed: true });
+      announce(bytes('settings-repaired').text, undefined, { label: 'Show file', onClick: () => {} }, { untilClosed: true });
+      announce('Copied path', 60_000);
+      setShown(true); return;
+    }
     const strip = new URLSearchParams(location.search).get('strip');
     if (strip && STRIPS[strip]) { showChatNotice('wb-1', STRIPS[strip]); setShown(true); return; }
     // K-7 (needs you, app-wide): stays until closed, outlined Dismiss left, its own button filled right (`?toast=k7:<id>`).
