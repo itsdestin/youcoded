@@ -59,8 +59,11 @@ the same list (`HostJsBridge.types`), pinned against the page and against Androi
   prompt's environment block says the device cannot run commands.
 - **Grep** works: where ripgrep cannot be started the same search runs in-process and prints ripgrep's own
   output format (`harness/tools/in-process-search.ts`), so there is one Grep tool.
+- **Marketplace installs** work without git: `plugin-installer.ts` → `runGit` is answered from GitHub's commit
+  archives (`main/git-snapshot.ts`) where no program can run. It trusts GitHub over TLS to serve the commit asked
+  for (and checks the commit id written in the archive) where git verifies every object itself.
 - **Git, the terminal view, the Files-tab content search, local models, the built-in Browser, Office, the buddy.**
-  Off through `IOS_LOCAL_CAPABILITIES`.
+  Off through `IOS_LOCAL_CAPABILITIES`. GitHub-based sync does not run (no git); the Mesh is the phone's sync.
 - **App updates.** Only Apple updates an iPhone app; `getUpdateStatus()` never reports one there.
 
 ## Background
@@ -80,6 +83,10 @@ for anything long.
 
 ## The backend bundle (`ios/runtime/build-backend.mjs`)
 
+- The app starts `dist/main/headless/ios-boot.js`, a few lines the build writes that load the real bundle inside a
+  `try`. If the phone's V8 could not even parse the bundle, nothing in it would run — including the exit guard — and
+  Node's own reaction (exit) would close the app without a word; the loader turns that into the failed screen.
+- `undici` is aliased to `headless/ios-undici.ts` (the `Agent` + `fetch` pair `net-guard` uses, on `ios-fetch`).
 - One bundle per entry: the backend (`headless/ios-main.ts`) and each worker thread (`WORKER_ENTRIES`), laid out
   where Android's compiled tree would have them, so path lookups agree. Each source file's `__dirname` /
   `__filename` is rewritten to its compiled-tree path.
@@ -118,6 +125,17 @@ cd /tmp/ios-backend && HOME=/tmp/h YOUCODED_USER_DATA=/tmp/u YOUCODED_HOST_OS=io
 ```
 
 `--jitless` removes WebAssembly, as on the phone. A Node 18 built `--with-intl=none` also removes ICU.
+
+## With the branches in flight (checked 2026-11-25)
+
+- **Mesh (`session/64-mesh-sync-build`)** merges with this branch without conflicts; the bundle builds (the Unicode
+  pass picks up its extra properties by itself) and the Mesh starts on Node 18 `--jitless` in its test mode. Two
+  lines there still say Android: `headless-boot.ts` passes `platform: 'android'` to `startMeshIfEnabled` (should be
+  `hostOs()`), and the Mesh accepts only `android_keystore` as a phone's secret store (the shell sends `ios_keychain`).
+- **Automations (`session/90-pages-finish`)** overlaps this branch in three files (`shared/capabilities.ts` — it adds
+  `pageFiles`, which `IOS_LOCAL_CAPABILITIES` then needs; `harness/tools/index.ts`; the generated `preload.ts`).
+  Its `net-guard.ts` imports `undici`, which the alias above covers. Its Claude engine (`claude -p`) cannot exist on
+  an iPhone; `canRunPrograms()` is the question to ask where it offers Claude models.
 
 ## Not done yet
 
