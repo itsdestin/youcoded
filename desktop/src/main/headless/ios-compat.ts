@@ -106,7 +106,7 @@ export function installRegExpPropertyFallback(tables: UnicodeTables, force = fal
 function quietBuiltinFetchLoad(): void {
   const never = () => new Promise<never>(() => {});
   g.WebAssembly = { compile: never, instantiate: never, Module: class {}, Instance: class {} };
-  try { void new Headers(); } catch { /* the classes are optional for this to matter */ } finally { delete g.WebAssembly; }
+  try { void new Headers(); } catch { /* benign: this only pre-loads a library to keep one line out of the log; fetch itself is ios-fetch.ts */ } finally { delete g.WebAssembly; }
 }
 
 /** What must be true for the backend to live inside an app instead of being a program of its own. Call once, from
@@ -118,10 +118,18 @@ function quietBuiltinFetchLoad(): void {
  *    code that asked to exit really does stop running. */
 export function installInProcessGuards(): void {
   process.on('uncaughtException', (e) => console.error('[ios] uncaught exception:', e));
+  // WHY the backend's own SIGTERM/SIGINT handlers are refused in-process (found in the simulator, 2026-11-25): on a
+  // computer they shut the backend down and exit. Inside the app the signal is meant for the APP (iOS or Xcode ending
+  // it); a handler here would run the exit guard below and leave a half-alive app that ignores being closed. With no
+  // handler, the signal ends the process as the sender intended.
+  if (process.env.YOUCODED_IN_PROCESS === '1' || (process.platform as string) === 'ios') {
+    const on = process.on.bind(process);
+    process.on = ((event: string, listener: (...a: unknown[]) => void) => (event === 'SIGTERM' || event === 'SIGINT' ? process : on(event as never, listener as never))) as typeof process.on;
+  }
   // Only when the backend really is inside an app (the Swift shell says so); a laptop run of this entry exits like any program.
   if (process.env.YOUCODED_IN_PROCESS !== '1' && (process.platform as string) !== 'ios') return;
   const hold = (code?: number | string | null): never => {
-    try { require('fs').writeSync(1, `YOUCODED_HEADLESS_EXIT ${code ?? 0}\n`); } catch { /* the app's timeout still catches it */ }
+    try { require('fs').writeSync(1, `YOUCODED_HEADLESS_EXIT ${code ?? 0}\n`); } catch { /* benign: if the line cannot be written the app's own start timeout still shows the same screen */ }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
     throw new Error('unreachable');
   };

@@ -120,7 +120,7 @@ interface Filters {
   ignore: RegExp[];
 }
 
-function buildFilters(p: ParsedArgs, rootDir: string): Filters | { error: string } {
+async function buildFilters(p: ParsedArgs, rootDir: string): Promise<Filters | { error: string }> {
   const f: Filters = { include: [], exclude: [], typeGlobs: null, ignore: [] };
   for (const g of p.globs) {
     if (g.startsWith('!')) f.exclude.push(globToRegExp(g.slice(1)));
@@ -132,14 +132,14 @@ function buildFilters(p: ParsedArgs, rootDir: string): Filters | { error: string
     f.typeGlobs = list.map(globToRegExp);
   }
   try {
-    for (const raw of fs.readFileSync(path.join(rootDir, '.gitignore'), 'utf8').split(/\r?\n/)) {
+    for (const raw of (await fs.promises.readFile(path.join(rootDir, '.gitignore'), 'utf8')).split(/\r?\n/)) {
       const line = raw.trim();
       // Comments, blanks and re-include rules ("!x") are left out: a simple reading that only ever skips MORE
       // than git would is not possible, so re-includes are ignored rather than mis-applied.
       if (!line || line.startsWith('#') || line.startsWith('!')) continue;
-      try { f.ignore.push(globToRegExp(line)); } catch { /* a pattern this reader cannot turn into a test is skipped */ }
+      try { f.ignore.push(globToRegExp(line)); } catch { /* benign: an ignore pattern this reader cannot turn into a test is skipped, so that file is searched rather than hidden */ }
     }
-  } catch { /* no .gitignore */ }
+  } catch { /* benign: the folder has no .gitignore, so nothing is ignored */ }
   return f;
 }
 
@@ -229,7 +229,7 @@ export function inProcessSearch(args: string[], cwd: string): SearchChild {
     }
     const singleFile = stat.isFile();
     const rootDir = singleFile ? path.dirname(targetAbs) : targetAbs;
-    const filters = buildFilters(p, rootDir);
+    const filters = await buildFilters(p, rootDir);
     if ('error' in filters) { fail(filters.error); return; }
 
     /** How ripgrep would print this file: bare for a whole-folder search from cwd, else under the target as given. */

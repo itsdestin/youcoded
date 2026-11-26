@@ -81,7 +81,7 @@ function decompress(res: http.IncomingMessage, method: string): Readable {
 function toHeaders(raw: string[]): Headers {
   const h = new Headers();
   for (let i = 0; i + 1 < raw.length; i += 2) {
-    try { h.append(raw[i], raw[i + 1]); } catch { /* a header the platform refuses to represent is dropped */ }
+    try { h.append(raw[i], raw[i + 1]); } catch { /* benign: a reply header the platform's Headers refuses (an invalid name) is left out, as the built-in fetch does */ }
   }
   return h;
 }

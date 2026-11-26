@@ -85,6 +85,7 @@ enum AppWebView {
         #if DEBUG
         if #available(iOS 16.4, *) { webView.isInspectable = true }
         #endif
+        webView.hideInputAccessoryBar()
         return webView
     }
 
@@ -234,5 +235,33 @@ final class PageLog: NSObject, WKScriptMessageHandler {
             _ = try? handle?.seekToEnd()
         }
         handle?.write(Data("\(ISO8601DateFormatter().string(from: Date())) \(text)\n".utf8))
+    }
+}
+
+// MARK: - The bar above the keyboard
+
+/// WKWebView puts a grey bar with ‹ › and "Done" above the keyboard for every text field. This app is a chat, not a
+/// web form: the bar covers a strip of the page (the simulator run showed it cutting through the setup card), and
+/// the page already has its own send button and its own way to dismiss the keyboard. WebKit offers no setting for
+/// it, so the view that owns the keyboard is given a subclass whose accessory view is nothing — the long-standing
+/// approach used by apps that host a web page as their main screen.
+private final class NoInputAccessory: NSObject {
+    @objc var inputAccessoryView: AnyObject? { nil }
+}
+
+extension WKWebView {
+    func hideInputAccessoryBar() {
+        guard let content = scrollView.subviews.first(where: { String(describing: type(of: $0)).hasPrefix("WKContent") }),
+              let contentClass = object_getClass(content) else { return }
+        let name = "\(contentClass)_YouCodedNoAccessory"
+        var subclass: AnyClass? = NSClassFromString(name)
+        if subclass == nil, let created = objc_allocateClassPair(contentClass, name, 0) {
+            if let method = class_getInstanceMethod(NoInputAccessory.self, #selector(getter: NoInputAccessory.inputAccessoryView)) {
+                class_addMethod(created, #selector(getter: NoInputAccessory.inputAccessoryView), method_getImplementation(method), method_getTypeEncoding(method))
+            }
+            objc_registerClassPair(created)
+            subclass = created
+        }
+        if let subclass { object_setClass(content, subclass) }
     }
 }

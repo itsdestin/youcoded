@@ -19,7 +19,7 @@ import { ANDROID_PAGE_ORIGIN, IOS_PAGE_ORIGIN } from '../shared/android-page-ori
 
 /** True on the iPhone app's own page. WHY protocol as well as origin: WebKit reports `location.origin` of a private
  *  scheme as the string "null" in some versions, and the protocol is always right. */
-export function isIosAppPage(): boolean {
+function isIosAppPage(): boolean {
   if (typeof location === 'undefined') return false;
   return location.origin === IOS_PAGE_ORIGIN || location.protocol === 'youcoded-app:';
 }
