@@ -15,7 +15,8 @@ export const CHAT = 'synthetic:chat-1';
 // variable at a folder on a REAL disk (under the worktree's own scratch space, never the user's data) runs the same suites there.
 export async function tmpRoot(prefix = 'mesh-store-'): Promise<{ dir: string; cleanup: () => Promise<void> }> {
   const dir = await fsp.mkdtemp(path.join(process.env.MESH_STORE_TMPDIR || os.tmpdir(), prefix));
-  return { dir, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
+  // WHY maxRetries: a late write from a still-running store throws ENOTEMPTY into an otherwise passing test (test-suite-hygiene.md)
+  return { dir, cleanup: () => fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
 }
 
 export async function openWith(root: string, version = V(1), o: StoreOptions = {}, runtime: RuntimeKind = 'claude-code', chatId = CHAT): Promise<ChatStore> {

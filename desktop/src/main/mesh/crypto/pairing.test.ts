@@ -484,7 +484,7 @@ describe('the matching number is commit-then-reveal', () => {
       }
     }
     expect(matches).toBeLessThanOrEqual(1); // expected 150 x 10^-6; any real grinding would show up as many
-  }, 60_000);
+  }, 300_000); // WHY 300_000: ~9 s alone (3,000 signatures), but it overran 60 s at load 50 on 32 threads (2026-11-25); only a hang should reach it
 });
 
 describe('every failed attempt costs a try, whoever caused it', () => {
@@ -576,5 +576,5 @@ describe('a long roster pairs (3,000 entries)', () => {
     const add = N.result.roster[3000];
     expect(add.seen.length).toBeLessThanOrEqual(MAX_SEEN);
     expect(verifyRosterLog(N.result.roster).devices.size).toBe(14);
-  }, 60_000);
+  }, 300_000); // WHY 300_000: ~9 s alone (3,000 signatures), but it overran 60 s at load 50 on 32 threads (2026-11-25); only a hang should reach it
 });

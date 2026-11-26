@@ -16,6 +16,9 @@ import { acquireLock } from './lock';
 import { encodeSide } from './sidefile';
 import { sealEnv } from './envelope';
 
+// WHY 300_000 (measured 2026-11-25): the two loops below take about 2 s and 5 s alone, but over 30 s when the machine runs at load 50
+// on 32 threads (the verify run that failed). Same size as the store's other disk-heavy tests (restructure.test.ts); only a hang reaches it.
+const LOADED_MACHINE_TIMEOUT_MS = 300_000;
 let t: Awaited<ReturnType<typeof tmpRoot>>;
 beforeEach(async () => { t = await tmpRoot('faults-'); });
 afterEach(async () => { await t.cleanup(); });
@@ -72,7 +75,7 @@ describe('the eviction record (the checkpoint\'s, evicted.json is gone) is never
         expect(fs.readdirSync(vdir()).filter((n) => n.startsWith('body-'))).toEqual(chunks);
       }
     }
-  });
+  }, LOADED_MACHINE_TIMEOUT_MS);
   it('checkpoint.bin truncated, zero-length, deleted or garbage: nothing is deleted and every line that still has a body is served', async () => {
     await build(t.dir, L, { chunkBytes: 1500, evict: 20 });
     const ck = path.join(vdir(), 'checkpoint.bin'); const original = fs.readFileSync(ck);
@@ -226,7 +229,7 @@ describe('a crash plus rot in the batch being written never forks the head', () 
       await s.close();
     }
     expect(rotCases).toBeGreaterThan(5);
-  });
+  }, LOADED_MACHINE_TIMEOUT_MS);
   it('every acknowledged append is already in the checkpoint: nothing acknowledged ever waits for one', async () => {
     const s = await openWith(t.dir, V(1));
     for (let i = 0; i < 70; i++) await s.append(V(1), 0, i, [L[i % 60]].map((x, k) => cc.user(`line ${i} ${k}`)));

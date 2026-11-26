@@ -147,7 +147,7 @@ describe('not-a-prefix exactly when bytes differ', () => {
       } finally { await t.cleanup(); }
     }
     expect(differ).toBeGreaterThan(50); expect(same).toBeGreaterThan(50);
-  }, 120_000);
+  }, 300_000); // WHY 300_000: ~5 s alone, but it overran 120 s at load 50 on 32 threads (2026-11-25); only a hang should reach it
 });
 
 describe('adapter + store round trip is byte for byte', () => {

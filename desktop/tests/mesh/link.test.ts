@@ -1,7 +1,7 @@
 // Link layer over the in-memory carrier: delivery, order, offline catch-up, replay, restart, rollback of saved state.
 import fs from 'fs';
 import path from 'path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { generateIdentity, setIdFor, type DeviceIdentity } from '../../src/main/mesh/crypto/identity';
 import { makeAddEntry, makeGenesisEntry, seenForNextEntry } from '../../src/main/mesh/crypto/roster';
 import { newSetSecret } from '../../src/main/mesh/crypto/keys';
@@ -295,8 +295,9 @@ describe('link: a frame can never freeze a group', () => {
     b.carrier.setOnline(true);
     const b2 = await w.remake('B');
     await send(w.devs.A, 'live');
-    await settle();
-    expect(b2.got).toContain('live');
+    // WHY waitFor on the state itself, not a fixed 30 ms settle: the restart re-reads, verifies and rejects the removed device's
+    // frames before it reaches 'live', and on a busy machine (load 50 on 32 threads) 30 ms was not enough (verify run 2026-11-25).
+    await vi.waitFor(() => expect(b2.got).toContain('live'));
     expect(b2.link.rejections().counts['signer-removed'] ?? 0).toBeGreaterThanOrEqual(1);
     expect(b2.link.waitingCount).toBe(0);
   });
