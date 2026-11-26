@@ -118,7 +118,7 @@ import { useSessionTasks } from './hooks/useSessionTasks';
 import { MarketplaceProvider } from './state/marketplace-context';
 import ThemeShareSheet from './components/ThemeShareSheet';
 import ShareSheet from './components/ShareSheet';
-import { PageCreateDialog, usePageCreate } from './components/pages/PageCreateDialog';
+import { PageCreateDialog, usePageCreate, THEME_NEW_CHAT } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
@@ -3535,7 +3535,7 @@ function AppInner() {
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
   // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
-  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => { void askTakeover('Devins laptop', phase); }, openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, setTourOpen });
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), themeNewChat: () => setPageCreate(THEME_NEW_CHAT), showTakeover: (phase) => { void askTakeover('Devins laptop', phase); }, openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, setTourOpen });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -3800,6 +3800,7 @@ function AppInner() {
                   filterStore={drawerFilterStore}
                   onSelect={handleSelectSkill}
                   onSelectCommand={handleSelectCommand}
+                  provider={currentSession?.provider}
                   onClose={handleCloseDrawer}
                   onOpenManager={() => openMarketplace('installed')}
                   onOpenMarketplace={() => openMarketplace()}
@@ -4204,7 +4205,7 @@ function AppInner() {
         // (list entry, view mode, focus) and leave pages so the chat shows.
         // PROJECT_VIEW_CLOSED too: comments' Ask Your Assistant opens this
         // from the Projects screen, and the new chat must be what shows next.
-        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); }}
+        onCreated={(info) => { if (pageCreate?.closeSettingsOnCreate) setSettingsOpen(false); setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); }}
         onManageProjects={() => { setPageCreate(null); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); }}
       />
       {/* The game panel now renders inside the active session's framed-shell
@@ -4225,7 +4226,12 @@ function AppInner() {
         // whose return value was discarded — so that button did NOTHING at all
         // (handoff §2.3). Per Q5 this runs in the CURRENT session.
         onRunCommand={(command) => {
-          if (!sessionId) { setToast('Open a conversation first, then try again.'); return; }
+          if (!sessionId) {
+            // WHY (waiting-notice T5, Destin's R-newchat answer): with no chat open, "Build new theme with Claude" opens the same new-chat
+            // window Pages uses (folder, model), the theme builder waiting in the box. Card #57 (the "Your Assistant" project) will become its default folder.
+            if (command.startsWith('/theme-builder')) { setPageCreate(THEME_NEW_CHAT); return; }
+            setToast('Open a conversation first, then try again.'); return;
+          }
           const result = dispatchSlashCommand({
             raw: command,
             sessionId,

@@ -2848,6 +2848,10 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved' | 'too-short'>('idle');
+  // WHY a held timer (found by verify under load, waiting-notice T5): the 2 s "Saved" reset below was never cancelled, so a panel closed
+  // inside those 2 s still ran it afterwards (and in a test, after the page was gone: "window is not defined").
+  const passwordResetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(passwordResetTimer.current), []);
   const [loading, setLoading] = useState(true);
   const [showAddDevice, setShowAddDevice] = useState(false);
   const [showSetupQR, setShowSetupQR] = useState(false);
@@ -2941,7 +2945,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       setConfig(prev => prev ? { ...prev, hasPassword: true, weakPassword: false } : prev);
       setNewPassword('');
       setPasswordStatus('saved');
-      setTimeout(() => setPasswordStatus('idle'), 2000);
+      clearTimeout(passwordResetTimer.current);
+      passwordResetTimer.current = setTimeout(() => setPasswordStatus('idle'), 2000);
     } catch (e) {
       console.warn('[remote] setting the password failed:', e);
       setPasswordStatus('idle');

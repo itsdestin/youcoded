@@ -7,9 +7,9 @@
 //   failed                   — red (and a red dot on the chat in the list if you are elsewhere), leaves on your next action
 //   not sure it went through — amber, stays until you send again or dismiss it
 import type { SessionChatState } from './chat-types';
-import { showChatNotice, stillBusy, stillNotLive, type ChatNotice } from './chat-notice-store';
+import { clearChatNotice, showChatNotice, stillBusy, stillNotLive, type ChatNotice } from './chat-notice-store';
 import { isTurnBusy } from '../hooks/useStreamingGate';
-import { commandNotInNativeChat } from '../utils/notice-words';
+import { commandNotInNativeChat, skillWhichOne } from '../utils/notice-words';
 
 type Extra = Pick<ChatNotice, 'actions' | 'stillTrue' | 'recheckEverySecond'>;
 
@@ -79,4 +79,16 @@ export const browseSkillsAction = (): NonNullable<ChatNotice['actions']>[number]
 /** "/doctor isn't available in YouCoded-runtime sessions yet." in that chat's strip (a plain terminal session has no strip: App floats its own sentence). */
 export function raiseCommandNotHere(sessionId: string, command: string): void {
   raiseCant(sessionId, 'not-in-native-runtime', commandNotInNativeChat(command));
+}
+
+/**
+ * "Two skills are called /review. Which one did you mean?": one button per skill, named by its full id (plugin:skill).
+ * WHY a question and not a failure (waiting-notice T5, deck "when two skills share a name … asks which"): the words you typed
+ * were fine, they just fit two skills. Pressing one runs that skill and takes the question away.
+ */
+const WHICH_SKILL_KEY = 'skill-which-one';
+export function raiseWhichSkill(sessionId: string, skill: string, fullIds: string[], run: (fullId: string) => void): void {
+  raiseCant(sessionId, WHICH_SKILL_KEY, skillWhichOne(skill), {
+    actions: fullIds.map((id) => ({ label: id, onClick: () => { clearChatNotice(sessionId, WHICH_SKILL_KEY); run(id); } })),
+  });
 }

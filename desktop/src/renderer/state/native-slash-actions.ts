@@ -17,7 +17,7 @@ import { getCapabilities } from '../platform';
 import type { ChatAction } from './chat-types';
 import type { NativeSlashAction, DispatcherResult } from './slash-command-dispatcher';
 import type { SessionChatState } from './chat-types';
-import { raiseBusy, raiseCant, raiseFailed, raiseNotRunning, browseSkillsAction } from './raise-notice';
+import { raiseBusy, raiseCant, raiseFailed, raiseNotRunning, raiseWhichSkill, browseSkillsAction } from './raise-notice';
 import { busyWith, notRunning, NOTHING_TO_COMPACT, NOT_AN_INSTALLED_SKILL, SKILL_UNREADABLE, skillAmbiguous, skillFailed } from '../utils/notice-words';
 
 /** User-facing copy per refusal reason. Specific and accurate — never a guessed
@@ -131,6 +131,16 @@ async function runNativeClear({ sessionId, dispatch, getSession }: Omit<NativeAc
   return false;
 }
 
+/** More buttons than this would not fit the strip; past it the sentence naming the choices is shown instead. */
+const MAX_WHICH_CHOICES = 4;
+/** Full ids of installed skills whose bare name is `name` (plugin:name). Empty when the list can't be read. */
+async function sameNamedSkillIds(name: string): Promise<string[]> {
+  try {
+    const all: Array<{ id: string }> = (await window.claude.skills.list()) ?? [];
+    return all.map((s) => s.id).filter((id) => id.slice(id.lastIndexOf(':') + 1) === name);
+  } catch { return []; }
+}
+
 /** Load a skill's instructions into the conversation as one turn.
  *
  *  This is the path that works on EVERY model: the Skill TOOL is withheld from
@@ -161,6 +171,16 @@ async function runNativeSkill(
   }
   const retry = { label: 'Try again', primary: true, onClick: () => { void runNativeSkill(skill, args, { sessionId, getSession }); } };
   if (result.reason === 'unreadable') { raiseFailed(sessionId, 'skill-unreadable', SKILL_UNREADABLE, { actions: [retry] }); return false; }
+  // Two skills with one name: ask which one (waiting-notice T5) when the installed list can name them; otherwise fall back to the
+  // sentence that names the choices. WHY the list is read here, not taken from the refusal: the refusal's own text is the computer's
+  // sentence, and this keeps the choices as real ids a button can run.
+  if (result.reason === 'ambiguous') {
+    const ids = await sameNamedSkillIds(skill);
+    if (ids.length >= 2 && ids.length <= MAX_WHICH_CHOICES) {
+      raiseWhichSkill(sessionId, skill, ids, (fullId) => { void runNativeSkill(fullId, args, { sessionId, getSession }); });
+      return false;
+    }
+  }
   // Two skills with one name is the only detail worth showing (it names the choices). Any other detail is the computer's own
   // technical text: it goes to the console, never the screen (review A5).
   if (result.reason === 'ambiguous' && result.detail) { raiseFailed(sessionId, 'skill-error-detail', skillAmbiguous(skill, result.detail)); return false; }

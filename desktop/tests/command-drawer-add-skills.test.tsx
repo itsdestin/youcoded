@@ -10,18 +10,19 @@
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
 import React from 'react';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
-import type { SkillEntry } from '../src/shared/types';
+import type { SkillEntry, CommandEntry } from '../src/shared/types';
 
 // The drawer reads two contexts; stub both so the test owns exactly what is
 // installed and what is starred, with no window.claude plumbing.
 const ctx = {
   drawerSkills: [] as SkillEntry[],
   favorites: [] as string[],
+  drawerCommands: [] as CommandEntry[],
 };
 vi.mock('../src/renderer/state/skill-context', () => ({
   useSkills: () => ({
     drawerSkills: ctx.drawerSkills,
-    drawerCommands: [],
+    drawerCommands: ctx.drawerCommands,
     favorites: ctx.favorites,
     setFavorite: vi.fn(),
   }),
@@ -163,5 +164,73 @@ describe('CommandDrawer — chip row (P-9 #1)', () => {
     expect(work.getAttribute('aria-checked')).toBe('true');
     expect(fav.getAttribute('aria-checked')).toBe('true');
     expect(fav.className).toBe(work.className);
+  });
+});
+
+
+// What the drawer leaves out or greys for the kind of chat it is open in (waiting-notice T5).
+describe('CommandDrawer — a built-in (YouCoded-runtime) chat', () => {
+  const cmd = (name: string, runsIn?: CommandEntry['runsIn']): CommandEntry => ({ name, description: `${name} does a thing`, source: 'youcoded', clickable: true, ...(runsIn ? { runsIn } : {}) });
+  const slashSearch = (provider: string | undefined, onSelect = vi.fn(), onSelectCommand = vi.fn()) => render(
+    <CommandDrawer open searchMode externalFilter="" provider={provider} onSelect={onSelect} onSelectCommand={onSelectCommand}
+      onClose={() => {}} onOpenManager={() => {}} onOpenMarketplace={() => {}} />,
+  );
+
+  it('does not offer Claude Code-only commands in a built-in chat, but offers them in a Claude Code chat', () => {
+    ctx.drawerCommands = [cmd('/compact', 'both'), cmd('/doctor', 'claude-code'), cmd('/ship')];
+    ctx.drawerSkills = [];
+    // The drawer lists commands only for a typed search, so type "/does" (each description holds that word).
+    const search = (provider: string) => render(
+      <CommandDrawer open searchMode externalFilter="does" provider={provider} onSelect={() => {}} onSelectCommand={() => {}}
+        onClose={() => {}} onOpenManager={() => {}} onOpenMarketplace={() => {}} />,
+    );
+    const native = search('native');
+    expect(screen.queryByText('/doctor')).toBeNull();
+    expect(screen.getByText('/compact')).toBeTruthy();
+    expect(screen.getByText('/ship')).toBeTruthy();     // found on disk: unknown until run, so still offered
+    native.unmount();
+    search('claude');
+    expect(screen.getByText('/doctor')).toBeTruthy();
+  });
+
+  it('greys a skill that only has plain words to start from, with its reason, and pressing it does nothing', () => {
+    ctx.drawerCommands = [];
+    ctx.drawerSkills = [
+      { ...skill('journal'), prompt: "let's journal" },
+      { ...skill('civic'), prompt: '/civic' },
+    ];
+    const onSelect = vi.fn();
+    slashSearch('native', onSelect);
+    // browse mode would show both; here the empty search lists everything
+    const journal = screen.getByText('journal').closest('[role="button"]') as HTMLElement;
+    expect(journal.getAttribute('aria-disabled')).toBe('true');
+    expect(journal.textContent).toContain('Not available in YouCoded-runtime sessions yet.');
+    fireEvent.click(journal);
+    expect(onSelect).not.toHaveBeenCalled();
+    const civic = screen.getByText('civic').closest('[role="button"]') as HTMLElement;
+    expect(civic.getAttribute('aria-disabled')).toBeNull();
+    fireEvent.click(civic);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('the same plain-words skill is startable in a Claude Code chat', () => {
+    ctx.drawerCommands = [];
+    ctx.drawerSkills = [{ ...skill('journal'), prompt: "let's journal" }];
+    slashSearch('claude');
+    expect((screen.getByText('journal').closest('[role="button"]') as HTMLElement).getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('marks a skill whose instructions can not be read, in either kind of chat, and does not start it', () => {
+    ctx.drawerCommands = [];
+    ctx.drawerSkills = [{ ...skill('notes'), prompt: '/notes', unreadable: true }];
+    for (const provider of ['native', 'claude']) {
+      const onSelect = vi.fn();
+      const { unmount } = slashSearch(provider, onSelect);
+      const card = screen.getByText('notes').closest('[role="button"]') as HTMLElement;
+      expect(card.textContent).toContain("Its instructions can't be read. Reinstall it from the marketplace.");
+      fireEvent.click(card);
+      expect(onSelect).not.toHaveBeenCalled();
+      unmount();
+    }
   });
 });

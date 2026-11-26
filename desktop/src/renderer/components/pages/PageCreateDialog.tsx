@@ -28,7 +28,23 @@ export interface PageCreateRequest {
   /** Set only for a page's start-session request: the page's name. The window
    *  then shows the message above the choices (review F4). */
   fromPage?: string;
+  /** The shoot-screen name when this is not a page request. WHY (waiting-notice T5): Settings' "Build new theme with Claude" with no
+   *  chat open reuses this window, and it needs its own picture name so it is not photographed as the Pages one. */
+  screen?: string;
+  /** Leave Settings open underneath? No: the new chat must be what shows once it exists (set by the theme button). */
+  closeSettingsOnCreate?: boolean;
 }
+
+/** The window for "Build new theme with Claude" when no chat is open: the same new-chat form, a theme sentence under the title,
+ *  and the theme builder waiting in the message box. WHY here (Destin, waiting-notice deck step R-newchat): it replaces the old
+ *  "Open a conversation first" notice. Card #57 ("Your Assistant" project) will later become this form's default folder, with no change here. */
+export const THEME_NEW_CHAT: PageCreateRequest = {
+  title: 'Build a new theme',
+  subtitle: 'Pick where the conversation starts and which model builds your theme.',
+  initialInput: '/theme-builder ',
+  screen: 'settings/theme-new-chat',
+  closeSettingsOnCreate: true,
+};
 
 /** What a page's `youcoded.startSession` hands App (spec 2026-10-14), after
  *  PageHost checked the frame, the approval and the message. */
@@ -79,7 +95,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
     // Layer 3: the library (z-60, layer 2's band) may be under it — Make a
     // page lives there too — and a dialog must sit above what opened it.
     // `screen`: the photo-only name — the title is the one thing that tells Create from Edit.
-    <Dialog screen={request.title.startsWith('Edit ') ? 'pages/library/edit' : 'pages/create'} open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
+    <Dialog screen={request.screen ?? (request.title.startsWith('Edit ') ? 'pages/library/edit' : 'pages/create')} open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
       {/* WHY a card round the form (final-review#ST-21/#PR-7, the one popup rule): its fields
           and switch sat bare on the popup. One card holding a whole form with its buttons, as the
           quick-chip editor's card does. */}

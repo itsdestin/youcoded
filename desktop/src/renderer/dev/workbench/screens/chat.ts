@@ -78,6 +78,15 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
   chat('chat/commands', 'drawer'),
+  // Waiting-notice T5: the same "/c" search in a built-in assistant chat (Claude Code-only commands absent) and in a Claude Code chat (all there).
+  { ...chat('chat/commands#native', 'drawer'), session: 'wb-2', newIn: 'after' as const, open: [{ do: 'type', text: '/c' }] },
+  { ...chat('chat/commands#claude-code', 'drawer'), session: 'wb-1', newIn: 'after' as const, open: [{ do: 'type', text: '/c' }] },
+  // Waiting-notice T5: skills that can't start here, greyed with a line (built-in chat), and a skill whose instructions can't be read, marked in any chat.
+  { ...chat('chat/skills#native-greyed', 'drawer'), session: 'wb-2', params: { skillStates: '1' }, newIn: 'after' as const },
+  { ...chat('chat/skills#unreadable', 'drawer'), session: 'wb-1', params: { skillStates: '1' }, newIn: 'after' as const },
+  // Waiting-notice T5: two skills called Review; "/review" typed in a built-in chat asks which one instead of failing.
+  { ...chat('chat#which-skill', 'view'), session: 'wb-2', params: { skillStates: '1' }, newIn: 'after' as const, 
+    open: [{ do: 'type', target: { role: 'textbox', label: 'Message your assistant...' }, text: '/review' }, { do: 'key', key: 'Escape' }, { do: 'key', key: 'Enter' }] },
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),
   // Custom providers (2026-10-20): a search that finds nothing offers "Check for new

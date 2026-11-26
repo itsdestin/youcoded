@@ -40,9 +40,15 @@ export function scanSkills(): SkillEntry[] {
     // registry entry, not where this machine installed it — so it is applied
     // AFTER the spread in both branches.
     skillDir?: string,
+    // Whether the SKILL.md just read was readable. Passed IN from readSkillMeta (the read already happens) instead of a second
+    // file check here: the main process allows no new blocking file calls. True for a commands/ folder, which is a slash command
+    // that may have no SKILL.md at all — not a broken skill.
+    readable = true,
   ) {
     if (discoveredIds.has(id)) return;
     discoveredIds.add(id);
+    // WHY (waiting-notice T5): a skill whose SKILL.md can't be opened is listed with a mark, instead of failing only when run.
+    const unreadable = !readable ? { unreadable: true as const } : {};
 
     const curated = registry[id];
     if (curated) {
@@ -53,6 +59,7 @@ export function scanSkills(): SkillEntry[] {
         visibility: curated.visibility || 'published',
         pluginName,
         skillDir,
+        ...unreadable,
       } as SkillEntry);
     } else {
       skills.push({
@@ -66,6 +73,7 @@ export function scanSkills(): SkillEntry[] {
         visibility: 'published',
         pluginName,
         skillDir,
+        ...unreadable,
       });
     }
   }
@@ -106,7 +114,7 @@ export function scanSkills(): SkillEntry[] {
             // description (the same one the Skill tool shows Claude). Read it,
             // same as Pass 3 (user skills) already does below.
             const meta = readSkillMeta(path.join(skillDir, 'SKILL.md'));
-            addSkill(skillId, e.name, meta.description || '', source, pluginEntry.name, skillDir);
+            addSkill(skillId, e.name, meta.description || '', source, pluginEntry.name, skillDir, meta.readable);
           }
         }
       } catch {}
@@ -135,7 +143,7 @@ export function scanSkills(): SkillEntry[] {
             const skillId = `${pluginSlug}:${entry.name}`;
             const skillDir = path.join(skillsDir, entry.name);
             const meta = readSkillMeta(path.join(skillDir, 'SKILL.md'));
-            addSkill(skillId, entry.name, meta.description || '', 'plugin', pluginSlug, skillDir);
+            addSkill(skillId, entry.name, meta.description || '', 'plugin', pluginSlug, skillDir, meta.readable);
           }
         }
       } catch {}
@@ -204,6 +212,7 @@ export function scanSkills(): SkillEntry[] {
         visibility: 'private',
         // Already in scope — readSkillMeta just read SKILL.md out of it.
         skillDir,
+        ...(meta.readable ? {} : { unreadable: true as const }),
       });
     }
   } catch {}
@@ -258,18 +267,19 @@ function readdirSafe(dir: string): fs.Dirent[] {
 }
 
 /** Minimal SKILL.md frontmatter reader — just `name` and `description`. */
-function readSkillMeta(skillMdPath: string): { name?: string; description?: string } {
+// `readable` is false when the file is missing, is not a regular file, or can't be opened (waiting-notice T5: the skills list marks those).
+function readSkillMeta(skillMdPath: string): { name?: string; description?: string; readable: boolean } {
   try {
     // WHY (2026-10-01 one-core R6-3): look at the file kind BEFORE reading. A SKILL.md that is a named pipe made this synchronous read
     // wait forever for a writer and froze the whole main process. statSync follows links, so a link to a regular file still reads.
-    if (!fs.statSync(skillMdPath).isFile()) return {};
+    if (!fs.statSync(skillMdPath).isFile()) return { readable: false };
     const raw = fs.readFileSync(skillMdPath, 'utf8');
     const fm = /^---\s*\n([\s\S]*?)\n---/m.exec(raw);
-    if (!fm) return {};
+    if (!fm) return { readable: true };
     const body = fm[1];
     const name = /^name:\s*["']?([^"'\n]+)["']?\s*$/m.exec(body)?.[1]?.trim();
-    return { name, description: readFrontmatterDescription(body) };
-  } catch { return {}; }
+    return { name, description: readFrontmatterDescription(body), readable: true };
+  } catch { return { readable: false }; }
 }
 
 // `description:` is sometimes a YAML folded/literal block scalar

@@ -27,7 +27,7 @@ import type { CommandEntry } from '../shared/types';
 export const DISABLED_REASON = (name: string): string =>
   `Please run ${name} in Terminal View.`;
 
-export const CC_BUILTIN_COMMANDS: CommandEntry[] = [
+const CC_BUILTIN_LIST: CommandEntry[] = [
   { name: '/help',            description: 'Show Claude Code help',                            source: 'cc-builtin', clickable: false, disabledReason: DISABLED_REASON('/help') },
   { name: '/status',          description: 'Show session, config, and auth status',            source: 'cc-builtin', clickable: false, disabledReason: DISABLED_REASON('/status') },
   { name: '/permissions',     description: 'Manage tool permissions',                          source: 'cc-builtin', clickable: false, disabledReason: DISABLED_REASON('/permissions') },
@@ -56,3 +56,8 @@ export const CC_BUILTIN_COMMANDS: CommandEntry[] = [
   { name: '/reload-skills',   description: 'Re-scan skill directories without restarting',     source: 'cc-builtin', clickable: false, disabledReason: DISABLED_REASON('/reload-skills') },   // CC v2.1.152
   { name: '/scroll-speed',    description: 'Adjust mouse wheel scroll speed',                  source: 'cc-builtin', clickable: false, disabledReason: DISABLED_REASON('/scroll-speed') },    // CC v2.1.139
 ];
+
+// WHY the stamp is applied here and not on each line (waiting-notice T5): every one of these is a Claude Code panel with no
+// YouCoded-runtime equivalent, so the chat drawer hides them in a YouCoded-runtime chat. Stamping the whole list in one
+// place means a command added above cannot be forgotten.
+export const CC_BUILTIN_COMMANDS: CommandEntry[] = CC_BUILTIN_LIST.map((c) => ({ ...c, runsIn: 'claude-code' as const }));

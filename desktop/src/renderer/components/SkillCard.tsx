@@ -24,6 +24,9 @@ interface Props {
    *  Clicking routes the user to that plugin's detail page. Skills with
    *  no matching marketplace plugin fall back to the source tag. */
   pluginBadge?: PluginBadgeProps;
+  /** One plain line saying why this skill can't be started in this chat. Greys the card (the same look an unavailable
+   *  command card has), shows the line under the description, and the card no longer does anything when pressed. */
+  unavailable?: string;
 }
 
 // Change 23: every badge this card renders is an IDENTITY badge — "YC",
@@ -126,15 +129,18 @@ type Handlers = {
 // refreshed by the OUTER SkillCard below on every one of ITS renders, and the
 // outer component is never memoized, so it runs on every CommandDrawer
 // render even when this inner one is skipped.
-function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName }: {
+function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName, unavailable }: {
   skill: SkillEntry;
   handlersRef: React.RefObject<Handlers>;
   hasFavorite: boolean;
   favoriteFilled: boolean;
   hasPluginBadge: boolean;
   pluginName?: string;
+  unavailable?: string;
 }) {
-  const onCardClick = () => handlersRef.current.onClick(skill);
+  // WHY nothing happens on press (waiting-notice T5): the card stays visible and greyed with its reason, like a command
+  // card that can't run here, instead of offering a start that can only come back as a notice.
+  const onCardClick = () => { if (!unavailable) handlersRef.current.onClick(skill); };
   const onPluginClick = () => handlersRef.current.onPluginClick?.();
   const onFavoriteToggle = () => handlersRef.current.onToggle?.();
   const badge = hasPluginBadge && pluginName
@@ -145,6 +151,7 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
     <div
       role="button"
       tabIndex={0}
+      aria-disabled={unavailable ? true : undefined}
       onClick={onCardClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCardClick(); } }}
       // WHY CARD_LEVEL_1, not the raised panel card (final-review#GM-1, Destin: "the cards
@@ -153,7 +160,7 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
       // itself `bg-panel`, so a panel-coloured card was only an outline. The first-level
       // card is the one Settings uses on its panel, and the guide's Card levels rule
       // covers cards inside popups and side panes. Hover/press stay `card-interactive`.
-      className={`relative ${CARD_LEVEL_1} card-interactive p-3 text-left flex flex-col cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+      className={`relative ${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${unavailable ? 'opacity-50 cursor-not-allowed' : 'card-interactive cursor-pointer'}`}
     >
       {(hasFavorite || hasPluginBadge) && (
         // Each icon carries its OWN hover square — two distinct bare icons, not one
@@ -174,6 +181,7 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
       {/* WHY the badge takes the spare height (mt-auto), not the description: a description stretched by flex-1 showed
           a cut third line under its two-line limit whenever a neighbouring tile's longer name made the row taller. */}
       <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2">{skill.description}</span>
+      {unavailable && <span className="text-2xs text-fg mt-1 leading-snug">{unavailable}</span>}
       <div className="mt-auto pt-2 self-start">{badge}</div>
     </div>
   );
@@ -189,7 +197,7 @@ const SkillCardMemo = React.memo(SkillCardImpl);
 // (like ResumeBrowser itself, which owns rowActions.current). Its only job is
 // keeping handlersRef current so SkillCardMemo can skip re-rendering on data
 // alone without ever risking a stale click handler.
-function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
+function SkillCard({ skill, onClick, favorite, pluginBadge, unavailable }: Props) {
   const handlersRef = useRef<Handlers>({ onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick });
   handlersRef.current = { onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick };
   return (
@@ -200,6 +208,7 @@ function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
       favoriteFilled={favorite?.filled ?? false}
       hasPluginBadge={pluginBadge != null}
       pluginName={pluginBadge?.name}
+      unavailable={unavailable}
     />
   );
 }

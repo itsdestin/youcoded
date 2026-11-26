@@ -9,6 +9,8 @@ import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
 // A pure string classifier (no imports but types): the practice Backup & sync shows its real words.
 import { classifyPushError, TIMEOUT_SENTINEL } from '../../../main/sync-error-classifier';
+import { YOUCODED_COMMANDS, expandWithAliases } from '../../../main/youcoded-commands';
+import { CC_BUILTIN_COMMANDS } from '../../../main/cc-builtin-commands';
 import type {
   InstalledLocalModel, DownloadProgress, ModelSettingsWrite, StoredModelSettings,
 } from '../../../shared/model-manager-types';
@@ -253,6 +255,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Home's row actions (card #143) — real channels (office:rename / duplicate / forget-recent); faked here for the workbench.
   'office.rename', 'office.duplicate', 'office.forgetRecent',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
+  // The slash-command list the "/" drawer shows (the real lists, so a native chat's missing Claude Code commands can be photographed).
+  'commands.list',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
   // Marketplace integrations (2026-10-04) — real preload channels; faked so the integration
@@ -2165,6 +2169,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       setTimeout(() => startReply(sessionId, text, true), getLatency() + 50);
       return { status: 'sent' };
     },
+    // /skill-name in a native chat. Only `/review` is refused, the way the real catalog refuses a bare name two plugins share
+    // (the `?skillStates=1` fixtures list both), so the "which one did you mean?" question can be raised the way a person raises it.
+    invokeSkill: async (_sessionId: string, skill: string) => skill === 'review'
+      ? { ok: false as const, reason: 'ambiguous', detail: "Several plugins provide a skill called 'review': alpha-tools:review, beta-tools:review. Use the full name to pick one." }
+      : { ok: true as const },
     // Pretend the waiting message was found; the real host decides in main.
     queueRemove: async () => true,
     queueSendNow: async () => true,
@@ -3813,6 +3822,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     .filter((s) => !studentSwitch || !DEVELOPER_BUNDLES.includes(s.pluginName))
     .filter((s) => turnedOffSwitch || !('blocked' in s))
     .map((s) => ({ ...s }));
+  // `?skillStates=1` (waiting-notice T5): a short list with one skill whose prompt is plain words (greyed in a built-in chat),
+  // one whose instructions can't be read (greyed in every chat), and two that share the name "Review" (the "which one?" question).
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('skillStates') === '1') {
+    const base = { category: 'work', source: 'plugin', type: 'plugin', visibility: 'published', installedAt: '2026-08-01T12:00:00Z' };
+    installedSkills = [
+      ...installedSkills.slice(0, 2),
+      { ...base, id: 'quick-journal', displayName: 'Quick Journal', description: 'Write a short entry about your day.', prompt: "let's journal" },
+      { ...base, id: 'broken-notes', displayName: 'Broken Notes', description: 'Turn rough notes into a tidy summary.', prompt: '/broken-notes', unreadable: true },
+      { ...base, id: 'alpha-tools:review', displayName: 'Review', description: 'Read a draft and point out what to fix.', prompt: '/alpha-tools:review', pluginName: 'alpha-tools' },
+      { ...base, id: 'beta-tools:review', displayName: 'Review', description: 'Check a pull request before it merges.', prompt: '/beta-tools:review', pluginName: 'beta-tools' },
+    ];
+  }
   const installedPackages: Record<string, any> = JSON.parse(JSON.stringify(INSTALLED_PACKAGES));
   if (!turnedOffSwitch) delete installedPackages['tab-tidy'];
   // Quick chips are a STATEFUL mock, not a canned read: the editor writes
@@ -4210,7 +4231,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       store.getState().sessions.forEach((x: any, i: number) => { perSession[x.id] = { status: colours[i] ?? 'gray' }; });
       return { anyNeedsAttention: true, perSession };
     } } } : {}),
-    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, network, search, performance: perfMock,
+    skills, commands: { list: async () => [...expandWithAliases(YOUCODED_COMMANDS), ...CC_BUILTIN_COMMANDS].map((c) => ({ ...c })) }, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, network, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),
     office: createOfficeMock(activeScenario === 'empty'),

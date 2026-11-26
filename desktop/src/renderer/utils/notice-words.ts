@@ -69,3 +69,11 @@ export const SKILL_UNREADABLE = "That skill is installed, but its instructions c
 export const skillFailed = (skill: string): string => `Couldn't run /${skill}.`;
 /** Two skills with one name: the one detail that tells you what to do, so it is kept. */
 export const skillAmbiguous = (skill: string, detail: string): string => `Couldn't run /${skill}: ${detail}`;
+
+// ---- The command drawer and skills list: what can't start in this chat (waiting-notice T5) ----
+/** The reason line on a greyed skill: it is a plain prompt, and a YouCoded-runtime chat can only start skills by name. */
+export const SKILL_NOT_HERE_NATIVE = 'Not available in YouCoded-runtime sessions yet.';
+/** The mark on a skill whose instructions can't be opened. */
+export const SKILL_UNREADABLE_MARK = "Its instructions can't be read. Reinstall it from the marketplace.";
+/** The question when two installed skills share a name. */
+export const skillWhichOne = (skill: string): string => `Two skills are called /${skill}. Which one did you mean?`;

@@ -152,3 +152,36 @@ describe.skipIf(process.platform === 'win32')('skill scan with a named pipe save
     } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
   });
 });
+
+// A skill whose instructions file can't be opened is listed with a mark (waiting-notice T5), so the skills list can show it
+// instead of letting it fail only when someone runs it. A commands/ folder has no SKILL.md by design and is never marked.
+describe('scanSkills — unreadable instructions', () => {
+  let tmpHome: string;
+  let origHomedir: typeof os.homedir;
+  beforeEach(() => { tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-skill-unreadable-')); origHomedir = os.homedir; (os as any).homedir = () => tmpHome; });
+  afterEach(() => { (os as any).homedir = origHomedir; try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+  const write = (p: string, content: string) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, content); };
+
+  it('marks a plugin skill with no SKILL.md and a user skill whose SKILL.md is a folder, and leaves readable ones alone', () => {
+    const plugin = path.join(tmpHome, '.claude', 'plugins', 'acme');
+    write(path.join(plugin, 'plugin.json'), '{}');
+    write(path.join(plugin, 'skills', 'good', 'SKILL.md'), '---\nname: good\ndescription: fine\n---\nbody');
+    fs.mkdirSync(path.join(plugin, 'skills', 'empty'), { recursive: true });
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'skills', 'odd', 'SKILL.md'), { recursive: true });
+    write(path.join(tmpHome, '.claude', 'skills', 'fine', 'SKILL.md'), '---\nname: Fine\n---\nbody');
+    const byId = Object.fromEntries(scanSkills().map((s) => [s.id, s]));
+    expect(byId['acme:good'].unreadable).toBeUndefined();
+    expect(byId['acme:empty'].unreadable).toBe(true);
+    expect(byId['odd'].unreadable).toBe(true);
+    expect(byId['fine'].unreadable).toBeUndefined();
+  });
+
+  it('does not mark a commands/ folder (a slash command, not a broken skill)', () => {
+    const install = path.join(tmpHome, 'cache', 'acme');
+    fs.mkdirSync(path.join(install, 'commands', 'ship'), { recursive: true });
+    write(path.join(tmpHome, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'acme@mkt': [{ installPath: install }] } }));
+    const ship = scanSkills().find((s) => s.id === 'acme:ship');
+    expect(ship).toBeDefined();
+    expect(ship!.unreadable).toBeUndefined();
+  });
+});

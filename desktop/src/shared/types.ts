@@ -1043,6 +1043,11 @@ export interface SkillEntry {
   // has not installed.
   skillDir?: string;
 
+  /** True when this skill is installed but its instructions file (SKILL.md) can't be read. The list marks it and a
+   *  YouCoded-runtime chat can't start it. WHY here (waiting-notice T5): the scanner already holds the path, so it
+   *  is the one place that can say so before anyone tries to run it. */
+  unreadable?: boolean;
+
   // Plugin off-switch: on an installed plugin the server listed as unsafe (already turned off).
   // WHY an object: room for a plain-words reason; the UI shows one fixed sentence today.
   blocked?: { reason?: string };
@@ -1067,6 +1072,11 @@ export type CommandEntry = {
   clickable: boolean;
   disabledReason?: string;        // populated when clickable=false
   aliases?: string[];             // e.g. /clear → ['/reset', '/new']
+  /** Which kind of chat this command works in. 'claude-code': only a Claude Code chat (a YouCoded-runtime chat has no
+   *  terminal to run it in). 'both': also works in a YouCoded-runtime chat. Absent = unknown until it is run (a command
+   *  found on disk), so it is still offered everywhere. WHY (waiting-notice T5): the drawer used to offer commands that
+   *  could only answer "isn't available in YouCoded-runtime sessions yet". */
+  runsIn?: 'claude-code' | 'both';
 };
 
 export interface SkillFilters {

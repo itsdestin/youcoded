@@ -34,6 +34,8 @@ export type AppScreenSetters = {
   openPagesView: () => void;
   openPagesLibrary: () => void;
   createPage: () => void;
+  /** Settings' "Build new theme with Claude" with no chat open: the new-chat window with the theme builder waiting. */
+  themeNewChat: () => void;
   openWelcomeForm: () => void;
   showTakeover: (phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied') => void;
   // Opens the pre-resume model picker the same way a real resume of a native
@@ -93,6 +95,7 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('pages', s.openPagesView);
   useScreenOpen('pages/library', s.openPagesLibrary);
   useScreenOpen('pages/create', s.createPage);
+  useScreenOpen('settings/theme-new-chat', s.themeNewChat);
   // "Open here instead?" when another computer holds a conversation, in each of its phases
   // (a fixture device name; no real handoff is waiting behind it).
   useScreenOpen('chat/takeover', (phase) => { if (phase) s.showTakeover(phase as 'confirm'); }, TAKEOVER_PHASES);

@@ -52,6 +52,8 @@ const WIZARD_ESCAPE = 'the add-a-backup wizard returns to Backup & sync';
 
 export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings', 'drawer'),
+  // Waiting-notice T5: "Build new theme with Claude" with no chat open opens the new-chat window (folder, model) with the theme builder waiting.
+  { ...settings('settings/theme-new-chat', 'dialog'), newIn: 'after' as const },
   settings('settings/account', 'dialog'),
   // WHY (2026-09-29): the signed-in Account view was never photographed, so it
   // missed the card sweep — Destin found it bare in the live app.

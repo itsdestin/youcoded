@@ -293,6 +293,32 @@ describe('"still working" notices leave when the reply ends', () => {
     warn.mockRestore();
   });
 
+  it('two skills with one name ask which one, and pressing one runs that skill', async () => {
+    const invokeSkill = vi.fn()
+      .mockResolvedValueOnce({ ok: false, reason: 'ambiguous', detail: "Several plugins provide a skill called 'review': a:review, b:review." })
+      .mockResolvedValueOnce({ ok: true });
+    const skills = { list: vi.fn().mockResolvedValue([{ id: 'a:review' }, { id: 'b:review' }, { id: 'a:other' }]) };
+    (window as any).claude = { native: { invokeSkill }, skills };
+    await runNativeSlashAction({ kind: 'invoke-skill', skill: 'review', args: 'now' } as any, { sessionId: SID, dispatch: vi.fn() });
+    const notice = getChatNotice(SID)!;
+    expect(notice.text).toBe('Two skills are called /review. Which one did you mean?');
+    expect(notice.tone).toBe('warn');
+    expect(notice.actions?.map((a) => a.label)).toEqual(['a:review', 'b:review']);
+    await act(async () => { notice.actions![1].onClick(); });
+    // The second call names the full id and keeps what was typed after the command; the question is gone.
+    expect(invokeSkill).toHaveBeenLastCalledWith(SID, 'b:review', 'now');
+    expect(getChatNotice(SID)).toBeUndefined();
+  });
+
+  it('two same-named skills the list cannot name fall back to the sentence that names them', async () => {
+    (window as any).claude = {
+      native: { invokeSkill: vi.fn().mockResolvedValue({ ok: false, reason: 'ambiguous', detail: "two skills match (a:review, b:review)" }) },
+      skills: { list: vi.fn().mockResolvedValue([]) },
+    };
+    await runNativeSlashAction({ kind: 'invoke-skill', skill: 'review' } as any, { sessionId: SID, dispatch: vi.fn() });
+    expect(getChatNotice(SID)?.text).toBe("Couldn't run /review: two skills match (a:review, b:review)");
+  });
+
   it('the unconfirmed Stop and the unsent message each have one approved sentence', () => {
     expect(STOP_UNSURE).toBe("Can't tell if Stop went through. If Claude is still working, press Stop again.");
     expect(MESSAGE_UNSURE).toBe("Can't tell if your message was sent. Check the chat before sending it again.");

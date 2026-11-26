@@ -13,6 +13,7 @@ import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-
 import { ScreenMark } from '../shoot-mode';
 import { prefersTouchInput } from '../utils/touch-input';
 import { Tooltip } from './ui';
+import { commandOfferedIn, skillUnavailableReason } from '../utils/drawer-availability';
 
 interface Props {
   open: boolean;
@@ -24,6 +25,8 @@ interface Props {
   filterStore?: DrawerFilterStore;
   onSelect: (skill: SkillEntry) => void;
   onSelectCommand: (entry: CommandEntry) => void;
+  /** The open chat's kind ('native' = a YouCoded-runtime chat). Commands that can't run there are left out and skills that can't start there are greyed (waiting-notice T5). */
+  provider?: string;
   onClose: () => void;
   onOpenManager: () => void;
   onOpenMarketplace: () => void;
@@ -38,7 +41,7 @@ interface Props {
 const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as const;
 type CategoryChip = typeof categoryChips[number];
 
-function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
+function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, provider, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
   const { drawerSkills, drawerCommands, favorites, setFavorite, loadError, retryLoad } = useSkills();
   // Mounted under every session whether or not it is showing, so only OPENING
   // it asks the marketplace to load (audit W16); the plugin-name badges fill
@@ -111,9 +114,11 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
     if (!isSearching) return [] as CommandEntry[];
     const q = effectiveQuery.toLowerCase();
     return drawerCommands
+      // WHY first: a command this kind of chat can't run is not offered at all (typed anyway, the chat's strip explains).
+      .filter((c) => commandOfferedIn(c, provider))
       .filter((c) => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [drawerCommands, effectiveQuery, isSearching]);
+  }, [drawerCommands, effectiveQuery, isSearching, provider]);
 
   // Browse mode: apply category chip filter, then split into favorites / others.
   const categoryFiltered = useMemo(() => {
@@ -203,6 +208,7 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         onClick={onSelect}
         favorite={{ filled: isFav, onToggle: () => { void setFavorite(favId, !isFav).catch((e) => announceFailed('change your favorites', e)); } }}
         pluginBadge={pluginBadge}
+        unavailable={skillUnavailableReason(skill, provider)}
       />
     );
   };

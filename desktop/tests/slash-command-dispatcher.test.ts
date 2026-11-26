@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSlashCommand, type DispatcherCallbacks } from '../src/renderer/state/slash-command-dispatcher';
+import { routeSlashResult } from '../src/renderer/state/native-slash-actions';
+import { YOUCODED_COMMANDS, expandWithAliases } from '../src/main/youcoded-commands';
+import { CC_BUILTIN_COMMANDS } from '../src/main/cc-builtin-commands';
 import { ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
 // A screen whose host keeps no session record and that reads its own terminal — the old Android runtime's shape, kept
 // for an older computer that sends no record (the Android app now runs the desktop backend, 2026-10-14).
@@ -204,5 +207,39 @@ describe('/copy reports what actually happened', () => {
 
     expect(() => copy(onToast)).not.toThrow();
     await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith('Copied to clipboard'));
+  });
+});
+
+
+// WHERE each drawer command actually goes in a built-in (YouCoded-runtime) chat, asked of the dispatcher itself (waiting-notice T5).
+// WHY: the drawer hides commands marked runsIn 'claude-code' in that kind of chat. A hand-written mark could drift from what the
+// dispatcher really does, and then a command would be hidden that works (or offered that does not). So the mark is checked against
+// the real route, command by command.
+describe('commands offered in a built-in chat match what the dispatcher does there', () => {
+  const callbacks: DispatcherCallbacks = {
+    onResumeCommand: () => {}, onOpenPreferences: () => {}, onOpenModelPicker: () => {}, onToast: () => {},
+    getUsageSnapshot: () => ({ contextTokens: 1 } as any), getSessionState: () => undefined,
+    onModelSwitchCommand: () => 'ineligible',
+  };
+  /** 'both' when the command does something in a built-in chat; 'claude-code' when it can only be forwarded to a terminal or a skill lookup. */
+  function runsInBuiltInChat(raw: string): 'claude-code' | 'both' {
+    const result = dispatchSlashCommand({ raw, sessionId: 's1', view: 'chat', files: [], dispatch: () => {}, timeline: [], callbacks, deferUiEffectsToRuntime: true });
+    const route = routeSlashResult('native', result);
+    if (route.via === 'native') return route.action.kind === 'invoke-skill' ? 'claude-code' : 'both';
+    return route.via === 'none' ? 'both' : 'claude-code';
+  }
+
+  it('every YouCoded command carries a mark, and the mark is what the dispatcher does with it', () => {
+    for (const entry of expandWithAliases(YOUCODED_COMMANDS)) {
+      expect(entry.runsIn, `${entry.name} has no runsIn mark`).toBeDefined();
+      expect(runsInBuiltInChat(entry.name), `${entry.name}: runsIn says ${entry.runsIn}`).toBe(entry.runsIn);
+    }
+  });
+
+  it('every Claude Code panel command is marked claude-code and has no route of its own in a built-in chat', () => {
+    for (const entry of CC_BUILTIN_COMMANDS) {
+      expect(entry.runsIn, entry.name).toBe('claude-code');
+      expect(runsInBuiltInChat(entry.name), entry.name).toBe('claude-code');
+    }
   });
 });
