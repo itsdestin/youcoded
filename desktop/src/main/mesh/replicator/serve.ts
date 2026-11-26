@@ -100,7 +100,7 @@ export async function onWant(ctx: RepCtx, peer: PeerInfo, w: WantBody): Promise<
     try { mine = await ctx.store.hashAt(v.local, 0, w.haveLines); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') { sendNak(ctx, peer, wire, w.haveLines, 'evicted'); return; } throw e; }
     if (mine !== hex(w.haveHash)) { sendNak(ctx, peer, wire, w.haveLines, 'not-a-prefix', mine); return; }
     let through = Math.min(w.through ?? head.lines, head.lines);
-    if (!desc.writer.equals(ctx.crypto.self)) { const newest = await ctx.heads.newest(wire); through = Math.min(through, newest ? newest.lines : 0); }
+    // (no clamp to my newest signed point here: review 1 showed it redundant. buildBatch serves only up to a signed point on my chain and answers `unavailable` otherwise, so the clamp could only repeat that.)
     if (w.haveLines >= through) {
       // level with me: say so with a signed ack of my head (this is how a device asks "do you still hold these lines?", F2); behind my signed points: say I cannot help
       if (w.haveLines >= head.lines) { await sendAck(ctx, peer, wire, v.local); return; }

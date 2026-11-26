@@ -148,6 +148,24 @@ describe('F2 an ack is a statement about a copy that still exists', () => {
   });
 });
 
+describe('F2 listing rules', () => {
+  const ackOf = (world: World, holder: string, v: Buffer) => world.devs.A.rep.peerAcks(v).find((a) => a.holder === world.ids[holder].deviceId.toString('hex'));
+  it('an ack is not listed when the holder\'s own heads show another chain value at the same count, nor when its heads are stale', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f2d');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5));
+    await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(5)); await world.settle();
+    world.devs.B.rep.stop(); // B's replicator goes quiet (its link still speaks), so nothing re-confirms the ack behind this test's back
+    world.devs.B.link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 5, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }) });
+    await vi.waitFor(() => expect(ackOf(world, 'B', V)).toBeUndefined());
+    const real = Buffer.from((await headOf(world, 'A', V)).hash, 'hex');
+    world.devs.B.link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 5, hash: real, conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }) });
+    await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(5));
+    world.devs.B.carrier.setOnline(false);
+    await world.clock.advance(11 * 60_000);
+    expect(ackOf(world, 'B', V)).toBeUndefined();
+  });
+});
+
 describe('F3 wire ids and store ids are different spaces', () => {
   it('incarnation 0 is not the wire id, and no incarnation of one version equals another version\'s wire id or incarnation', () => {
     const a = wireId('f3a'); const b = wireId('f3b');
@@ -298,6 +316,42 @@ describe('F6 a paired hostile device cannot make a device do unbounded work', ()
   }, 120_000);
 });
 
+describe('F6 parts out of order', () => {
+  it('parts that arrive out of order never complete a line and never flip the version to diverged (the ordering check is the only defence here)', async () => {
+    w = await withHostile(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f6p');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    const hash = Buffer.from((await headOf(world, 'A', V)).hash, 'hex');
+    const head = { lines: 3, hash, sig: signWith(world.ids.A, headMessage(V, 3, hash)) };
+    const total = 2 * PART_BYTES + 10; const sizes = [PART_BYTES, PART_BYTES, 10];
+    for (const idx of [0, 2, 1]) await world.devs.M.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 2, lines: [Buffer.alloc(sizes[idx], 7)], head, part: { index: idx, of: 3, totalBytes: total } }) });
+    await world.settle();
+    expect(world.devs.B.rep.counters()['part-out-of-order'] ?? 0).toBeGreaterThanOrEqual(1);
+    expect(world.devs.B.rep.counters()['chain-mismatch'] ?? 0).toBe(0);
+    expect(await st(world, 'B', V)).not.toMatch(/^diverged/);
+  });
+});
+
+describe('F6/F8 a child waiting for its parent is not adopted again for every message', () => {
+  it('two hundred naks about the parent cause a bounded number of adoptions of the waiting child (the unbounded backlog behind review seed 3040)', async () => {
+    w = await withHostile(['A', 'B'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('f6e');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    // B knows the version but holds none of it (the relay drops what A sends), so a child forked at line 4 has to wait for its parent
+    world.hub.holdFilter = () => 'drop';
+    await world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4)); await world.settle();
+    const hash = (await headOf(world, 'A', V)); void hash;
+    const forkHash = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 3)) as string, 'hex');
+    const token = 'wait'; const child = (await import('../../src/main/mesh/store')).deriveForkId(V, 3, forkHash.toString('hex'), token);
+    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 3, forkHash, token });
+    await world.settle();
+    let syncs = 0; const link = world.devs.B.link as unknown as { sync: (g: string) => Promise<void> }; const orig = link.sync.bind(link);
+    link.sync = (g: string) => { syncs++; return orig(g); };
+    for (let i = 0; i < 200; i++) sendLive(world, KIND_NAK, nakBodyOf({ version: V, at: 0, why: 'unavailable', hashAtYourCount: null }), 'B');
+    await world.settle();
+    expect(syncs).toBeLessThanOrEqual(20);
+    expect(world.devs.B.rep.stateSizes().queues).toBe(0);
+  });
+});
+
 describe('F7 status never says in-sync when it cannot know', () => {
   it('a peer that says it is repairing, and a peer whose claims are too old, each get their own named state', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f7');
@@ -325,6 +379,10 @@ describe('F8 a store call that never answers ends in a named state', () => {
     await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('stuck(store-call-blocked)'));
     await world.devs.A.rep.appendLocal(U, lineSet(2)); // another version is not held up
     expect((await headOf(world, 'A', U)).lines).toBe(2);
+    // and the SAME version's queue moved on: once the store answers again, the next step on it runs (it would wait behind the hung one forever without the ceiling)
+    (world.devs.A.store as unknown as { head: unknown }).head = orig;
+    await world.devs.A.rep.appendLocal(V, lineSet(1, 'again'));
+    expect((await headOf(world, 'A', V)).lines).toBeGreaterThanOrEqual(1);
   });
 });
 
