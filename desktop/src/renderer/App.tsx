@@ -1,9 +1,12 @@
 // Registers window.__terminalRegistry so main-process executeJavaScript
 // can call getScreenText for the attention classifier's ~1s buffer reads.
 // Must run before any TerminalView mounts (which call registerTerminal).
+import { withoutSession, pendingModelAfterClose } from './state/closed-session-state';
+import { useModelModes } from './hooks/useModelModes';
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { applyCloseChoices } from './state/close-prompt-writes';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
@@ -52,6 +55,7 @@ import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
 import { useSendReconcile } from './hooks/useSendReconcile';
+import { useStaleSends } from './hooks/useStaleSends';
 import { REMOTE_REFRESH_EVENT } from './remote-events';
 import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
@@ -94,6 +98,7 @@ import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import { InitializingCover } from './components/InitializingCover';
+import { useExpiredSignIns } from './hooks/useExpiredSignIns';
 import { promptShowMeansStarted, composerDisabled, usePendingPromptActive, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import { readBuddyStyle } from './components/BuddyStyleRow';
@@ -528,18 +533,8 @@ function AppInner() {
   // an empty task list via useChatState's singleton EMPTY_SESSION_STATE.
   const openTasks = useSessionTasks(sessionId ?? '');
   // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/youcoded-model-modes.json.
-  const [fastMode, setFastMode] = useState(false);
-  const [effortLevel, setEffortLevel] = useState<string>('auto');
-  // Load persisted modes on mount, and re-load when popup closes (picks up
-  // edits made in the popup). Simple poll on popup close keeps the chips in sync.
-  useEffect(() => {
-    const api = (window.claude as any).modes;
-    if (!api) return;
-    api.get().then((m: { fast?: boolean; effort?: string }) => {
-      setFastMode(!!m?.fast);
-      if (m?.effort) setEffortLevel(m.effort);
-    }).catch(() => {});
-  }, [modelPickerOpen]);
+  // WHY (card #134 round 4, Destin Q-1): the chips stay hidden until the saved values are really read (see the hook).
+  const { fast: fastMode, effort: effortLevel, read: modesRead } = useModelModes(modelPickerOpen);
   // App-scoped marketplace destinations (NOT per-session). The full-screen
   // marketplace + library replaced the legacy three-tab modal entirely.
   const [activeView, setActiveView] = useState<'chat' | 'terminal' | 'marketplace' | 'library'>('chat');
@@ -641,6 +636,8 @@ function AppInner() {
   const [sessionModels, setSessionModels] = useState<Map<string, ModelAlias | 'unknown'>>(new Map());
   const currentModel: ModelAlias | 'unknown' = sessionId ? (sessionModels.get(sessionId) ?? 'unknown') : 'sonnet';
   const [pendingModel, setPendingModel] = useState<ModelAlias | null>(null);
+  // WHY (R-4): the session:destroyed handler is a mount-time closure, so it reads the open chat through a ref.
+  const openSessionIdRef = useRef<string | null>(null); openSessionIdRef.current = sessionId;
   const consecutiveFailures = useRef(0);
   // Fix: track whether a new user turn has started after the model switch.
   // Events from the in-flight turn (before the switch takes effect) use the
@@ -1373,6 +1370,9 @@ function AppInner() {
         next.delete(id);
         return next;
       });
+      // WHY (R-4): a closed chat's "viewed" mark and a still-pending model switch used to outlive it.
+      setViewedSessions((prev) => withoutSession(prev, id));
+      setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
       // WHY: free a closed session's file-pane entries. A resumed native chat reuses
       // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
@@ -1825,6 +1825,7 @@ function AppInner() {
   }, [firstPages, reportFillRound, remoteWatch, refillRetry]);
   useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
+  useStaleSends(); // a sent bubble is never pinned at the bottom forever waiting for its echo (stale-sends.ts, 2026-11-18)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
   // WHY the watch check and the retry (branch review F3): refilling opens (watches) a conversation, so one the phone has left since is
   // not refilled. And the push stands in for the hang-up that used to force a full round, so a refill that fails here gets the round's
@@ -2086,7 +2087,12 @@ function AppInner() {
 
       // Reload session list from the new server
       window.claude.session.list().then((list: any[]) => {
-        if (!list || list.length === 0) return;
+        if (!list || list.length === 0) {
+          // WHY: an empty list is still the computer's answer. Returning without deciding left placeDecidedRef false (reset above),
+          // so a phone reconnecting to a computer with no chats open never auto-focused a chat created afterwards.
+          if (isRemoteMode()) decideRemotePlace([]);
+          return;
+        }
         setSessions(list);
         for (const s of list) {
           dispatch({ type: 'SESSION_INIT', sessionId: s.id });
@@ -2213,9 +2219,10 @@ function AppInner() {
 
   // Red dot on the gear icon so the user can't miss a sync failure — from
   // either sync system.
+  const signInExpired = useExpiredSignIns(); // card #236: an expired sign-in lights it too (round 2 Q-dot)
   const settingsDangerBadge = useMemo(
-    () => spacesFailing || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
-    [spacesFailing, statusData.syncWarnings],
+    () => spacesFailing || signInExpired || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
+    [spacesFailing, signInExpired, statusData.syncWarnings],
   );
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {
@@ -2695,6 +2702,8 @@ function AppInner() {
     setNativePermissionModes((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setSessionModels((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
+    setViewedSessions((prev) => withoutSession(prev, id)); // WHY (R-4): same two tidy-ups as the session:destroyed handler
+    setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
     // WHY: drop the gone session's file-pane entries too (they were never freed).
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
@@ -3793,6 +3802,7 @@ function AppInner() {
                   permissionPending={!!sessionId && modePending.has(`mode:${sessionId}`)}
                   fast={fastMode}
                   effort={effortLevel}
+                  modesUnread={!modesRead}
                   onOpenModelPicker={openModelPicker}
                   sessionId={sessionId}
                   sessionName={currentSession?.name}
@@ -4257,31 +4267,30 @@ function AppInner() {
         sessionName={sessions.find((s) => s.id === closePromptFor)?.name ?? closePromptName /* WHY live first: the prompt renames now (close-session-1); a peer window's session keeps its captured name */}
         sessionId={closePromptFor}
         onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
-        onConfirm={(result) => {
+        onCloseAnyway={() => {
+          // WHY (W-2): after a failed save, the person may close without the choices that would not land.
           const id = closePromptFor;
-          if (!id) return;
+          if (id) closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
+          setClosePromptFor(null);
+          setClosePromptName(undefined);
+        }}
+        onConfirm={async (result) => {
+          const id = closePromptFor;
+          if (!id) return [];
           // Every field is a DELTA vs. what the prompt loaded on open — reserved
           // flags whose value moved, tags toggled on/off, the note if it changed.
-          // Each write is fire-and-forget; main resolves the desktop id to the
-          // Claude id. The .catch() swallows an IPC rejection (remote timeout) so
-          // it can't become an unhandled rejection.
-          //
           // `flags` carries a VALUE per entry, not just a list to set true — a
           // Priority the user un-toggled has to be cleared, the same way an
           // un-toggled tag is (see CloseSessionPrompt's onConfirm doc comment).
-          for (const [flag, value] of Object.entries(result.flags)) {
-            try { Promise.resolve((window as any).claude.session.setFlag(id, flag, value)).catch(() => {}); } catch {}
-          }
-          for (const tagId of result.addTagIds) {
-            try { Promise.resolve((window as any).claude.session.setTag(id, tagId, true)).catch(() => {}); } catch {}
-          }
-          for (const tagId of result.removeTagIds) {
-            try { Promise.resolve((window as any).claude.session.setTag(id, tagId, false)).catch(() => {}); } catch {}
-          }
-          if (result.noteChanged) { try { Promise.resolve((window as any).claude.session.setNote(id, result.note)).catch(() => {}); } catch {} }
+          // WHY awaited, and the chat stays open when a write fails (R-1, code review 2026-11-18): these were
+          // fire-and-forget with the failure swallowed, so a tag, pin or note the person chose vanished
+          // when the chat closed. The prompt shows which parts failed and offers Try again.
+          const failed = await applyCloseChoices(id, result);
+          if (failed.length > 0) return failed;
           closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
           setClosePromptFor(null);
           setClosePromptName(undefined);
+          return [];
         }}
       />
       <PreferencesPopup

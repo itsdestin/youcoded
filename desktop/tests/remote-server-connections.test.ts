@@ -142,6 +142,50 @@ describe('RemoteServer — pairing', () => {
     });
   });
 
+  // Card #134 (error inventory Backend row 11): a handler that throws must be answered at once, not left to time out.
+  // These go through the REAL authenticated socket listener; only handleMessage is replaced, by a handler that throws.
+  describe('a message handler that throws', () => {
+    async function signedIn() {
+      const { server } = await makeServer();
+      const ws = await connect(server, { password: 'correct-horse', deviceName: 'Phone' });
+      expect(ws.last()!.type).toBe('auth:ok');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      return { server: server as any, ws };
+    }
+
+    it('answers an awaited request at once with the failure flag and the real reason', async () => {
+      const { server, ws } = await signedIn();
+      server.handleMessage = async () => { throw new Error('disk is read-only'); };
+      ws.emit('message', JSON.stringify({ type: 'session:destroy', id: 'phone:1:1', payload: {} }));
+      await vi.waitFor(() => expect(ws.last()).toMatchObject({
+        type: 'session:destroy:response', id: 'phone:1:1', payload: { ok: false, error: 'disk is read-only', tableHandlerFailed: true },
+      }));
+    });
+
+    it('stays quiet for a push that has no id', async () => {
+      const { server, ws } = await signedIn();
+      const before = ws.sent.length;
+      server.handleMessage = async () => { throw new Error('x'); };
+      ws.emit('message', JSON.stringify({ type: 'pty:input', payload: {} }));
+      await new Promise((r) => setImmediate(r));
+      expect(ws.sent.length).toBe(before);
+    });
+
+    it('does not answer a second time when the handler had already answered before it threw', async () => {
+      const { server, ws } = await signedIn();
+      server.handleMessage = async (client: unknown) => { server.respond(client, 'session:destroy', 'phone:1:2', { ok: true }); throw new Error('late failure'); };
+      ws.emit('message', JSON.stringify({ type: 'session:destroy', id: 'phone:1:2', payload: {} }));
+      await new Promise((r) => setImmediate(r));
+      expect(ws.sent.filter((m) => m.id === 'phone:1:2')).toHaveLength(1);
+      expect(ws.sent.filter((m) => m.id === 'phone:1:2')[0]).toMatchObject({ payload: { ok: true } });
+    });
+
+    it('turns a throw into a failure answer; an unparseable frame has nothing to answer', async () => {
+      const { failedMessageAnswer } = await import('../src/main/remote-failed-answer');
+      expect(failedMessageAnswer('not json', new Error('x'))).toBeNull();
+    });
+  });
+
   describe('pairing over the wire', () => {
     it('hands back a credential once, and accepts it next time without the password', async () => {
       const { server } = await makeServer();

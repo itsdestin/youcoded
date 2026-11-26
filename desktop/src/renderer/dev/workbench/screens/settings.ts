@@ -129,6 +129,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#phone-additional-open', 'dialog', 'narrow'), viewport: { width: 390, height: 844 }, open: ['Additional backups…'], newIn: 'after' as const },
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
+  // Card #134: "Back up all now" fails (sync.force rejects), so the action says so with Try again.
+  // Destin N2: the same failure while the dialog is scrolled to the bottom - the notice is scrolled into view.
+  { ...settings('settings/sync#back-up-failed-scrolled', 'dialog', 'error-state'), params: { sync: 'ok', fail: 'sync.force' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Back up all now'] },
+  { ...settings('settings/sync#back-up-failed', 'dialog', 'error-state'), params: { sync: 'ok', fail: 'sync.force' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Back up all now', { do: 'scroll', dir: 'up', times: 8 }] },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
   // A GitHub backup set up before computers stopped supporting it: shown honestly (small-fixes-2).
@@ -158,6 +162,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
+  // Card #134 round 4: flipping the Enabled switch fails (the save rejects), so a box under the switch says so with Try again.
+  { ...settings('settings/remote#save-failed', 'dialog', 'error-state'), params: { fail: 'remote.setConfig' }, open: [{ do: 'click', target: { role: 'switch', label: 'Remote access server enabled' } }], newIn: 'after' as const, mark: 'settings/remote' },
   // Set up, with a paired phone and a paired tablet last used a while ago (the "Last used" line; 90-day sign-out).
   { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Card #216: the same list with a phone signed out after 90 unused days, kept as a quiet row with Remove.
@@ -182,6 +188,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),
+  // Card #134 round 4: the usage-stats setting could not be read, so the row says so with Try again (the Before has no row at all).
+  { ...settings('settings/about#stats-read-failed', 'dialog', 'error-state'), params: { fail: 'analytics.getOptIn' }, newIn: 'after' as const, mark: 'settings/about' },
   { ...settings('settings/about#account-open', 'dialog', 'fold'), open: ['Your account (optional)'] },
   // The fold header's hover (submit-ticket-3#ST3-5: "not rounded"). Shoot at the normal 1.5×:
   // the pointer offset that once landed a hover one row off was fixed on 2026-10-06 (a394a871).
@@ -195,6 +203,12 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // so before/after captures must prove the whole Cloud providers page is open.
   { ...settings('settings/assistant/cloud#android-chatgpt', 'dialog', 'sign-in'), params: { platform: 'android', chatgpt: 'signed-out' } },
   { ...settings('settings/assistant/cloud#remote-chatgpt', 'dialog', 'sign-in'), params: { connection: 'remote', chatgpt: 'signed-out' } },
+  // Card #236 (sign-in expiry + no internet): the Claude card's end date, its expired state and the new Sign in for a signed-out
+  // install; ChatGPT's expired state; a sign-in pressed with no internet.
+  { ...settings('settings/assistant/cloud#claude-expired', 'dialog', 'sign-in'), params: { claudeCode: 'expired' } },
+  { ...settings('settings/assistant/cloud#claude-signed-out', 'dialog', 'sign-in'), params: { claudeCode: 'signed-out' } },
+  { ...settings('settings/assistant/cloud#claude-offline', 'dialog', 'sign-in'), params: { claudeCode: 'expired', online: '0' }, open: ['Sign in'], newIn: 'after' as const },
+  { ...settings('settings/assistant/cloud#chatgpt-expired', 'dialog', 'sign-in'), params: { chatgpt: 'expired' } },
   { ...settings('settings/assistant/cloud#remote-chatgpt-account', 'dialog'), params: { connection: 'remote', chatgpt: 'signed-in', planUsage: '1' } },
   // Sign-in and key states of the cloud providers (mock-shim switches); each picture
   // scrolls to its provider's card.

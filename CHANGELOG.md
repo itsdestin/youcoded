@@ -4,6 +4,55 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-11-19
+
+**Claude Code CLI baseline:** v2.1.328 (desktop review); Android bundles v2.1.325.
+
+A rebuilt buddy, a much smoother app, Office Home, faster local models, and a round of phone and safety improvements.
+
+### What's new
+
+#### A rebuilt buddy
+The floating buddy now runs your full chat — the same messages, cards, questions and session list as the main window — instead of a cut-down copy. It comes in two sizes and remembers yours, opens and resizes smoothly, has a redrawn action bar, and keeps the mascot, chat and bar together when your screens change.
+
+#### A smoother, faster app
+- A very long reply no longer freezes the app when it finishes (about 2 minutes before, now under half a second), and typing stays quick while one streams.
+- The chat no longer jumps while a page is still drawing.
+- Big spreadsheets and Word files open faster without locking the window, and shrinking a very long chat is instant.
+- The window no longer freezes when the end-of-reply sound plays.
+
+#### Office Home
+Rename, copy, show in folder, ask the assistant about a file, or remove it from Recent — from a hover button or right-click — plus search and Show all. Save As opens the copy beside the original, and saving is dependable: Save is always available and a failed save retries by itself.
+
+#### Faster local models
+Each chat keeps its place, so replies start sooner; chats hold 64k by default (was 32k); and a chat that grows too long shows one card with Summarise.
+
+#### Safer by default
+- Permission cards offer more precise Always-allow choices.
+- Plugins found to be unsafe can be switched off, and themes and official plugins are checked against the published copy before they install.
+- New "Sign out everywhere"; phones are signed out after 90 days.
+
+#### The phone app
+- First-run Claude Code questions appear as cards, and every sign-in returns to the app.
+- Answer the assistant's browser approvals from your phone.
+- The phone connects to your computer only through Tailscale, and checks it is on first. Home-network addresses (like 192.168.x.x) no longer work, because they sent your chats unencrypted. Update the app on your computer and phone together.
+
+### Bug fixes and improvements
+
+- **Messages:** a message the computer never confirms gets a note after 30 seconds with Send again; waiting messages show their files as chips and Send now says why one can't go yet; no more "Queue identity is not ready"; long messages (including 10,000+ characters, and the first in a new chat) send; a picture sent with no words no longer gets stuck; queued messages no longer wait on a helper's permission question; dragging a file in and pasting a copied web image attach again.
+- **Sign-in:** an expired sign-in shows a card with a Sign in button; Settings shows when your Claude sign-in expires and lets you sign back in; offline, the app says "No internet connection" right away, without mistaking school or work proxy networks for offline; Windows sign-in retries when Windows refuses a port.
+- **Chat:** right-click a picture for a menu; a quick chip over typed words asks Replace or Add to end; folders are listed by last use; "What the assistant was given" has Overview, Global and Project tabs; the assistant can comment on files outside your project after asking; hover hints use the app's own style; reopening an old chat no longer makes the assistant reply on its own; helper reports arrive without you typing; background commands no longer show Running forever; file names open the right file even from a short path or outside the chat's folder; code blocks over 1,500 lines show without colour, to stay fast.
+- **When things fail:** dozens of places that showed nothing or an empty list now say what went wrong, with Try again; a crashed chat says "Session ended unexpectedly"; a step cut off by a crash says its result is unknown.
+- **Office:** a failed save says "Not yet saved" after three tries; unsaved typing survives moved files and unplugged drives; Word and Excel previews give up after 60 seconds instead of hanging; deleting Word comments no longer makes Word offer a repair; closing a window with unsaved files asks first.
+- **Local models and voice:** the engine no longer gets stuck as busy; the app asks before downloading a Gemma model; voice input warns when the microphone hears nothing.
+- **Phone:** pasting a picture in the phone browser attaches it; file names keep their accents; the lock screen shows only "A session needs you"; the camera turns off when the QR scanner closes; reconnecting to a computer with no chats opens a new one; the voice custom-words setting, which didn't work on phones, is hidden there.
+- **Windows, Mac and Linux:** a folder written in different capitals is saved once; Windows shows folders' real capitalisation; Linux says what to install when secure password storage is missing; Arch copies from another package point to the package manager for updates.
+- **Everything else:** a window that reloads reopens your chat; Welcome back keeps Skip permissions as you left it; a plugin install that fails partway cleans up; a theme whose files changed shows Update; you can accept a rematch in online games; terminals keep their graphics past 16 Claude Code chats; the assistant's Edit tool copes with curly quotes; shrunk picture copies unused for 90 days are cleaned up; the Office error log no longer contains your document's text; anonymous usage counts come only from official builds, new installs send a few one-time setup steps, and the privacy policy says exactly what is recorded.
+
+### Known issues
+- A custom provider whose models don't report their conversation size may show a "conversation too long" error that Summarize and continue can't fix. Start a new conversation or pick a model with a known size.
+- On Android, Assistant settings shows the Local models page, but local models don't run on phones.
+
 ## [1.3.3] — 2026-10-23
 
 **Claude Code CLI baseline:** v2.1.309 (desktop review); Android bundles v2.1.300.

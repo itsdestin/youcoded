@@ -7,7 +7,7 @@
 // own origin (design §3a, §5; review 3 R3-1):
 //   editor → host  {yc:'ready'}                 the editor listens for "open-file" now
 //                  {yc:'rpc', id, cmd, args}    one request for main (the add-on's __TAURI__ relay)
-//                  {type:'yc:office-loaded' | 'yc:office-state' | 'yc:office-esc'}
+//                  {type:'yc:office-loaded' | 'yc:office-state' | 'yc:office-esc' | 'yc:office-save-pressed'}
 //                  {type:'yc:office-comments-result', id, result}, {type:'yc:office-comments-changed'}
 //   host → editor  {yc:'rpc-result', id, result | error}, {yc:'event', name, payload}
 //                  {type:'yc:office-theme' | 'yc:office-mode' | 'yc:office-cmd' | 'yc:office-save'}
@@ -17,11 +17,12 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush, saveStateFor } from './office-store';
+import { claimOfficeToken, markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, mergeDuplicateTab, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, openCopyBeside, onDocumentReplaced, registerFlush, releaseOfficeToken, saveStateFor } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
+import { reportFailure } from '../../utils/report-failure';
 
 export type OfficeCommand = 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'markers' | 'numbering' | 'align-left' | 'align-center' | 'align-right';
 export type OfficeCommandState = Partial<Record<OfficeCommand, { on: boolean; enabled: boolean }>>;
@@ -63,6 +64,23 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
+/** A failed save tries again by itself after these pauses, then STOPS (Destin, 2026-11-14: the
+ *  error "should mostly resolve and disappear on its own when possible"; 2026-11-17: "Stop after 3
+ *  and tell"). WHY growing pauses, not every 3 s: a read-only file or a full disk fails every time,
+ *  and each try is a whole save. WHY a stop, not a forever loop (was every 120 s): a save that
+ *  failed three times in a row will not fix itself, and a quiet loop meant the person never learned
+ *  their work was unsaved. After the last try the strip says so and Try again restarts the cycle. */
+export const SAVE_RETRY_DELAYS_MS = [10_000, 30_000, 60_000];
+/** What the strip says once the automatic tries are used up; `reason` is the real failure text.
+ *  WHY this wording (Destin, 2026-11-18, release wording deck W-2: "Not yet saved: … Please try
+ *  again in a moment."): his example cause ("the file may be open elsewhere") is only one of the
+ *  real causes, so the real reason sits in its place (never an invented cause). The closing ask is
+ *  dropped when the reason already says to try again, so it never reads twice. */
+export const savedGiveUpMessage = (reason: string) => {
+  const why = reason.trim();
+  const ask = /try again/i.test(why) ? '' : ' Please try again in a moment.';
+  return `Not yet saved: ${why}${ask}`;
+};
 /** How long a closing window waits for a save it just started to reach main (see journal). Below
  *  main's 1.5 s journal cap (office-journal-sync.ts), so the answer still counts. */
 const JOURNAL_SAVE_HANDOFF_MS = 1_400;
@@ -216,7 +234,40 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     // How long the editor took, last time, from being asked to save to handing its bytes over
     // (its freeze); askedAt is when the outstanding ask was posted (0: none). See autosaveDelay.
     askedAt: 0, handOverMs: 0,
+    // An automatic retry of a failed save is under way: the strip keeps the failure showing
+    // (no "Saving…" flicker every try) until a save lands, which clears it.
+    quiet: false,
   });
+  // The automatic retries of a failed save (SAVE_RETRY_DELAYS_MS): the pending timer and how many
+  // tries so far. A save that lands, by any route, starts the count over.
+  const retry = useRef({ timer: 0 as ReturnType<typeof setTimeout> | 0, n: 0 });
+  const scheduleRetry = () => {
+    const r = retry.current;
+    if (r.timer || keptRef.current || !mountedRef.current) return;
+    if (r.n >= SAVE_RETRY_DELAYS_MS.length) {
+      // WHY here: every failure path calls scheduleRetry right after markFailed, so this
+      // replaces the plain reason with the "not saved" one. Only the strip's text changes —
+      // failMessage stays the real reason (Save a copy / close paths read it), and the edits
+      // stay in the editor and the recovery journal.
+      markFailed(file.path, savedGiveUpMessage(save.current.failMessage));
+      return;
+    }
+    const delay = SAVE_RETRY_DELAYS_MS[r.n];
+    r.timer = setTimeout(() => {
+      r.timer = 0;
+      r.n += 1;
+      const s = save.current;
+      if (!mountedRef.current || keptRef.current || !s.failed || s.saving || s.requested) return;
+      s.quiet = true;
+      requestSave();
+    }, delay);
+  };
+  const retrySucceeded = () => {
+    const r = retry.current;
+    if (r.timer) { clearTimeout(r.timer); r.timer = 0; }
+    r.n = 0;
+    save.current.quiet = false;
+  };
   // A save that failed without save_file failing (fix round 2): the editor's write_editor_bin
   // was refused, the editor's save path gave up, or no save_file ever came. Same outcome as a
   // failed save_file — the strip shows the reason with the save-failed actions.
@@ -229,7 +280,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     s.dirty = true;
     s.failed = true;
     s.failMessage = message;
+    s.quiet = false;
     markFailed(file.path, message);
+    scheduleRetry();
     wake();
   };
   const requestSave = () => {
@@ -237,6 +290,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
     s.dirty = false;
     s.failed = false;
+    // WHY: any save that is not one of the quiet automatic retries (Try again, a close, a Save)
+    // starts a fresh cycle of tries.
+    if (!s.quiet) retry.current.n = 0;
     s.requested = true;
     s.requestSeq += 1;
     s.askedAt = Date.now();
@@ -339,7 +395,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     keptRef.current = false;
     keptBinRef.current = null;
     replacedRef.current = true;
-    if (token) void officeBridge()?.saveCopy(token, 'release').catch(() => {});
+    // WHY logged, never shown (R-1, Destin H-2): if main cannot drop the pictures it set aside they are tidied up
+    // later; nothing the person typed is at risk and there is nothing for them to do.
+    if (token) void officeBridge()?.saveCopy(token, 'release').catch((cause: unknown) => reportFailure({ what: 'release the kept pictures', cause, where: 'EditorFrame.letGoOfKept', show: 'log-only' }));
   };
   const discardPending = () => {
     const s = save.current;
@@ -356,7 +414,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (keptRef.current) letGoOfKept(token);
     discardPending();
     markUnchanged(file.path);
-    if (token) await officeBridge()?.invoke(token, 'recovery_discard', {}).catch(() => {});
+    // WHY logged, never shown (R-1, Destin H-2): the worst case is that the next open offers the discarded typing
+    // back and the person says no again — nothing is lost, and there is nothing they could do about it now.
+    if (token) await officeBridge()?.invoke(token, 'recovery_discard', {}).catch((cause: unknown) => reportFailure({ what: 'clear the recovery copy', cause, where: 'EditorFrame.discard', show: 'log-only' }));
   };
   // Send the newest edits to the recovery journal now (the window is closing, fix round 1): the
   // editor answers yc:office-journaled once it has sent them, or 1 s passes.
@@ -402,6 +462,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     b.open(file.path).then((r) => {
       if (!r.ok) { failWith(r.message); return; }
       if (gone) { void b.close(r.token).catch(() => {}); return; }
+      // WHY (office review 2026-11-14): another tab already shows this very file under another
+      // spelling (a link, other capitals). Two editors on one document overwrite each other's
+      // saves, so this one gives back its share before starting and that tab comes forward.
+      const keep = claimOfficeToken(r.token, file.path);
+      if (keep) { void b.close(r.token).catch(() => {}); mergeDuplicateTab(file.path, keep); return; }
       token = r.token;
       replacedRef.current = false;
       // Edits kept from last time for a file that changed since: offered on the strip (fix round 1).
@@ -420,7 +485,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       const s = save.current;
       if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
       if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
-      if (token) void b.close(token).catch(() => {});
+      if (retry.current.timer) { clearTimeout(retry.current.timer); retry.current.timer = 0; }
+      if (token) { releaseOfficeToken(token, file.path); void b.close(token).catch(() => {}); }
     };
   }, [file.path, attempt]);
 
@@ -593,7 +659,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       const t = openedRef.current?.token;
       noteRecoverOffer(file.path, false);
       if (!b || !t) return;
-      if (!recover) { await b.invoke(t, 'recovery_discard_held', {}).catch(() => {}); return; }
+      // WHY logged, never shown (R-1, Destin H-2): same as discard() above — the offer simply comes back next open.
+      if (!recover) { await b.invoke(t, 'recovery_discard_held', {}).catch((cause: unknown) => reportFailure({ what: 'clear the kept changes', cause, where: 'EditorFrame.answerRecoverOffer', show: 'log-only' })); return; }
       // The kept edits become this document's journal; reopening the editor replays them (the
       // file as it is was kept in Versions when it opened).
       const ok = await b.invoke(t, 'recovery_accept_held', {}).catch(() => false);
@@ -733,7 +800,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         s.askedAt = 0; // a later Save As's bytes are no measure of an autosave's freeze
         if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
         if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
-        markSaving(file.path);
+        // An automatic retry stays quiet: the failure keeps showing until a save lands.
+        if (!s.quiet) markSaving(file.path);
       }
       b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
         // WHY not main's answer for save_file_as: it names the copy's folder for the note below,
@@ -748,8 +816,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           markNote(file.path, (result as { outsideChange?: unknown } | null)?.outsideChange === true ? RECOVERED_OVER_CHANGE : RECOVERED);
         }
         if (m.cmd === 'save_file_as' && mountedRef.current) {
-          const r = result as { name?: unknown; folder?: unknown } | null;
-          if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);
+          const r = result as { name?: unknown; folder?: unknown; file?: OfficeFile } | null;
+          // A copy Office can edit opens in a new tab beside this one, in front (see main's
+          // saveFileAs). Only the Office page's own tabs do this: an editor inside a file panel
+          // (slim) has no tab strip, so it keeps the note.
+          if (r?.file && typeof r.file.path === 'string' && !slim) openCopyBeside(r.file, file.path);
+          else if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);
         }
         // Printing couldn't be shown and the person saved a PDF instead (main's offer): same note.
         if (m.cmd === 'print_document' && mountedRef.current) {
@@ -771,6 +843,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           save.current.failed = false;
           // A change during the save keeps the strip at "Saving…" for the follow-up save.
           if (save.current.dirty) markChanged(file.path); else markSaved(file.path);
+          retrySucceeded();
           saveSettled();
         }
       }, (e: unknown) => {
@@ -803,12 +876,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         if (saving) {
           // Main's message is already written for a person (office-commands.ts), so the strip
           // shows it as is, with Retry (docs/error-message-standards.md: specific + Retry).
-          // WHY no automatic retry: a read-only file or a full disk would fail every 3 s and
-          // flicker the strip; the changes stay unsaved (a closing tab still tries once more).
+          // Not retried every 3 s (a read-only file or a full disk would flicker the strip): the
+          // retries below wait longer each time and stay quiet until one lands.
           markFailed(file.path, message);
           save.current.dirty = true;
           save.current.failed = true;
           save.current.failMessage = message;
+          save.current.quiet = false;
+          // Tried again by itself, later (SAVE_RETRY_DELAYS_MS): a temporary cause — a busy file,
+          // a drive that came back — then clears without anyone pressing anything.
+          scheduleRetry();
           saveSettled();
         }
       });
@@ -838,6 +915,17 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
       if (d?.type === 'yc:office-esc') dismissRef.current();
+      // Save / Ctrl+S pressed while the editor had nothing waiting (add-on v0.1.42 keeps Save
+      // pressable — Destin, 2026-11-14: "how would i just save a doc?"). Anything this side still
+      // holds is saved now (a failed save, or edits a Save As hid from the editor's own flag);
+      // otherwise the strip says so, so the press is never met with silence. A save already under
+      // way shows "Saving…" by itself. Kept after a restore: nothing is written to the file.
+      if (d?.type === 'yc:office-save-pressed' && !keptRef.current) {
+        const s = save.current;
+        if (s.saving || s.requested) { /* under way */ }
+        else if (s.dirty || s.failed || s.saveAsDirty) requestSave();
+        else markNote(file.path, 'All changes saved.');
+      }
       if (d?.type === 'yc:office-journaled') journalWaiters.current.slice().forEach((w) => w());
       // The editor's answer to main's comment request, and its news that a comment changed (by
       // anyone) — so the reading views of this file refresh (finish plan Task 6).
@@ -859,7 +947,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // The editor needs scripts, workers and its own storage — on ITS origin,
       // never the app's (no top navigation, no access to window.claude).
       sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
-      className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
+      // WHY select-none (Destin, 2026-11-14: "i can highlight the whole office window"): a
+      // select-all or drag-select on the app page around the editor counted the editor box as
+      // selected, and the browser tints a selected box solid blue. Selecting text INSIDE the
+      // document is the editor's own page and is unaffected by this.
+      className={`absolute border-0 select-none ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
       style={slim ? SLIM_OVERSCAN : undefined}
       // Fix round 5: inert while a copy is written, so no click, key or focus reaches the
       // editor behind the overlay (the overlay alone left keyboard focus reachable by Tab).

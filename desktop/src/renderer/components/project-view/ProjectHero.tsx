@@ -12,6 +12,7 @@
 // The project name is a clickable switcher trigger (opens <ProjectSwitcher>,
 // Task 2.3) and MUST NOT truncate — it wraps. The ONE accent use in this card is
 // the New conversation primary button.
+import { announceFailed } from '../../utils/announce';
 import React, { useEffect, useState } from 'react';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
 import { getCapabilities } from '../../platform';
@@ -27,13 +28,20 @@ interface HeroStats {
   // True when discovery hit a cap — render "N+" so a truncated sample never
   // poses as an exact total.
   filesTruncated?: boolean;
-  conversations: number;
-  contextFiles: number;
+  // null = the read FAILED (card #134, error inventory Projects row 8): shown as "—", never as a
+  // "0" that says the project has none.
+  conversations: number | null;
+  contextFiles: number | null;
   activeLabel: string;
 }
 
 // "N", "N+" (truncated), or "—" (gated — no scan ran). Shared by the hero
 // stat line and ProjectView's segment badges so the two can't disagree.
+/** "N", or "—" when that count could not be read. */
+export function formatCount(n: number | null): string {
+  return n === null ? '—' : String(n);
+}
+
 export function formatFileCount(files: number | null, truncated?: boolean): string {
   if (files === null) return '—';
   return truncated ? `${files.toLocaleString()}+` : String(files);
@@ -54,6 +62,26 @@ interface HeroSync {
   // True when this project's registry record is a `stopped` tombstone (review
   // #4): a permanent detach, distinct from the global "Sync is turned off" state.
   stopped: boolean;
+}
+
+
+// Card #134 round 4: rename, description and Stop syncing used to swallow every failure (`.catch(() => {})`), so a refused change
+// just looked like it never took. `refused` = the channel answered "no" (false, or { ok:false }). A synced-project call can also
+// REJECT after the change was already written locally (the push to other devices is the last step), so for those a rejection is
+// only logged: saying "Couldn't rename" there could be false. Plain-folder calls are purely local, so a rejection is a failure.
+function refused(r: unknown): { yes: boolean; why?: unknown } {
+  if (r === false) return { yes: true };
+  if (r && typeof r === 'object' && (r as { ok?: unknown }).ok === false) return { yes: true, why: (r as { error?: unknown }).error };
+  return { yes: false };
+}
+async function reportOutcome(what: string, call: Promise<unknown> | undefined, rejectionIsFailure: boolean): Promise<void> {
+  try {
+    const r = refused(await call);
+    if (r.yes) announceFailed(what, r.why);
+  } catch (e) {
+    if (rejectionIsFailure) announceFailed(what, e);
+    else console.warn(`[project-hero] ${what}: the call rejected (the change may still have been saved locally):`, e);
+  }
 }
 
 interface ProjectHeroProps {
@@ -155,11 +183,11 @@ export function ProjectHero({
       // Synced project: change the SYNCED display name (propagates to every
       // device via the Personal space). NEVER the folder on disk — the repo name
       // is derived from the folder, so a folder move is a deferred flow (spec §15).
-      await (window.claude as any).syncSpaces.renameProject?.(syncedFolderName, n).catch(() => {});
+      await reportOutcome('rename this project', (window.claude as any).syncSpaces.renameProject?.(syncedFolderName, n), false);
     } else {
       // Plain local folder: picker nickname only. folders.rename updates the
       // nickname, which buildSavedFolderProjects prefers for the display name.
-      await (window.claude as any).folders.rename(project.path, n).catch(() => {});
+      await reportOutcome('rename this project', (window.claude as any).folders.rename(project.path, n), true);
     }
     onRenamed();
   };
@@ -192,12 +220,12 @@ export function ProjectHero({
       // displayName, so every device sees the same words.
       // No `?.` — both channels are real now (Tasks 2-5), so a missing one
       // should fail loudly instead of silently no-opping.
-      await (window.claude as any).syncSpaces.setProjectDescription(syncedFolderName, d).catch(() => {});
+      await reportOutcome('save the description', (window.claude as any).syncSpaces.setProjectDescription(syncedFolderName, d), false);
     } else {
       // Plain local folder: saved-folders record only — nothing to sync it to.
       // `d` is always a string (descDraft.trim()) — the local-folder handler's
       // trim() has no null guard, so this must never pass null/undefined.
-      await (window.claude as any).folders.setDescription(project.path, d).catch(() => {});
+      await reportOutcome('save the description', (window.claude as any).folders.setDescription(project.path, d), true);
     }
     onRenamed();
   };
@@ -210,7 +238,7 @@ export function ProjectHero({
   const commitStop = async () => {
     setConfirmingStop(false);
     if (!syncedFolderName) return;
-    await (window.claude as any).syncSpaces.stopProject?.(syncedFolderName).catch(() => {});
+    await reportOutcome('stop syncing this project', (window.claude as any).syncSpaces.stopProject?.(syncedFolderName), false);
     onRenamed(); // optimistic refresh; a Personal `synced` event also refreshes
   };
 
@@ -363,7 +391,7 @@ export function ProjectHero({
           <Tooltip text={canOpenInOs ? 'Open in File Explorer' : project.path}>
             <button
               type="button"
-              onClick={canOpenInOs ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
+              onClick={canOpenInOs ? () => void Promise.resolve((window.claude as any).shell.openPath(project.path)).then((err) => { if (typeof err === 'string' && err) announceFailed('open the folder', err); }, (e) => announceFailed('open the folder', e)) : undefined}
               disabled={!canOpenInOs}
               className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
             >
@@ -381,7 +409,7 @@ export function ProjectHero({
               <Tooltip text={`Open ${repo!.owner}/${repo!.name} on GitHub`}>
                 <button
                   type="button"
-                  onClick={() => window.claude.shell.openExternal(repo!.webUrl!)}
+                  onClick={() => void Promise.resolve(window.claude.shell.openExternal(repo!.webUrl!)).catch((e) => announceFailed('open the page', e))}
                   className="inline-flex items-center gap-1 text-xs text-fg-dim hover:text-fg-2 shrink-0 transition-colors"
                 >
                   <GitHubIcon size={13} />
@@ -484,8 +512,8 @@ export function ProjectHero({
         {/* Stat row — dot-separated. */}
         <div className="flex flex-wrap gap-4 mt-3 text-xs text-fg-muted">
           <span><b className="text-fg-2 font-semibold">{formatFileCount(stats.files, stats.filesTruncated)}</b> files</span>
-          <span><b className="text-fg-2 font-semibold">{stats.conversations}</b> conversations</span>
-          <span><b className="text-fg-2 font-semibold">{stats.contextFiles}</b> context files</span>
+          <span><b className="text-fg-2 font-semibold">{formatCount(stats.conversations)}</b> conversations</span>
+          <span><b className="text-fg-2 font-semibold">{formatCount(stats.contextFiles)}</b> context files</span>
           <span>active <b className="text-fg-2 font-semibold">{stats.activeLabel}</b></span>
         </div>
 

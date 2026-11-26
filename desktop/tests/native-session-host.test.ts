@@ -945,8 +945,13 @@ describe('NativeSessionHost', () => {
         expect(claim).not.toHaveBeenCalled();
         expect(ledger.listFor(root, 'pending-report')[0].injectionAttempted).not.toBe(true);
         expect(model).not.toHaveBeenCalled();
+        finish(result);
+        // WHY: a report recovered at reopen waits for the user; connecting tools must not wake the model either.
+        await new Promise<void>(resolve => setTimeout(resolve, 50));
+        expect(model).not.toHaveBeenCalled();
         const completed = waitForTurnComplete(h, 1);
-        finish(result); await completed;
+        await vi.waitFor(() => expect(h.send('pending-report', 'continue').status).toBe('sent'));
+        await completed;
         await vi.waitFor(() => expect(ledger.listFor(root, 'pending-report')[0].delivered).toBe(true));
         expect(model).toHaveBeenCalledOnce();
       } finally { finish(result); await h.destroyAll(); }
@@ -974,7 +979,9 @@ describe('NativeSessionHost', () => {
       expect(ledger.listFor(root, 'closing-report')[0].injectionAttempted).not.toBe(true);
       mark.mockRestore();
       const delivered = waitForTurnComplete(h, 1);
-      await h.resume('closing-report', root); await delivered;
+      await h.resume('closing-report', root);
+      expect(model).not.toHaveBeenCalled(); // reopen alone never wakes the model
+      expect(h.send('closing-report', 'continue').status).toBe('sent'); await delivered;
       await vi.waitFor(() => expect(ledger.listFor(root, 'closing-report')[0].delivered).toBe(true));
       expect(model).toHaveBeenCalledOnce();
       await h.destroyAll();
@@ -1006,14 +1013,16 @@ describe('NativeSessionHost', () => {
         // the still-stamped record before allowing that old pass to clean it up.
         await h.destroy(id);
         await h.resume(id, root);
+        // WHY: reopen no longer scans by itself; the user's next message is what reaches the report.
+        expect(h.send(id, 'continue').status).toBe('sent');
         await (h as any).live.get(id).running;
         expect((h as any).pendingDeliveryParents.has(id)).toBe(false);
         expect(ledger.listFor(root, id)[0].injectionAttempted).toBe(true);
-        expect(model).not.toHaveBeenCalled();
+        expect(model).toHaveBeenCalledOnce(); // the user's own turn only: the stamped report is not injected yet
         finish(); await outgoing;
         await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
         await h.drain(id);
-        expect(model).toHaveBeenCalledOnce();
+        expect(model).toHaveBeenCalledTimes(2);
       } finally { finish(); await outgoing; mark.mockRestore(); await h.destroyAll(); }
     });
 
@@ -1045,7 +1054,9 @@ describe('NativeSessionHost', () => {
         (h as any).queueDelivery(id); await oldReady;
         outgoing = (h as any).live.get(id).running;
         const oldToken = ledger.listFor(root, id)[0].deliveryClaimId;
-        await h.destroy(id); await h.resume(id, root); await newReady;
+        await h.destroy(id); await h.resume(id, root);
+        expect(h.send(id, 'continue').status).toBe('sent'); // reopen waits for the user before claiming
+        await newReady;
         const newToken = ledger.listFor(root, id)[0].deliveryClaimId;
         expect(newToken).toBeDefined(); expect(newToken).not.toBe(oldToken);
         releaseOld(); await outgoing;
@@ -1089,11 +1100,13 @@ describe('NativeSessionHost', () => {
         expect(model).not.toHaveBeenCalled();
         writes.mockRestore();
         expect(h.send(id, 'storage recovered')).toMatchObject({ status: 'sent' });
-        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
-        // WHY wait for the request itself (2026-11-13): on a busy machine drain() returned before the
-        // turn had asked for its model (0 calls at load ~60); the count is still checked after drain.
-        await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(1));
+        // WHY: wait for the turn itself (entry.running resolves when the whole drain, report
+        // splice + model request, has finished). The old wait on `delivered` + drain() only
+        // flushed the transcript append chain: `delivered` flips BEFORE the model request is
+        // dispatched, so slow storage let the model-call assertion run first (2026-11-14 flake).
+        await (h as any).live.get(id).running;
         await h.drain(id);
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
         // Card #148: the report is now supplied (history-only) before the user's turn, so one request carries both.
         expect(model).toHaveBeenCalledTimes(1);
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
@@ -1127,8 +1140,13 @@ describe('NativeSessionHost', () => {
         finish(); await outgoing;
         expect(model).not.toHaveBeenCalled();
         await h.resume(id, root);
-        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        expect(model).not.toHaveBeenCalled(); // reopen alone never wakes the model
+        expect(h.send(id, 'continue').status).toBe('sent');
+        // WHY: await the resumed generation's own delivery pass rather than polling `delivered`
+        // (which flips before the model request is dispatched; same race as the sibling test above).
+        await (h as any).live.get(id).running;
         await h.drain(id);
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
         expect(model).toHaveBeenCalledOnce();
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
     });
@@ -5826,6 +5844,11 @@ describe('NativeSessionHost', () => {
       const resumed = await h2.resume('root-1', root);
       expect(resumed).toBe(true);
 
+      // Reopen alone must not start a model turn: the report waits for the user's next message.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+      expect(h2.send('root-1', 'continue').status).toBe('sent');
+
       await vi.waitFor(() => {
         expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
       });
@@ -5872,6 +5895,11 @@ describe('NativeSessionHost', () => {
       h2.on('transcript-event', (e) => events.push(e));
       const resumed = await h2.resume('root-1', root);
       expect(resumed).toBe(true);
+
+      // Reopen alone must not start a model turn: the report waits for the user's next message.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+      expect(h2.send('root-1', 'continue').status).toBe('sent');
 
       await vi.waitFor(() => {
         expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
@@ -5947,6 +5975,96 @@ describe('NativeSessionHost', () => {
       await h2.destroyAll();
     });
 
+    // Approved behaviour: "On reopen, an old helper report waits and is included with your next
+    // message instead" of starting a paid model turn by itself.
+    describe('reopen holds recovered reports for the next user message', () => {
+      async function seedAndReopen() {
+        const home = new NativeHome(root);
+        const store = new SessionStore(home);
+        const h = bootHost(home, store);
+        await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+        await (h as any).ledger.recordStart(root, 'root-1', {
+          childId: 'child-old', parentToolCallId: 'tc-1', agentType: 'explorer', title: 'Nadia',
+          workDir: root, description: 'find the config loader', background: true,
+          status: 'completed', startedAt: Date.now() - 60_000, endedAt: Date.now(), steps: 3,
+          rawReport: 'REPORT-OLD-TOKEN', delivered: false, owner: OWNER, missedSteers: [],
+        });
+        await h.destroy('root-1');
+        const prompts: any[] = [];
+        const capturing = async () => new MockLanguageModelV4({ doStream: async (o: any) => {
+          prompts.push(o);
+          return { stream: simulateReadableStream({ chunks: CHUNKS }) };
+        } }) as any;
+        const h2 = bootHost(home, store, capturing);
+        const events: any[] = [];
+        h2.on('transcript-event', (e) => events.push(e));
+        expect(await h2.resume('root-1', root)).toBe(true);
+        return { h2, events, prompts };
+      }
+      const countTokens = (prompts: any[]) => JSON.stringify(prompts).split('REPORT-OLD-TOKEN').length - 1;
+
+      it('makes no model call on reopen; the user\'s next turn carries the report exactly once', async () => {
+        const { h2, events, prompts } = await seedAndReopen();
+        await new Promise((r) => setTimeout(r, 150));
+        expect(prompts).toHaveLength(0);
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(0);
+
+        const done = waitForTurnComplete(h2, 1);
+        expect(h2.send('root-1', 'what did you find?').status).toBe('sent');
+        await done;
+        await vi.waitFor(() => {
+          const rec = (h2 as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === 'child-old');
+          expect(rec?.delivered).toBe(true);
+        });
+        expect(prompts).toHaveLength(1); // report + question ride in ONE request
+        expect(countTokens(prompts)).toBe(1);
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
+
+        // A second user turn never re-sends it.
+        const done2 = waitForTurnComplete(h2, 1);
+        h2.send('root-1', 'thanks');
+        await done2;
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
+        await h2.destroyAll();
+      });
+
+      it('a helper that finishes LIVE in the reopened, idle chat still notifies the assistant', async () => {
+        const { h2, prompts } = await seedAndReopen();
+        await new Promise((r) => setTimeout(r, 50));
+        expect(prompts).toHaveLength(0);
+        await (h2 as any).ledger.recordStart(root, 'root-1', {
+          childId: 'child-live', parentToolCallId: 'tc-2', agentType: 'explorer', title: 'Otis',
+          workDir: root, description: 'd', background: true,
+          status: 'completed', startedAt: Date.now(), endedAt: Date.now(), steps: 1,
+          rawReport: 'REPORT-LIVE-TOKEN', delivered: false, owner: OWNER, missedSteers: [],
+        });
+        (h2 as any).queueDelivery('root-1'); // what a finishing background helper calls
+        await vi.waitFor(() => expect(prompts.length).toBeGreaterThan(0));
+        await (h2 as any).live.get('root-1').running;
+        await vi.waitFor(() => {
+          const recs = (h2 as any).ledger.listFor(root, 'root-1');
+          expect(recs.every((r: any) => r.delivered)).toBe(true);
+        });
+        expect(JSON.stringify(prompts)).toContain('REPORT-LIVE-TOKEN');
+        await h2.destroyAll();
+      });
+
+      it('Stop still holds everything: a live arrival after Stop does not start a turn', async () => {
+        const { h2, prompts } = await seedAndReopen();
+        h2.interrupt('root-1');
+        await (h2 as any).ledger.recordStart(root, 'root-1', {
+          childId: 'child-live', parentToolCallId: 'tc-2', agentType: 'explorer', title: 'Otis',
+          workDir: root, description: 'd', background: true,
+          status: 'completed', startedAt: Date.now(), endedAt: Date.now(), steps: 1,
+          rawReport: 'REPORT-LIVE-TOKEN', delivered: false, owner: OWNER, missedSteers: [],
+        });
+        (h2 as any).queueDelivery('root-1');
+        await new Promise((r) => setTimeout(r, 150));
+        expect(prompts).toHaveLength(0);
+        await h2.destroyAll();
+      });
+    });
+
     it('a report CLAIMED by a dead instance but never confirmed is re-delivered after restart', async () => {
       const home = new NativeHome(root);
       const store = new SessionStore(home);
@@ -5967,6 +6085,11 @@ describe('NativeSessionHost', () => {
       h2.on('transcript-event', (e) => events.push(e));
       const resumed = await h2.resume('root-1', root);
       expect(resumed).toBe(true);
+
+      // Reopen alone must not start a model turn: the report waits for the user's next message.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+      expect(h2.send('root-1', 'continue').status).toBe('sent');
 
       await vi.waitFor(() => {
         expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);

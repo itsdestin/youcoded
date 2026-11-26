@@ -25,8 +25,12 @@ const PRIVATE_V4: ReadonlyArray<readonly [RegExp, string]> = [
 export function isPrivateIp(ip: string): boolean {
   if (isIP(ip) === 4) {
     if (PRIVATE_V4.some(([re]) => re.test(ip))) return true;
-    const second = Number(ip.split('.')[1]);
-    return ip.startsWith('172.') && second >= 16 && second <= 31;
+    const [first, second] = ip.split('.').map(Number);
+    // WHY (review 2026-11-13): multicast 224.0.0.0/4, reserved 240.0.0.0/4 (with the broadcast address) and the benchmarking block
+    // 198.18.0.0/15 are never a public website either, so a literal or a resolved answer in them is refused like the private ranges.
+    if (first >= 224) return true;
+    if (first === 198 && (second === 18 || second === 19)) return true;
+    return first === 172 && second >= 16 && second <= 31;
   }
   // WHY bytes, not text (live-socket step 3 review, finding 1): `new URL` writes
   // an IPv6 literal in one canonical spelling, but a DNS answer or another caller
@@ -37,6 +41,7 @@ export function isPrivateIp(ip: string): boolean {
   if (!bytes) return false;
   const v4 = embeddedIpv4(bytes);
   if (v4) return isPrivateIp(Array.from(v4).join('.'));  // mapped / compatible / NAT64 forms of a v4
+  if (bytes[0] === 0xff) return true;                    // ff00::/8 multicast
   if ((bytes[0] & 0xfe) === 0xfc) return true;           // fc00::/7 ULA
   if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
   return false;

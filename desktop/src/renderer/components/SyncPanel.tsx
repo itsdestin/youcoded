@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTheme } from '../state/theme-context';
 import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
@@ -442,6 +443,43 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // WHY (error inventory 2026-09-10, Settings row 75): a log that could not be read said "No sync log
   // entries yet." - the same words as a log that is genuinely empty. The failure is now kept and shown.
   const [logError, setLogError] = useState<string | null>(null);
+  // WHY (card #134, error inventory Settings rows for Back up all now / Pause / Remove / Edit / Dismiss / rename device /
+  // all-backups toggle): each of these ended in `catch {}`, so a failed action looked like a button that did nothing, and a
+  // failed save looked saved. One notice at the top of the main view says which action failed, with the real reason under
+  // Details and Try again re-running that same action. A success clears it.
+  const [actionFailure, setActionFailure] = useState<{ message: string; details?: string; retry: () => void } | null>(null);
+  // The latest handlers and in-flight flags, for Try again: a retry must act on CURRENT state (not what the panel looked
+  // like when the failure happened) and must never overlap an action that is already running.
+  const syncingRef = useRef(false);
+  const toggleBusyRef = useRef(false);
+  const additionalToggleRef = useRef<() => Promise<void>>(async () => {});
+  // N2 (Destin): scroll the failure notice into view when a NEW failure arrives. The effect depends on the notice object, which
+  // is created once per failure, so ordinary re-renders and later successes do not scroll. Reduced motion (the OS setting or the
+  // app's Reduced effects) jumps instead of animating.
+  const failureRef = useRef<HTMLDivElement>(null);
+  const { reducedEffects } = useTheme();
+  useEffect(() => {
+    if (!actionFailure) return;
+    const osReduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const el = failureRef.current;
+    if (!el) return;
+    const behavior = osReduced || reducedEffects ? 'auto' : 'smooth';
+    // Scroll ONLY the popup's own scroller (never the page behind it): scrollIntoView would also move every scrollable ancestor.
+    // The popup's header sits outside that scroller, so nothing sticky can cover the notice; 8px of air above it.
+    const scroller = el.closest('.dialog-scroll') as HTMLElement | null;
+    if (scroller && typeof scroller.scrollTo === 'function') {
+      const box = el.getBoundingClientRect();
+      const view = scroller.getBoundingClientRect();
+      if (box.top >= view.top && box.bottom <= view.bottom) return; // already fully in view: no needless movement
+      const top = scroller.scrollTop + (box.top - view.top) - 8;
+      scroller.scrollTo({ top: Math.max(0, top), behavior });
+    } else {
+      el.scrollIntoView?.({ block: 'start', behavior });
+    }
+  }, [actionFailure]); // eslint-disable-line react-hooks/exhaustive-deps -- reducedEffects is read at the moment of a new failure only
+  const failAction = useCallback((message: string, e: unknown, retry: () => void) => {
+    setActionFailure({ message, details: plainMessage(e, ''), retry });
+  }, []);
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -594,23 +632,30 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
   // Force sync all sync-enabled backends
   const handleForceSync = useCallback(async () => {
+    if (syncingRef.current) return; // Try again cannot start a second run while one is going
+    syncingRef.current = true;
     setSyncing(true);
     try {
-      await claude.sync.force();
+      const res = await claude.sync.force();
+      // `force` answers { success:false, error } instead of throwing; it used to be dropped here.
+      if (res && res.success === false) failAction("Couldn't back up everything", res.error ? { message: res.error } : '', handleForceSync);
+      else setActionFailure(null);
       await refreshStatus();
       const log = await claude.sync.getLog(30);
       setLogLines(log);
-    } catch {}
+    } catch (e) { failAction("Couldn't back up everything", e, handleForceSync); }
+    syncingRef.current = false;
     setSyncing(false);
-  }, [claude, refreshStatus]);
+  }, [claude, refreshStatus, failAction]);
 
   const handleDismiss = useCallback(async (code: string) => {
     try {
       await claude.sync.dismissWarning(code);
+      setActionFailure(null);
       // Fix: filter by w.code now that warnings are SyncWarning objects, not strings.
       setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w.code !== code) } : prev);
-    } catch {}
-  }, [claude]);
+    } catch (e) { failAction("Couldn't dismiss that warning", e, () => { void handleDismiss(code); }); }
+  }, [claude, failAction]);
 
   // Per-backend actions
   // WHY (Destin, batch 1 deck E-1 then E-1b): a bare "Error" that vanished after two seconds
@@ -654,17 +699,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleToggleSync = useCallback(async (id: string, syncEnabled: boolean) => {
     try {
       await claude.sync.updateBackend(id, { syncEnabled });
+      setActionFailure(null); // a later success replaces an older failure notice
       await refreshStatus();
-    } catch {}
-  }, [claude, refreshStatus]);
+    } catch (e) { failAction(syncEnabled ? "Couldn't resume this backup" : "Couldn't pause this backup", e, () => { void handleToggleSync(id, syncEnabled); }); }
+  }, [claude, refreshStatus, failAction]);
 
   const handleRemoveBackend = useCallback(async (id: string) => {
     try {
       await claude.sync.removeBackend(id);
+      setActionFailure(null);
       await refreshStatus();
-    } catch {}
+    } catch (e) { failAction("Couldn't remove this backup", e, () => { void handleRemoveBackend(id); }); }
     setMenuOpenId(null);
-  }, [claude, refreshStatus]);
+  }, [claude, refreshStatus, failAction]);
 
   // Wizard preselect: when a warning fix-action opens the wizard for a specific backend,
   // we stash the backend id+type here so SyncSetupWizard jumps straight to the right flow.
@@ -833,9 +880,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleRenameDevice = useCallback(async (id: string, name: string) => {
     const fn = (window as any).claude?.syncSpaces?.renameDevice;
     if (typeof fn !== 'function') return;
-    try { await fn(id, name); } catch {}
+    try {
+      const res = await fn(id, name);
+      // The handler answers { ok:false } for a failed rename; the old name simply came back with no word (card #134).
+      if (res && res.ok === false) failAction("Couldn't rename this device", res.error ? { message: res.error } : '', () => { void handleRenameDevice(id, name); });
+      else setActionFailure(null);
+    } catch (e) { failAction("Couldn't rename this device", e, () => { void handleRenameDevice(id, name); }); }
     await loadDevices(); // re-fetch so the fold-on-read authoritative name is shown
-  }, [loadDevices]);
+  }, [loadDevices, failAction]);
   // Returns a plain-words failure note, or null on success — DevicesTab renders it.
   // Discarding the result would be wrong: both handlers answer { ok:false } for a
   // real failure and { ok:false, error } for the self-guard, so silence would leave
@@ -905,23 +957,37 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // backend, ON -> resume every paused backend. Non-destructive (never removes a
   // backend). With zero backends, turning ON just reveals the inline picker
   // (additionalIntent) — actually adding a backend is what persists anything.
-  const handleAdditionalToggle = useCallback(async () => {
+  const runAdditionalToggle = useCallback(async () => {
     const list = status?.backends ?? [];
     const on = list.some(b => b.syncEnabled) || additionalIntent;
+    // A rejection mid-loop used to escape as an unhandled error, leaving some backups changed and some not with no word.
+    // The status refresh runs either way so the rows show what really happened; Try again re-runs the toggle.
+    const runAll = async (enabled: boolean) => {
+      try {
+        for (const b of list) if (enabled ? !b.syncEnabled : !!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: enabled });
+        setActionFailure(null);
+        return true;
+      } catch (e) { failAction("Couldn't change every backup. Some may have changed", e, () => { void additionalToggleRef.current(); }); return false; }
+    };
     if (on) {
       // Turn OFF: pause all currently-active backends and drop the picker intent.
-      for (const b of list) if (b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: false });
-      setAdditionalIntent(false);
+      if (await runAll(false)) setAdditionalIntent(false);
       await refreshStatus();
     } else if (list.length === 0) {
       // Turn ON with nothing connected: reveal the inline Drive/iCloud picker.
       setAdditionalIntent(true);
     } else {
       // Turn ON with paused backends: resume them all.
-      for (const b of list) if (!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: true });
+      await runAll(true);
       await refreshStatus();
     }
-  }, [status, additionalIntent, claude, refreshStatus]);
+  }, [status, additionalIntent, claude, refreshStatus, failAction]);
+  const handleAdditionalToggle = useCallback(async () => {
+    if (toggleBusyRef.current) return; // a second tap (or Try again) while it is running does nothing
+    toggleBusyRef.current = true;
+    try { await runAdditionalToggle(); } finally { toggleBusyRef.current = false; }
+  }, [runAdditionalToggle]);
+  additionalToggleRef.current = handleAdditionalToggle; // Try again always runs the latest one, on current state
 
   // Recent sync events for DISPLAY only. `hub-status` entries drive the
   // "Instant sync" status line below (that's their surface); `projects-changed`
@@ -1052,10 +1118,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           <EditBackendForm
             backend={editingBackend}
             onSave={async (updates) => {
-              try {
-                await claude.sync.updateBackend(editingId, updates);
-                await refreshStatus();
-              } catch {}
+              const save = async () => {
+                try {
+                  await claude.sync.updateBackend(editingId, updates);
+                  setActionFailure(null);
+                  await refreshStatus();
+                } catch (e) { failAction("Couldn't save your changes to this backup", e, () => { void save(); }); }
+              };
+              await save();
               setView('main');
               setEditingId(null);
             }}
@@ -1065,6 +1135,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         // WHY space-y-4 (fix batch 1, 2026-09-24): design guide Settings
         // spacing, 16px between groups — was space-y-6 (24px).
         <div className="space-y-4">
+            {actionFailure && (
+              <div ref={failureRef} className="scroll-mt-2">
+                <ErrorState variant="inline" message={actionFailure.message} details={actionFailure.details || undefined}
+                  onRetry={() => { const retry = actionFailure.retry; setActionFailure(null); retry(); }} />
+              </div>
+            )}
 
             {/* ============================================================
                 PRIMARY — Cross-device backup & sync box (redesign 2026-07-15).

@@ -123,12 +123,38 @@ describe('positive queue input safety', () => {
     const rig = makeRig({ started: true });
     const rule = '─'.repeat(40); rig.output(`\x1b[2J\x1b[H${rule}\r\n❯ \r\n${rule}`); await rig.settle();
     const need = rig.records.screenNeed(S)!; const spy = vi.spyOn(rig.records, 'screenNeed');
-    spy.mockReturnValue({ ...need, asking: true }); rig.screens.refresh(S);
+    spy.mockReturnValue({ ...need, asking: true, holdsMessageBox: true }); rig.screens.refresh(S);
     const before = rig.wakes(); expect(rig.screens.queueInputSafe(S)).toBe(false);
-    spy.mockReturnValue({ ...need, asking: false }); rig.screens.refresh(S);
+    spy.mockReturnValue({ ...need, asking: false, holdsMessageBox: false }); rig.screens.refresh(S);
     expect(rig.wakes()).toBe(before + 1);
     rig.screens.refresh(S); expect(rig.wakes()).toBe(before + 1); // only the closing edge, not every refresh
     spy.mockRestore();
+  });
+  it('a helper agent\'s open question does not stop the queue typing into the message box; the conversation\'s own question does', async () => {
+    const rig = makeRig({ started: true });
+    const rule = '─'.repeat(40); rig.output(`\x1b[2J\x1b[H${rule}\r\n❯ \r\n${rule}`); await rig.settle();
+    const ask = (id: string, extra: Record<string, unknown> = {}) => rig.note('hook:event', { type: 'PermissionRequest', sessionId: S, payload: { _requestId: id, tool_name: 'Bash', ...extra }, timestamp: 1 });
+    ask('agent', { agent_id: 'a7b62d22a882e3052', agent_type: 'general-purpose' });
+    expect(rig.screens.queueInputBlock(S)).toBeNull();
+    expect(rig.screens.queueInputSafe(S)).toBe(true);
+    ask('own');
+    expect(rig.screens.queueInputBlock(S)).toBe('question');
+    const before = rig.wakes();
+    rig.note('hook:event', { type: 'PermissionResolved', sessionId: S, payload: { _requestId: 'own' }, timestamp: 2 });
+    expect(rig.wakes()).toBe(before + 1); // the conversation's own question closing wakes the queue, the helper's still open
+    expect(rig.screens.queueInputSafe(S)).toBe(true);
+    // A menu Claude Code draws over the box is still refused, whoever asked.
+    rig.output(USAGE_LIMIT); await rig.settle();
+    expect(rig.screens.queueInputBlock(S)).toBe('screen');
+  });
+  it('names why the queue may not type: no terminal, bytes still parsing, a question, or the screen', async () => {
+    const rig = makeRig({ started: true });
+    const rule = '─'.repeat(40); rig.output(`\x1b[2J\x1b[H${rule}\r\n❯ \r\n${rule}`);
+    expect(rig.screens.queueInputBlock(S)).toBe('updating');
+    await rig.settle(); expect(rig.screens.queueInputBlock(S)).toBeNull();
+    rig.note('hook:event', { type: 'PasswordRequest', sessionId: S, payload: { _requestId: 'pw' }, timestamp: 1 });
+    expect(rig.screens.queueInputBlock(S)).toBe('question');
+    rig.screens.forget(S); expect(rig.screens.queueInputBlock(S)).toBe('no-terminal');
   });
   it('requires a fully parsed known message box and refuses blank, pending, popup and forgotten screens', async () => {
     const rig = makeRig({ started: true });

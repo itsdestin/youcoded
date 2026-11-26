@@ -360,3 +360,53 @@ describe.each([
     expect((window as any).claude.shell.openExternal).toHaveBeenCalledWith('https://github.com/a/b');
   });
 });
+
+// Card #134 (error inventory Projects row 8): a failed read is "—", never "0 conversations" beside the notice.
+describe('ProjectHero counts that could not be read', () => {
+  beforeEach(() => { cleanup(); setViewport(false); });
+  it('shows a dash, not a zero, for conversations and context files when their read failed', () => {
+    renderHero({ stats: { ...baseStats, conversations: null, contextFiles: null, activeLabel: '—' } });
+    const line = screen.getByText('conversations');
+    expect(line.textContent).toBe('— conversations');
+    expect(screen.getByText('context files').textContent).toBe('— context files');
+    expect(screen.queryByText('0')).toBeNull();
+  });
+  it('still shows real zeros when a read succeeded and found nothing', () => {
+    renderHero({ stats: { ...baseStats, conversations: 0, contextFiles: 0 } });
+    expect(screen.getByText('conversations').textContent).toBe('0 conversations');
+  });
+});
+
+// Card #134 round 4: a refused description save used to vanish (.catch(() => {})); it now says so in the toast.
+describe('ProjectHero when a save is refused', () => {
+  beforeEach(() => setViewport(false));
+  const toasts = () => { const got: string[] = []; const on = (e: Event) => got.push((e as CustomEvent).detail.message); window.addEventListener('youcoded:notice', on); return { got, off: () => window.removeEventListener('youcoded:notice', on) }; };
+  const commit = (text: string) => {
+    fireEvent.click(screen.getByText('Add a description'));
+    const field = screen.getByLabelText('Project description') as HTMLInputElement;
+    fireEvent.change(field, { target: { value: text } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+  };
+  it('says "Couldn\'t save the description." when the folder save answers false, and still refreshes the card', async () => {
+    const t = toasts(); vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude.folders.setDescription = vi.fn().mockResolvedValue(false);
+    const { props } = renderHero({ description: '' });
+    commit('hello');
+    await vi.waitFor(() => expect(t.got).toEqual(["Couldn't save the description."]));
+    expect(props.onRenamed).toHaveBeenCalled();
+    t.off();
+  });
+  it('says nothing when the save worked, or when a synced save rejects after writing locally', async () => {
+    const t = toasts(); vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { props } = renderHero({ description: '' });
+    commit('hello');
+    await vi.waitFor(() => expect(props.onRenamed).toHaveBeenCalledTimes(1));
+    cleanup();
+    (window as any).claude.syncSpaces.setProjectDescription = vi.fn().mockRejectedValue(new Error('push failed'));
+    const synced = renderHero({ description: '', sync: { dot: { color: 'green' }, spaceId: 'project:proj', lastSynced: null, errorMessage: null, stopped: false }, canRemove: false });
+    commit('again');
+    await vi.waitFor(() => expect(synced.props.onRenamed).toHaveBeenCalledTimes(1));
+    expect(t.got).toEqual([]);
+    t.off();
+  });
+});

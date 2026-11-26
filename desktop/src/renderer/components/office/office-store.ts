@@ -239,6 +239,17 @@ function showDoc(file: OfficeFile): void {
   set({ ...state, docs, active: file.path });
 }
 
+/** Save As wrote a copy Office can edit: it opens in a new tab right after the original, in
+ *  front (Destin, 2026-11-14, the Google Docs way). The original stays open in its own tab.
+ *  WHY not openDoc: that adds at the end of the strip, far from the file it came from. */
+export function openCopyBeside(file: OfficeFile, originalPath: string): void {
+  if (state.docs.some((d) => d.file.path === file.path)) { showDoc(file); return; }
+  const docs = [...state.docs];
+  const at = docs.findIndex((d) => d.file.path === originalPath);
+  docs.splice(at < 0 ? docs.length : at + 1, 0, { file, asleep: false });
+  set({ ...state, docs, active: file.path });
+}
+
 /** Choosing a sleeping tab wakes it: its editor opens again where it was. */
 export function selectTab(id: string): void {
   set({ ...state, docs: state.docs.map((d) => (d.file.path === id ? { ...d, asleep: false } : d)), active: id });
@@ -280,6 +291,70 @@ export function replaceDoc(oldPath: string, file: OfficeFile): void {
     active: state.active === oldPath ? file.path : state.active,
   });
   forgetSaveState(oldPath);
+}
+
+/** Where a file's tab sits right now, so it can be put back exactly (see putDocBack). */
+export interface TabPlace { index: number; active: string; asleep: boolean }
+export function tabPlace(path: string): TabPlace | null {
+  const index = state.docs.findIndex((d) => d.file.path === path);
+  return index < 0 ? null : { index, active: state.active, asleep: state.docs[index].asleep };
+}
+
+/** Bring a tab back (after Rename closed it) in its ORIGINAL spot in the strip, with the tab that was
+ *  in front before still in front. WHY not openDoc: that appends the tab at the end and makes it the
+ *  front tab, so a rename started from Home would visibly shuffle the strip and jump away from Home.
+ *  `oldPath` is the path the tab had; `file` is what it shows now (the renamed file, or the original
+ *  when the rename was refused). If the tab is already back (the person reopened it), nothing changes. */
+export function putDocBack(oldPath: string, file: OfficeFile, place: TabPlace): void {
+  if (state.docs.some((d) => d.file.path === file.path)) return;
+  const docs = [...state.docs];
+  docs.splice(Math.min(place.index, docs.length), 0, { file, asleep: place.asleep });
+  const wanted = place.active === oldPath ? file.path : place.active;
+  set({ ...state, docs, active: wanted === HOME_TAB || docs.some((d) => d.file.path === wanted) ? wanted : HOME_TAB });
+}
+
+/** Resolves true once `path` has no tab at all (a closing tab counts until finishClose removes
+ *  it), or false after `ms` if it is still there (the close failed and the tab came back).
+ *  WHY: Rename must not start while main still counts the file as open. */
+export function whenDocGone(path: string, ms = 8000): Promise<boolean> {
+  if (!officeDocFor(path)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (v: boolean) => { clearTimeout(timer); listeners.delete(check); resolve(v); };
+    const check = () => { if (!officeDocFor(path)) done(true); };
+    const timer = setTimeout(() => done(false), ms);
+    listeners.add(check);
+  });
+}
+
+// ── One tab per real file (office review 2026-11-14) ──
+// Tabs are keyed by the path they were opened with, but main keys a document by its REAL path:
+// the same file reached through a link (or, on Windows, other capitals) got a second tab whose
+// editor shared one session and working copy with the first, so each tab's save overwrote the
+// other's edits. Main hands both the same token, which is how a duplicate is recognised here.
+const tokenTabs = new Map<string, string>();
+/** A frame's open succeeded with `token`. Returns the path of another open tab already showing
+ *  that document (the caller then gives way to it), or null after recording this tab as its holder. */
+export function claimOfficeToken(token: string, path: string): string | null {
+  const holder = tokenTabs.get(token);
+  if (holder && holder !== path && state.docs.some((d) => d.file.path === holder)) return holder;
+  tokenTabs.set(token, path);
+  return null;
+}
+export function releaseOfficeToken(token: string, path: string): void {
+  if (tokenTabs.get(token) === path) tokenTabs.delete(token);
+}
+/** The tab `dupPath` turned out to be `keepPath`'s file under another spelling: drop it (its
+ *  editor never started, so nothing is unsaved) and bring the existing tab forward, as opening
+ *  the same spelling twice would. */
+export function mergeDuplicateTab(dupPath: string, keepPath: string): void {
+  set({
+    ...state,
+    docs: state.docs
+      .filter((d) => d.file.path !== dupPath)
+      .map((d) => (d.file.path === keepPath ? { ...d, asleep: false, closing: false } : d)),
+    active: keepPath,
+  });
+  forgetSaveState(dupPath);
 }
 
 /** The closing tab's editor has saved (or given up after 5 s): remove it for good. */
@@ -496,6 +571,7 @@ export function resetOfficeStoreForTests(): void {
   unsavedHolds.clear();
   inlineCopies.clear();
   inlineRevealers.clear();
+  tokenTabs.clear();
   promptWatched = false;
   reloaders.clear();
   changedSubscribed = false;

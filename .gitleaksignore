@@ -7,3 +7,6 @@ efaa9558d2f11b4c08fa0b51b458316ee069ed53:desktop/tests/engine-manager.test.ts:ge
 32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:5
 32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:14
 32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:31
+# Not a secret: the scenario label field (mcp-one/mcp-two at 100x35) in Claude Code 2.1.325 startup-dialog captures (release-1-4-review, 2026-11-17)
+413b7b90af1f05a4e4af97da78422e9adcb6f2d5:desktop/tests/fixtures/startup-dialogs/cc-2.1.325-mcp-two-100x35.json:generic-api-key:4
+413b7b90af1f05a4e4af97da78422e9adcb6f2d5:desktop/tests/fixtures/startup-dialogs/cc-2.1.325-mcp-one-100x35.json:generic-api-key:4

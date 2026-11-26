@@ -9,7 +9,7 @@
 // what the server said to what a screen renders, so those states can be tested
 // without mounting anything. This file only decides which screen is showing.
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useGameState, useGameDispatch } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
 import { useTheme } from '../../state/theme-context';
@@ -22,14 +22,14 @@ import FriendsPanel from './FriendsPanel';
 import { socialState, SOCIAL_STATE_COPY } from './friends-data';
 import { useNetworkOnline } from '../../hooks/useNetworkOnline';
 import Leaderboard, { type LeaderboardRow } from './Leaderboard';
-import { arcadeApi, buildStatuses, mergeBests, serverBests, staleNote, toRows } from './arcade-api';
+import { arcadeApi, buildStatuses, mergeBests, readFailure, serverBests, staleNote, toRows } from './arcade-api';
 import ChessBoard, { type PieceTreatment } from './ChessBoard';
 import GameLobby from './GameLobby';
 import ConnectFourBoard from './ConnectFourBoard';
 import GameChat from './GameChat';
 import GameOverlay from './GameOverlay';
 import '../ui/Dialog.css';
-import { Button, CloseButton, LoadingState } from '../ui';
+import { Button, CloseButton, ErrorState, LoadingState } from '../ui';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface Props {
@@ -46,33 +46,49 @@ interface Props {
  *  friends board. Both come back through `window.claude.arcade`, which main
  *  serves from the account-gated Worker endpoints.
  *
- *  NOTHING HERE CAN FAIL LOUDLY. Signed out, offline, or on a surface with no
- *  arcade bridge at all, every path resolves to "we have nothing to add to what
- *  this computer already knows" — an empty result, never an error screen. That
- *  is §4.2 taken literally: the leaderboard being down must never look like the
- *  game being down. */
+ *  A failed read never stops the game (§4.2: the leaderboard being down must never
+ *  look like the game being down), but it is no longer SILENT either (card #134, error
+ *  inventory Marketplace row 21): a signed-in player whose online read failed used to
+ *  see "Play a round and your best shows up here" / "Sign in to rank it", which is
+ *  false. Signed out (HTTP 401) and "no arcade bridge on this surface" are not
+ *  failures; every other failed read is reported through `serverError` / `boardError`
+ *  and offered a Try again (`retry`). */
+const failureOf = (e: unknown) => (e instanceof Error && e.message ? e.message : 'the scores service did not answer');
+
 function useArcadeData(game: GameDefinition | null, signedIn: boolean) {
   /** Server bests keyed by game id. `null` while we have not answered yet,
    *  which is a DIFFERENT screen from "you have never played". */
   const [server, setServer] = useState<Record<string, number> | null>(null);
   const [board, setBoard] = useState<{ rows: LeaderboardRow[]; staleNote?: string } | null>(null);
+  /** Why the last read failed, or null. Only set for a signed-in player. */
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [boardError, setBoardError] = useState<string | null>(null);
+  /** Bumped by Try again to re-run both reads. */
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   // Re-runs on sign-in: without `signedIn` in the deps, signing in would not
   // pull down the bests you set on another device until the app restarted.
   useEffect(() => {
     let live = true;
     const api = arcadeApi();
+    setServerError(null);
     if (!api) { setServer({}); return; }
     void api.status()
-      .then((r) => { if (live) setServer(r.ok ? serverBests(r.value) : {}); })
-      .catch(() => { if (live) setServer({}); });
+      .then((r) => {
+        if (!live) return;
+        setServer(r.ok ? serverBests(r.value) : {});
+        setServerError(signedIn ? readFailure(r) : null);
+      })
+      .catch((e) => { if (live) { setServer({}); setServerError(signedIn ? failureOf(e) : null); } });
     return () => { live = false; };
-  }, [signedIn]);
+  }, [signedIn, attempt]);
 
   useEffect(() => {
-    if (!game || game.kind !== 'solo') { setBoard(null); return; }
+    if (!game || game.kind !== 'solo') { setBoard(null); setBoardError(null); return; }
     let live = true;
     const api = arcadeApi();
+    setBoardError(null);
     if (!api) { setBoard({ rows: [] }); return; }
     setBoard(null);
     void api.leaderboard(game.id)
@@ -82,12 +98,13 @@ function useArcadeData(game: GameDefinition | null, signedIn: boolean) {
         setBoard(r.ok
           ? { rows: toRows(r.value.board, game), staleNote: staleNote(r.value.cachedAt) }
           : { rows: [] });
+        setBoardError(signedIn ? readFailure(r) : null);
       })
-      .catch(() => { if (live) setBoard({ rows: [] }); });
+      .catch((e) => { if (live) { setBoard({ rows: [] }); setBoardError(signedIn ? failureOf(e) : null); } });
     return () => { live = false; };
-  }, [game, signedIn]);
+  }, [game, signedIn, attempt]);
 
-  return { server, board };
+  return { server, board, serverError, boardError, retry };
 }
 
 export default function ArcadeShell({ connection, chessConnection, incognito, onToggleIncognito }: Props) {
@@ -115,7 +132,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
   );
   const { applyGameDefaultWidth } = useTheme();
 
-  const { server, board } = useArcadeData(openGame?.kind === 'solo' ? openGame : null, !!signedIn);
+  const { server, board, serverError, boardError, retry } = useArcadeData(openGame?.kind === 'solo' ? openGame : null, !!signedIn);
 
   /** ONE best per game for every screen in this file — the picker tile, the
    *  leaderboard's "your best" line, and the number the game itself shows while
@@ -263,6 +280,11 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
           // two groups (guide "Spacing": 16 between groups).
           <div className="flex flex-col gap-4 p-3">
             <FriendsPanel incognito={incognito} onToggleIncognito={onToggleIncognito} social={social} onRetry={() => connection.reconnectLobby()} />
+            {/* A failed online read is said out loud (card #134): the tiles below still show the
+                bests saved on this computer, which is true. Try again re-reads both. */}
+            {serverError && (
+              <ErrorState variant="inline" message="Couldn't load your online best scores. The ones saved on this computer are still shown." details={serverError} onRetry={retry} />
+            )}
             {statuses === null
               ? <LoadingState what="games" />
               : <ArcadePicker statuses={statuses} onPick={setOpenGame} signedIn={!!signedIn} />}
@@ -281,6 +303,8 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
                 <openGame.Play
                   onEnd={endRun}
                   best={bestOf(openGame.id)}
+                  // N3 (Destin): no "New best" when the online best failed to load - it may be higher than what this computer knows.
+                  onlineBestUnknown={!!serverError}
                   onExit={() => setPlaying(false)}
                 />
               </Suspense>
@@ -317,6 +341,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
                         : null
                   }
                   onSignIn={signedIn ? undefined : () => { void startSignIn(); }}
+                  loadError={boardError ? { detail: boardError, onRetry: retry } : undefined}
                 />
               )}
               </>

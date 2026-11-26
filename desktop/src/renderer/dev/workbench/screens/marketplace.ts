@@ -7,6 +7,9 @@ const mp = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['ma
 export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/skills', 'view'),
   mp('marketplace/themes', 'view'),
+  // Destin N4: a refresh fails while the first list is still on screen.
+  { ...mp('marketplace/refresh-failed', 'view', 'error-state'), params: { mpRefresh: 'fail' }, mark: 'marketplace/skills', waitMs: 2500, newIn: 'after' as const },
+  { ...mp('marketplace/skills#counts-failed', 'view', 'error-state'), params: { statsFail: '1' } },
   mp('marketplace/search', 'view'),
   mp('marketplace/detail', 'dialog'),
   // The account chip's small menu, opened by clicking the chip (signed in as the practice "you").

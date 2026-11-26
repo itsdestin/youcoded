@@ -6,7 +6,8 @@
 //   - hover/pin/click on existing highlights → HighlightHoverCard
 //   - select text, release it → the SAME right-click menu build-menu.ts
 //     builds for this viewer (Add comment / Ask about this / Copy / Select
-//     all), anchored at the selection's end → NewCommentPopover
+//     all), anchored at the selection's end; "Add comment" → NewCommentPopover
+//     under the new highlight
 // Clicking a highlight or the floating Comments button opens the rich pane
 // (Comments mode). Replying is the one action also offered here, inside the
 // hover card (Destin, 2026-09-24); resolve/edit/delete stay in Comments mode
@@ -23,7 +24,7 @@ import { HighlightHoverCard } from './HighlightHoverCard';
 import { NewCommentPopover } from './NewCommentPopover';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
-import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect, cellSelector } from './use-quote-marks';
+import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
 import { isSummaryChipRef, type ComposeRef } from '../context-menu/compose-ref';
 
@@ -234,10 +235,6 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
 
   // ── Selection → the SAME right-click menu (item 1) ──────────────────────
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu | null>(null);
-  // The anchor for a fresh draft's popover — captured once, from the
-  // selection that made it (either this menu's own "Add comment", or the
-  // real right-click menu elsewhere on the same selection).
-  const [draftAnchor, setDraftAnchor] = useState<DOMRect | null>(null);
 
   useEffect(() => {
     const root = containerRef.current;
@@ -314,22 +311,19 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     return () => document.removeEventListener('selectionchange', onSelChange);
   }, [selectionMenu]);
 
-  // The new-comment popover anchors to the selection's END — captured once
-  // when a fresh draft (focusId) appears, whichever menu made it.
-  useEffect(() => {
-    if (!focusId) return;
-    // A cell comment (spreadsheets) anchors to its cell — there is no text
-    // selection behind it, the cell was right-clicked.
-    const draft = comments.find((c) => c.id === focusId);
-    const cellEl = draft?.cell ? containerRef.current?.querySelector(cellSelector(draft)) : null;
-    if (cellEl) { setDraftAnchor(cellEl.getBoundingClientRect()); return; }
-    const sel = window.getSelection();
-    const rect = sel && sel.rangeCount > 0 && !sel.isCollapsed
-      ? lastRectOf(sel.getRangeAt(0))
-      : containerRef.current?.getBoundingClientRect() ?? null;
-    setDraftAnchor(rect);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per new draft (focusId); comments is looked up, not a trigger
-  }, [focusId, containerRef]);
+  // The new-comment box anchors to the draft's OWN highlight (its <mark>s, or
+  // its cell for a spreadsheet), read live — never to the text selection.
+  // WHY (comment-box fix, 2026-11-22): drawing that highlight splits the
+  // selected text, and a Word file redraws its text when a comment is added,
+  // so the selection was usually gone by the time the box was placed and it
+  // fell back to the bottom-left corner. The highlight is redrawn after every
+  // such change (use-quote-marks.ts's observer), so it is always there to
+  // point at; segments detached by a redraw are skipped until the next pass.
+  const draftSegs = draftComment ? marks.get(draftComment.id) : undefined;
+  const getDraftAnchor = useCallback(() => {
+    const live = draftSegs?.filter((s) => s.isConnected);
+    return live?.length ? segmentsRect(live) : null;
+  }, [draftSegs]);
 
   return (
     <>
@@ -364,10 +358,10 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           onDeleteReply={(replyId) => deleteReply(activeComment.id, replyId)}
         />
       )}
-      {draftComment && draftAnchor && (
+      {draftComment && (
         <NewCommentPopover
           comment={draftComment}
-          anchorRect={draftAnchor}
+          getAnchor={getDraftAnchor}
           boundsEl={containerRef.current}
           onTextChange={(t) => setCommentText(draftComment.id, t)}
           onDone={clearFocus}

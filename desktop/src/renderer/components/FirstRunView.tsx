@@ -53,8 +53,11 @@ function AuthScreen({
   onOpenRouter,
   onApiKey,
   onCancel,
+  offline,
 }: {
   authMode: FirstRunState['authMode'];
+  /** Card #236: the last sign-in found no internet (the app's own check) — the login buttons give way to the notice. */
+  offline?: boolean;
   onOAuth: () => void;
   // Sign in with ChatGPT (design 2026-09-04, Q-1a): a second plan the app can
   // run on from day one, so a ChatGPT-only user is not sent to "Skip setup".
@@ -74,6 +77,8 @@ function AuthScreen({
   const [localOpen, setLocalOpen] = useState(authMode === 'local');
   // Round 3 review (A-7): the API key opens its own page, like Use a local model.
   const [keyOpen, setKeyOpen] = useState(authMode === 'apikey');
+  // The way last pressed, so the offline notice's Try again repeats exactly that sign-in.
+  const [lastWay, setLastWay] = useState<WayIn | null>(null);
 
   // The waiting line keeps the card around it (P-6): the screen does not
   // change shape between pressing a button and coming back from the browser.
@@ -121,6 +126,7 @@ function AuthScreen({
   }
 
   const pick = (w: WayIn) => {
+    setLastWay(w);
     if (w === 'claude') onOAuth();
     else if (w === 'chatgpt') onChatGpt();
     else if (w === 'openrouter') onOpenRouter();
@@ -129,7 +135,7 @@ function AuthScreen({
   };
   return (
     <div className="w-full flex flex-col gap-3">
-      <SignInChoices chatGpt={isChatGptSupported()} onPick={pick} />
+      <SignInChoices chatGpt={isChatGptSupported()} onPick={pick} offline={offline} lastWay={lastWay} />
       {/* WHY the backup warning is gone from here (deck first-run-4 P4-2, Destin: "remove
           the copy at the bottom about backups. this is a weird place for that warning").
           The line about changing it later takes its place. */}
@@ -374,6 +380,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 onOpenRouter={handleOpenRouter}
                 onApiKey={handleApiKey}
                 onCancel={handleCancelAuth}
+                offline={!!state.lastErrorOffline}
                 claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
               />
             )}
@@ -388,7 +395,8 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               busy={busy}
               onRetry={handleRetry}
             />}
-            {state?.lastError && !stopped && (
+            {/* Card #236: an offline sign-in says so in place of the login buttons (SignInChoices), not down here. */}
+            {state?.lastError && !stopped && !state.lastErrorOffline && (
               <FieldError as="p" size="2xs" className="text-center max-w-md">
                 {state.lastError}
               </FieldError>

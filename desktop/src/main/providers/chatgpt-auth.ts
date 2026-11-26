@@ -452,6 +452,11 @@ export class ChatGptAuth {
   // WHY: an async keychain set must finish before sign-out deletes its ref.
   private credentialChain: Promise<unknown> = Promise.resolve();
   private clearing = 0;
+  /** Card #236: set when OpenAI REFUSED to renew the sign-in and the app cleared it, so the card can say
+   *  "expired" instead of "Not signed in". In memory only: nothing durable survives clearAccount() (it deletes
+   *  the account file), and after a restart the card reads plain "Not signed in" — honest, if less specific.
+   *  Cleared by the next successful sign-in and by a deliberate sign-out. */
+  private expiredByRefusal = false;
 
   private credentialsMutation<T>(fn: () => Promise<T>): Promise<T> {
     const p = this.credentialChain.then(fn);
@@ -521,7 +526,7 @@ export class ChatGptAuth {
     // "Not signed in" during the code exchange.
     if (this.round && !this.round.timedOut) return { state: 'waiting' };
     const a = this.account;
-    if (!a || !this.secrets.has(a.secretRef)) return { state: 'signed-out' };
+    if (!a || !this.secrets.has(a.secretRef)) return this.expiredByRefusal ? { state: 'signed-out', expired: true } : { state: 'signed-out' };
     if (!this.onThisRoute(a)) return { state: 'signed-out', reauth: true };
     if (a.blocked) return { state: 'blocked', email: a.email, reason: a.blocked.reason };
     return { state: 'signed-in', email: a.email, plan: a.plan, usage: this.usageForStatus(), route: this.route };
@@ -711,6 +716,7 @@ export class ChatGptAuth {
     // the user's ChatGPT settings. Read BEFORE the clear deletes the secret;
     // sent after, best-effort — a failed revoke must never keep anyone signed in.
     const revoke = await this.revocationFor().catch(() => null);
+    this.expiredByRefusal = false; // a deliberate sign-out is not an expiry (card #236)
     const cleared = this.clearAccount();
     // Observe deletion failures even while the callback listener is closing.
     void cleared.catch(() => undefined);
@@ -956,6 +962,7 @@ export class ChatGptAuth {
     }
 
     reply(res, 200, CALLBACK_PAGE_DONE);
+    this.expiredByRefusal = false; // signed in again (card #236)
     await this.finishRound(round, 'signed-in');
     try { this.onSignedIn?.(); } catch { /* a notification hook must never break sign-in */ }
     this.startPoll();
@@ -1089,6 +1096,7 @@ export class ChatGptAuth {
       this.log('warn', 'token refresh refused; signing out', { status: r.status });
       this.assertCredentialOwner(owner);
       await this.clearAccount();
+      this.expiredByRefusal = true; // card #236: say "expired", not "Not signed in"
       throw expiredError();
     }
     const json: unknown = await r.json().catch(() => null);
@@ -1226,6 +1234,7 @@ export class ChatGptAuth {
       if (res.status === 401) {
         this.log('warn', 'request refused twice with 401; signing out');
         await this.clearAccount();
+        this.expiredByRefusal = true; // card #236: say "expired", not "Not signed in"
         throw expiredError();
       }
     }

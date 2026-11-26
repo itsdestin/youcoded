@@ -134,6 +134,11 @@ interface WrapRecord {
   /** React-owned text nodes this hook split: their text before the split,
    *  and what the split left in them (to tell whether React changed them). */
   splits: Map<Text, { original: string; left: string }>;
+  /** Every piece cut from a text node, keyed by the node the pass started
+   *  from, with where each piece began in it (see `locate`). */
+  pieces: Map<Text, Array<{ node: Text; base: number }>>;
+  /** Piece → the node it was cut from and where it began in it. */
+  origin: Map<Text, { root: Text; base: number }>;
 }
 const wrapRecords = new WeakMap<HTMLElement, WrapRecord>();
 
@@ -155,6 +160,40 @@ function unwrapAll(root: HTMLElement): void {
     // has, React's newer text wins and our pieces (already removed) are gone.
     if (text.data === left) text.data = original;
   }
+}
+
+/**
+ * Where a point read BEFORE this pass started wrapping lives now.
+ *
+ * WHY (comment-box fix, 2026-11-22): `markAll` reads every character's
+ * position once, then wraps comment after comment — and wrapping CUTS text
+ * nodes, moving the text after a cut into a new node. A later comment in the
+ * same run of text (words right after an existing highlight, or inside one)
+ * still pointed at the old, now shorter node and silently got no highlight;
+ * its new-comment box then had nothing to sit under. Every cut is recorded
+ * (`split`), and this follows a point into the piece that holds it now.
+ * `isEnd`: an end point sitting exactly on a cut belongs to the piece BEFORE it.
+ */
+function locate(p: TextPoint, record: WrapRecord, isEnd = false): TextPoint {
+  const pieces = record.pieces.get(p.node as Text);
+  if (!pieces) return p;
+  for (const { node, base } of pieces) {
+    const rel = p.offset - base;
+    if (isEnd ? rel > 0 && rel <= node.data.length : rel >= 0 && rel < node.data.length) return { node, offset: rel };
+  }
+  return p;
+}
+
+/** `node.splitText(at)`, recorded so `locate` can follow points into the new piece. */
+function split(node: Text, at: number, record: WrapRecord): Text {
+  const from = record.origin.get(node) ?? { root: node, base: 0 };
+  const piece = node.splitText(at);
+  const info = { root: from.root, base: from.base + at };
+  record.origin.set(piece, info);
+  if (!record.pieces.has(from.root)) record.pieces.set(from.root, [{ node: from.root, base: 0 }]);
+  record.pieces.get(from.root)!.push({ node: piece, base: info.base });
+  record.created.add(piece);
+  return piece;
 }
 
 /** Wraps [start, end) in one `<mark>` per text node it touches, recording
@@ -190,11 +229,8 @@ function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make:
       record.splits.set(node, { original: node.data, left: '' });
     }
     let target = node;
-    if (to < target.data.length) record.created.add(target.splitText(to));
-    if (from > 0) {
-      target = target.splitText(from);
-      record.created.add(target);
-    }
+    if (to < target.data.length) split(target, to, record);
+    if (from > 0) target = split(target, from, record);
     const mark = make();
     record.created.add(mark);
     target.parentNode?.insertBefore(mark, target);
@@ -414,7 +450,7 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
     el.removeAttribute('data-comment-id');
     el.classList.remove(...CELL_RESOLVED.split(' '), ...ACTIVE_CLASSES);
   });
-  const record: WrapRecord = { created: new Set(), splits: new Map() };
+  const record: WrapRecord = { created: new Set(), splits: new Map(), pieces: new Map(), origin: new Map() };
   const found = new Map<string, HTMLElement[]>();
 
   // Cell comments (spreadsheets): §2.2's trivial presence check.
@@ -470,8 +506,9 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
         const startPoint = points[resolved.start];
         const lastPoint = points[resolved.end - 1];
         if (!startPoint || !lastPoint) continue; // defensive: resolveSelector's own offsets are always in range
-        const endPoint: TextPoint = { node: lastPoint.node, offset: lastPoint.offset + 1 };
-        const segs = wrapSegments(textRoot, startPoint, endPoint, () => {
+        // `locate`: earlier comments in this pass may have cut these nodes (see its WHY).
+        const endPoint = locate({ node: lastPoint.node, offset: lastPoint.offset + 1 }, record, true);
+        const segs = wrapSegments(textRoot, locate(startPoint, record), endPoint, () => {
           const mark = document.createElement('mark');
           mark.setAttribute(MARK_ATTR, '');
           mark.setAttribute('data-comment-id', c.id);

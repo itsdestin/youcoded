@@ -27,13 +27,25 @@ describe('Help & feedback carries the development rows', () => {
     expect(screen.getByText(/^Roadmap$/)).toBeInTheDocument();
   });
 
-  it('opens the GitHub issues URL when Known issues is clicked', () => {
+  it('opens the GitHub issues URL when Known issues is clicked, and leaves Help open', () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     const onClose = vi.fn();
     renderHelp({ onClose });
     fireEvent.click(screen.getByText(/^Known issues$/));
     expect(openSpy).toHaveBeenCalledWith('https://github.com/itsdestin/youcoded/issues', '_blank');
-    expect(onClose).toHaveBeenCalled();
+    // Card #142 (deck C-9): Help stays open behind the browser page.
+    expect(onClose).not.toHaveBeenCalled();
+    openSpy.mockRestore();
+  });
+
+  it('Roadmap and Community on Reddit also leave Help open behind the browser (Destin, Q-1: all three the same)', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const onClose = vi.fn();
+    renderHelp({ onClose });
+    fireEvent.click(screen.getByText(/^Roadmap$/));
+    fireEvent.click(screen.getByText(/^Community on Reddit$/));
+    expect(openSpy).toHaveBeenCalledTimes(2);
+    expect(onClose).not.toHaveBeenCalled();
     openSpy.mockRestore();
   });
 

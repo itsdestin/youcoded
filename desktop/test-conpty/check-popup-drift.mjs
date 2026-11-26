@@ -32,7 +32,7 @@
 //     [--save]   after a reviewed update: replace the saved captures (free
 //                scenarios only — real-model ones keep their old capture) and
 //                the saved title inventory with the fresh ones
-// Exit 1 = something the app depends on changed (or a capture failed).
+// Exit 1 = something the app depends on changed (or a capture failed); 2 = the check crashed.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -206,4 +206,7 @@ async function main() {
   process.exit(bad ? 1 : 0);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) await main();
+// WHY exit 2 on a crash (2026-11-19, Destin: alerts must tell a broken CHECK apart from a broken Claude Code): an
+// uncaught error would exit 1, the code for "users are affected", and send the wrong phone alert.
+const crashed = (e) => { console.error(e); process.exit(2); };
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) await main().catch(crashed);

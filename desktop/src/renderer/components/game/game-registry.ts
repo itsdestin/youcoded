@@ -28,6 +28,9 @@ export interface SoloGameProps {
   /** The player's current best, for the game to show in its own chrome if it
    *  wants to. Undefined means they have never finished a run. */
   best?: number;
+  /** True when the player is signed in but their ONLINE best could not be loaded (card #134). A run cannot be called a
+   *  "new best" then: the online score may be higher. The game still shows the score and what it knows. */
+  onlineBestUnknown?: boolean;
   /** Back to the games shelf. The end-of-run card offers it, so a player who is
    *  done does not have to hunt for the header's back arrow. */
   onExit?: () => void;

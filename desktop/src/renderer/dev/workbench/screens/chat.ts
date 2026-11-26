@@ -23,6 +23,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // before master the same state reads the old words and has no button.
   { ...chat('chat#phone-reconnecting', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', conversation: 'reconnecting' } },
   { ...chat('chat#phone-slow', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, newIn: 'after' as const },
+  // Card #182 (deck C-6): the same phone after about 20 s of silence — says the computer may be asleep or off.
+  { ...chat('chat#phone-unreachable', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, waitMs: 16_000, newIn: 'after' as const },
   // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
@@ -33,12 +35,27 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' } },
   // The Browser's approval card on a phone (card #205): the card the computer publishes, drawn like every other approval card.
   ...['site', 'final', 'handoff'].map((b) => ({ ...chat(`chat#phone-browser-${b}`, 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', phoneBrowser: b }, newIn: 'after' as const })),
+  // Card #134: a picture pasted on a phone attaches to the message box. The practice picture arrives through the Attach button's route,
+  // which draws the same chip a pasted one does (the paste itself uploads through that same route).
+  { ...chat('chat#phone-pasted-picture', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', pastedPicture: '1' }, open: ['Attach file'], newIn: 'after' as const },
   { ...chat('chat#permission-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-approval-cc', platform: 'android' } },
   // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
   // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.
   ...(['cc', 'native'] as const).flatMap(rt => (['before-', ''] as const).map(when => ({
     ...chat(`chat#model-switch-${when}${rt}`, 'view'), session: rt === 'cc' ? 'wb-1' : 'wb-2', params: { seed: `bubbles-model-switch-${when}${rt}` },
   }))),
+  // Card #236 (sign-in expiry + no internet, 2026-11-18): Claude Code's "Login expired" reply, the sign-in from the card, and the
+  // ChatGPT / OpenRouter / no-internet cards. The "before" of each is the same conversation on master.
+  { ...chat('chat#signin-expired-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired' } },
+  { ...chat('chat#signin-waiting-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', signIn: 'waiting' }, open: ['Sign in'], newIn: 'after' as const },
+  { ...chat('chat#signin-back-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired' }, open: ['Sign in'], waitMs: 5_000, newIn: 'after' as const },
+  { ...chat('chat#signin-offline-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', online: '0' }, open: ['Sign in'], newIn: 'after' as const },
+  { ...chat('chat#signin-expired-cc-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', platform: 'android' } },
+  { ...chat('chat#signin-remote-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', connection: 'remote' } },
+  { ...chat('chat#signin-expired-chatgpt', 'view'), session: 'wb-2', params: { seed: 'bubbles-chatgpt-expired' } },
+  { ...chat('chat#signin-expired-openrouter', 'view'), session: 'wb-2', params: { seed: 'bubbles-openrouter-rejected' } },
+  { ...chat('chat#offline-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-offline-cc', online: '0' } },
+  { ...chat('chat#offline-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-offline', online: '0' } },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
@@ -65,6 +82,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/model-picker/fast-mode', 'dialog'),
   chat('chat/model-picker/switch-model', 'dialog'),
   chat('chat/preferences', 'dialog'),
+  // Destin N1: the write of a setting fails, so the notice shows beside it and the switch goes back.
+  { ...chat('chat/preferences#save-failed', 'dialog', 'error-state'), params: { fail: 'settings.set' }, open: [{ do: 'scroll', dir: 'down', times: 2 }, { do: 'click', target: { role: 'switch', label: 'Show turn duration' } }] },
   chat('chat/resume', 'dialog'),
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
@@ -138,6 +157,10 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/composer', 'menu'),
   chat('chat/menu/code', 'menu'),
   chat('chat/menu/file', 'menu'),
+  // Card #143 c: the real strip that asks Replace / Add to end when a quick chip is tapped over typed words.
+  chat('chat/chip-choice', 'view'),
+  // Card #143 a: right-click on a picture in a chat.
+  { ...chat('chat/menu/image', 'menu'), session: 'wb-2', params: { seed: 'bubbles-picture' } },
   chat('chat/voice/vocabulary', 'dialog'),
   { ...chat('chat/voice/vocabulary#empty', 'dialog'), params: { vocabulary: 'empty' } },
   { ...chat('chat/voice/vocabulary#stress', 'dialog', 'stress'), scenario: 'stress', params: { vocabulary: 'stress' } },
@@ -210,6 +233,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
+  // Card #236: a sign-in button pressed with no internet — the browser stays closed and the screen says why.
+  { name: 'first-run#authenticate-offline', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', signInPick: 'plan', online: '0' }, newIn: 'after' as const },
   // A new user's checklist: Git installing, then Git done at sign-in (?prereqs, mock-shim).
   { name: 'first-run#setup-installing', tags: ['first-run', 'view'], viewport: { width: 800, height: 440 }, params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#setup-done', tags: ['first-run', 'view'], viewport: { width: 800, height: 680 }, params: { firstRun: 'AUTHENTICATE', prereqs: 'done' } },
@@ -229,6 +254,9 @@ export const CHAT: readonly ScreenEntry[] = [
   // autoplay; autoplay=0 keeps them in the lobby, where the head-to-head record shows.
   { ...chat('chat/games/flappy', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/flappy#alone', 'pane', 'games'), params: { signedIn: '1', arcade: 'alone' } },
+  // Card #134: the online scores read fails for a signed-in player (the picker and the board each say so).
+  { ...chat('chat/games#scores-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', fail: 'arcade.status,arcade.leaderboard' } },
+  { ...chat('chat/games/flappy#scores-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', fail: 'arcade.status,arcade.leaderboard' } },
   { ...chat('chat/games/flappy/play', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/2048', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/chess', 'pane', 'games'), params: { signedIn: '1' } },
@@ -282,6 +310,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#manage-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-manage-cc' } },
   { ...chat('chat#manage-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-manage-native' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // No update waiting (the version chip's "What's new"): every version's notes, and never the
+  // file's own title, intro or empty [Unreleased] heading (Destin, 2026-11-22).
+  { ...chat('chat/update#up-to-date', 'dialog'), params: { update: 'none' } },
   // Automatic updates (#183): the update already downloaded in the background — the chip, the
   // popup's Restart to update, the password variant, and the close-window prompt it raises
   // when chats are open (closing it cancels the restart).
@@ -321,6 +352,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // ('chat/files'): the review replaces the viewer, whose own mark goes with it.
   { ...chat('chat/files/open/a-launch-brief#git-review', 'pane', 'viewer'), mark: 'chat/files',
     open: ['Review changes', '▸ a1b2c3d chat: cache the per-session selector…', { do: 'hover', target: { role: 'button', labelStarts: '▸ a1b2c3d chat: cache the per-session selector' } }] },
+  // Card #134 round 4: the review's first read fails, so the area says so with Try again (the Before has the header over a blank timeline).
+  { ...chat('chat/files/open/a-launch-brief#git-review-failed', 'pane', 'viewer', 'error-state'), mark: 'chat/files', params: { fail: 'git.fileReview' }, open: ['Review changes'] },
   chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
   // WHY exercise the actual Add comment action rather than seed an already-open draft.
   { ...chat('chat/files/open/a-q3-sales-comments#new-comment', 'pane', 'viewer'),

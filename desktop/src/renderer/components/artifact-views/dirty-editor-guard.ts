@@ -27,3 +27,29 @@ export function guardDirtyEditor(action: () => void): void {
   if (current) current(action);
   else action();
 }
+
+// ── Office edits in a file panel: save before the panel switches files ──
+// WHY (Destin, 2026-11-14: "make sure it's reliable with no path for accidental data loss"; an
+// independent review found it): a file link in chat or a file in a tool card switches the panel's
+// file directly. An Office editor in that panel saves ~3 s after the last keystroke, so a switch
+// inside that window unmounted it and dropped the newest typing. Those routes go through
+// whenEditsSaved instead: an Office editor saves first (a failed save keeps it open, with its
+// reason); anything else switches at once. WHY not guardDirtyEditor there: for a plain text
+// editor that would add a Save/Discard dialog these routes never showed — its draft is parked
+// and offered back, so it was never lost.
+type Flush = (action: () => void) => void;
+let officeFlush: Flush | null = null;
+
+export function registerOfficeEditFlush(flush: Flush): void {
+  officeFlush = flush;
+}
+
+export function unregisterOfficeEditFlush(flush: Flush): void {
+  if (officeFlush === flush) officeFlush = null;
+}
+
+/** Run `action` once an Office edit open in the file panel has saved; at once otherwise. */
+export function whenEditsSaved(action: () => void): void {
+  if (officeFlush) officeFlush(action);
+  else action();
+}

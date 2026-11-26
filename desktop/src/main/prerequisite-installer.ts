@@ -697,7 +697,7 @@ export async function detectAuth(): Promise<DetectionResult> {
   try {
     const claudePath = resolveClaudeCommand();
     const { stdout } = await runCommand(claudePath, ['auth', 'status']);
-    // claude auth status exits 0 even when not logged in — parse the JSON
+    // claude auth status prints JSON either way (older CLIs exit 0 when logged out, newer exit 1 — see the catch)
     const parsed = JSON.parse(stdout.trim());
     if (parsed.loggedIn === true) {
       log('INFO', 'prereq', 'Auth status: authenticated', { email: parsed.email });
@@ -705,6 +705,12 @@ export async function detectAuth(): Promise<DetectionResult> {
     }
     return { installed: false, error: 'Not logged in' };
   } catch (err) {
+    // WHY: newer CLIs (2.1.327) exit 1 when logged out, so the JSON rides on the error.
+    // Same answer as above, not a raw "Command failed" string.
+    const out = (err as { stdout?: unknown } | null)?.stdout;
+    if (typeof out === 'string') {
+      try { if (JSON.parse(out.trim()).loggedIn === false) return { installed: false, error: 'Not logged in' }; } catch { /* not JSON: fall through */ }
+    }
     return { installed: false, error: String(err) };
   }
 }
@@ -1266,6 +1272,29 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
 }
 
 
+/** What a running login hands back. `waitForUrl` settles as soon as the link is printed, the CLI
+ *  quits, or `timeoutMs` passes — whichever comes first (null when no link). */
+export interface OAuthLogin {
+  readonly url: string | null;
+  kill: () => void;
+  onExit: (cb: (code: number | null) => void) => void;
+  waitForUrl: (timeoutMs: number) => Promise<string | null>;
+}
+
+/** Where system Node can read pty-worker.js. WHY it decides by looking, not by a flag (1.3.4 bug):
+ *  the installed app keeps this file inside `app.asar`, which only Electron can read, plus a readable
+ *  copy in `app.asar.unpacked`. The path used to switch only when the caller passed `isPackaged`;
+ *  "Sign in again" (claude-sign-in.ts, 1.3.4) never passed it, so in every installed app the worker
+ *  could not start and people saw "Could not get login URL from Claude Code." Checking for the
+ *  unpacked copy needs no Electron (this module also loads in the native runtime and on Android,
+ *  where there is no asar and the plain path is right) and no caller can forget it. */
+export function resolvePtyWorkerPath(dir: string = __dirname, exists: (p: string) => boolean = fs.existsSync): string {
+  const workerPath = path.join(dir, 'pty-worker.js');
+  const unpacked = workerPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  return unpacked !== workerPath && exists(unpacked) ? unpacked : workerPath;
+}
+
+
 /**
  * Start OAuth login by spawning `claude auth login` inside a PTY.
  *
@@ -1281,19 +1310,9 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
  * The CLI process is kept alive — it waits for the OAuth callback.
  * Call pollAuthStatus() to detect when login completes.
  */
-// WHY `isPackaged` is a parameter (2026-09-29 one-core R1): this module is imported by the native
-// runtime (ClaudeAccount uses resolveCommand), and the runtime must load without Electron. The
-// one caller, first-run.ts, already runs inside Electron and passes `app.isPackaged`.
-export function startOAuthLogin(isPackaged = false): { url: string | null; kill: () => void } {
+export function startOAuthLogin(): OAuthLogin {
   const claudePath = resolveClaudeCommand();
-
-  // Locate pty-worker.js the same way SessionManager does — in packaged builds
-  // it lives under app.asar.unpacked/ so the system node can read it.
-  let workerPath = path.join(__dirname, 'pty-worker.js');
-  if (isPackaged) {
-    const unpacked = workerPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-    if (fs.existsSync(unpacked)) workerPath = unpacked;
-  }
+  const workerPath = resolvePtyWorkerPath();
   let nodePath = 'node';
   try { if (whichSync) nodePath = whichSync('node'); } catch { /* use bare 'node' */ }
 
@@ -1303,6 +1322,16 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
   });
 
   let authUrl: string | null = null;
+  // WHY (card #236): the sign-in-again flow needs to know the login finished cleanly, because an
+  // expired login still reads "signed in" to `claude auth status`.
+  const exitListeners: Array<(code: number | null) => void> = [];
+  // WHY (sign-in fix): callers used to sleep a fixed 1.5 s and then read `url`; a slow CLI start
+  // (cold boot, just updated) printed the link later and the sign-in failed although it was fine.
+  // `link` settles ONCE: with the link the moment it is printed, or null as soon as the process is
+  // gone (it can never print one after that). Later settles are no-ops.
+  let settleLink: (url: string | null) => void = () => {};
+  const link = new Promise<string | null>((r) => { settleLink = r; });
+  const gone = () => settleLink(null);
   let buffer = '';                 // accumulated stdout (ANSI-stripped) for regex matches across chunks
   const DIAG_MAX = 2000;           // cap diagnostic log volume
   let diagBuf = '';
@@ -1317,7 +1346,11 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
 
   worker.on('error', (err) => {
     log('ERROR', 'prereq', 'OAuth worker spawn failed', { error: String(err) });
+    gone(); // a worker that could not start will never print a link — don't wait out the cap
   });
+  // WHY 'close', not 'exit': 'close' fires after the worker's output is fully delivered, so a link
+  // printed just before it quit has already settled `link` and is not lost.
+  worker.on('close', gone);
 
   worker.on('message', (msg: any) => {
     if (msg.type === 'data') {
@@ -1329,9 +1362,12 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
         if (m) {
           authUrl = m[0];
           log('INFO', 'prereq', 'OAuth URL captured', { url: authUrl });
+          settleLink(authUrl);
         }
       }
     } else if (msg.type === 'exit') {
+      gone(); // the CLI quit (its earlier output arrived first, so a printed link already counted)
+      for (const cb of exitListeners) { try { cb(typeof msg.exitCode === 'number' ? msg.exitCode : null); } catch { /* a listener must not break the worker */ } }
       log('WARN', 'prereq', 'OAuth CLI exited', {
         exitCode: msg.exitCode,
         authUrlCaptured: Boolean(authUrl),
@@ -1359,6 +1395,12 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
 
   return {
     get url() { return authUrl; },
+    onExit: (cb: (code: number | null) => void) => { exitListeners.push(cb); },
+    waitForUrl: (timeoutMs: number) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cap = new Promise<null>((r) => { timer = setTimeout(() => r(null), timeoutMs); });
+      return Promise.race([link, cap]).finally(() => clearTimeout(timer));
+    },
     kill: () => {
       try { worker.send({ type: 'kill' }); } catch {}
       try { worker.kill(); } catch {}

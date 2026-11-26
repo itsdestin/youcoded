@@ -13,6 +13,7 @@
 // event arrives we forward it to the renderer SYNCHRONOUSLY (UI latency must
 // not wait on disk) AND enqueue the append on the per-session chain. A renderer
 // crash losing an unpersisted event is acceptable; a stuttering UI is not.
+import { trackWrite } from './tracked-write';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -369,6 +370,13 @@ interface LiveEntry {
   // silently, right before that next user message, so the model still sees
   // them — as context for what the user asked, not as a reason to speak.
   holdDeliveries?: boolean;
+  /** Set when holdDeliveries was raised by REOPEN (reports recovered from the
+   *  ledger), not by Stop. A reopened old chat must not start a paid model turn
+   *  by itself; the reports wait and ride in with the user's next message (the
+   *  same silent splice Stop uses). Unlike Stop, a report that arrives LIVE
+   *  afterwards lifts this hold: a helper finishing in an open chat still
+   *  notifies the assistant, as before. */
+  holdFromReopen?: boolean;
 }
 
 /** The transcript events that END a turn — the moments a session's model
@@ -1685,10 +1693,14 @@ export class NativeSessionHost extends EventEmitter {
    *  dispatched "first" turn is a no-op: it exists only to get INTO runTurns
    *  from an idle start — runTurns' own tail (the SAME delivery-loop code a
    *  real turn reaches too) is what actually injects the report(s). */
-  private queueDelivery(parentId: string): void {
+  private queueDelivery(parentId: string, recovered = false): void {
     this.pendingDeliveryParents.add(parentId);
     const entry = this.live.get(parentId);
     if (entry) entry.deliveryVersion = (entry.deliveryVersion ?? 0) + 1;
+    // WHY: reports recovered at reopen wait for the user's next message (no
+    // unprompted model turn on an old chat); a live arrival lifts that hold.
+    if (entry && recovered) { entry.holdDeliveries = true; entry.holdFromReopen = true; }
+    else if (entry?.holdFromReopen) { entry.holdDeliveries = false; entry.holdFromReopen = false; }
     this.kickIdleDeliveryPass(parentId);
   }
 
@@ -1737,6 +1749,8 @@ export class NativeSessionHost extends EventEmitter {
     this.pendingHostNotices.set(parentId, arr);
     const entry = this.live.get(parentId)!;
     entry.deliveryVersion = (entry.deliveryVersion ?? 0) + 1;
+    // WHY: a live notice lifts the reopen-only hold (see LiveEntry.holdFromReopen); a Stop hold stays.
+    if (entry.holdFromReopen) { entry.holdDeliveries = false; entry.holdFromReopen = false; }
     this.kickIdleDeliveryPass(parentId);
   }
 
@@ -1769,11 +1783,10 @@ export class NativeSessionHost extends EventEmitter {
     this.shellRegistries.set(sessionId, registry);
     if (sidecar && this.nativeHome && cwd) {
       this.shellSidecars.set(sessionId, sidecar);
-      // D2/D3: bring in what the last run saved (finished outcomes; still-running
-      // process groups re-attached). Async; screens get each record as a change
-      // event and session:open waits for this before answering.
+      // D2/D3: bring in what the last run saved (finished outcomes; re-attached process groups). Async; session:open waits for
+      // this before answering. WHY (card #220): registry.restoreReady makes the assistant's command lookups wait too.
       const home = this.nativeHome;
-      this.shellRestores.set(sessionId, readPersistedShells(home, cwd, sessionId)
+      this.shellRestores.set(sessionId, registry.restoreReady = readPersistedShells(home, cwd, sessionId)
         .then((records) => registry.restoreFrom(records))
         .then(() => undefined)
         .catch((err) => log('WARN', 'NativeSessionHost', 'could not restore saved background commands', { sessionId, error: String(err) })));
@@ -4141,7 +4154,7 @@ export class NativeSessionHost extends EventEmitter {
     // just marks the parent pending and kicks a pass if it's already idle;
     // drainDeliveries itself drains every eligible record in the ledger, not
     // just one.
-    if (hasUndelivered) this.queueDelivery(parentId);
+    if (hasUndelivered) this.queueDelivery(parentId, true); // recovered at reopen: held for the user's next message
   }
 
   /** Rebuild a live session from its stored header + events. Returns false when
@@ -4248,6 +4261,10 @@ export class NativeSessionHost extends EventEmitter {
     this.assertStartup(start);
     this.presetIdFor.set(sessionId, preset.manifest.id);
     const entry = this.wire(sessionId, cwd, session, start.value, projectInstructionFiles);
+    // WHY: raised BEFORE activateTools/reconcile so no start-up kick (tools-ready, or a delivery flag left
+    // over from an earlier open in this app run) can wake the model on a reopened chat. Reports wait for the
+    // user's next message; a live arrival or that message lifts it (see LiveEntry.holdFromReopen).
+    if (!entry.parentSessionId) { entry.holdDeliveries = true; entry.holdFromReopen = true; }
     this.activateTools(sessionId, entry, start.value, mcpServers, current => this.seedResumedHistory(sessionId, cwd, session, current));
     if (start.value.hasOutcome) await start.value.pending;
     this.assertStartup(start);
@@ -4452,6 +4469,7 @@ export class NativeSessionHost extends EventEmitter {
             // the next human dispatch (history-only), not after every queued message has run.
             const held = entry.holdDeliveries;
             entry.holdDeliveries = false;
+            entry.holdFromReopen = false;
             await this.drainDeliveries(sessionId, entry, held ? 'splice' : 'boundary');
             if (this.live.get(sessionId) !== entry || entry.quiescing) return;
             // Review F7: a report the splice could not hand over is no longer "held until you
@@ -4757,7 +4775,7 @@ export class NativeSessionHost extends EventEmitter {
               await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.deliveryClaimId);
               break;
             }
-            await this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId, rec.runNumber ?? 1); // only now is it delivered
+            await trackWrite(entry.handoffChildDrains ??= new Set(), this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId, rec.runNumber ?? 1)); // only now is it delivered. WHY (card #266): destroyEntry awaits this set, so a quit cannot drop the flag and re-deliver on resume
             // A ledger write CAN still land after all — the in-memory
             // fallback (Task 4 fix-pass 2) only exists for the window where
             // it didn't; clean up any leftover entry for the same run so it
@@ -5084,6 +5102,7 @@ export class NativeSessionHost extends EventEmitter {
     // Root sessions only: a child's own deliveries go to its parent, not to it.
     if (entry && !entry.parentSessionId) {
       entry.holdDeliveries = true;
+      entry.holdFromReopen = false; // a Stop hold is never lifted by a live arrival
       // B8: finished background helpers whose reports are now held back should
       // say so — nothing else would push their cards (no ledger write happens).
       this.pushUndeliveredReports(sessionId, records);
@@ -5535,6 +5554,8 @@ export class NativeSessionHost extends EventEmitter {
     // racing one).
     await this.destroyChildrenOf(sessionId);
     if (entry?.handoffChildDrains?.size) await Promise.all([...entry.handoffChildDrains]);
+    // WHY (R-4): a waiting report's id outlived its chat; cleared after children (they may queue one); reopen re-queues it from the ledger
+    this.pendingDeliveryParents.delete(sessionId);
     // G-1 (D2): closing the conversation kills its background commands and
     // says so on the card. The holder-takeover and session-exit paths pass
     // keepShells — the conversation is still open, just somewhere else — and

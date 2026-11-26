@@ -4047,6 +4047,43 @@ describe('HarnessSession sorts a provider failure before deciding to retry', () 
     expect((events.find(e => e.type === 'session-error') as any)?.data).toMatchObject({ errorKind: 'account', errorCode: 'spend-limit' });
   });
 
+  const networkDown = () => Object.assign(new Error('Cannot connect to API: getaddrinfo ENOTFOUND api.example.com'), { code: 'ENOTFOUND' });
+
+  it('a network failure with the computer offline ends the turn at once as no-internet, with no retry', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1], checkInternet: async () => false }),
+      async () => failing(prompts, [networkDown(), networkDown(), networkDown()]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(1);
+    expect((events.find(e => e.type === 'session-error') as any)?.data).toMatchObject({ errorCode: 'no-internet', errorKind: 'temporary' });
+  });
+
+  it('a failure against a server on this machine or the LAN is never called "no internet", even when the computer is offline', async () => {
+    for (const url of ['http://127.0.0.1:11434/v1/chat/completions', 'http://192.168.1.20:1234/v1/chat/completions']) {
+      const prompts: any[] = [];
+      const check = vi.fn(async () => false);
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1], checkInternet: check }),
+        async () => failing(prompts, [Object.assign(networkDown(), { url }), null]) as any);
+      const events = collect(session);
+      await session.send('hi');
+      expect(check).not.toHaveBeenCalled();
+      expect(prompts).toHaveLength(2); // the normal retry ladder, then it completed
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+    }
+  });
+
+  it('a network failure while online keeps today\'s retry ladder and the turn completes', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1], checkInternet: async () => true }),
+      async () => failing(prompts, [networkDown()]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(2);
+    expect(events.some(e => e.type === 'session-error')).toBe(false);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+  });
+
   it('an unrecognised error is not retried and is reported as unknown, in the provider\'s own words', async () => {
     const prompts: any[] = [];
     const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1] }),

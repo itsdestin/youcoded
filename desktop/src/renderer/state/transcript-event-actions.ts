@@ -77,10 +77,12 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
   // access narrows `ev.data` to the one payload this case's type carries.
   switch (ev.type) {
     case 'user-message':
-      // WHY nothing: a user message with no text would draw an empty bubble. The old
-      // live paths threw on it (inside the batch, drawing nothing) and no producer
-      // sends one, so "draw nothing" is what a user saw before. Every path agrees.
-      if (!ev.data.text) return [];
+      // WHY nothing: a user message with no text AND no attached files would draw an empty bubble.
+      // WHY files count (Destin, 2026-11-18, "bare pasted images getting stuck to the bottom of the chat"): since
+      // 2026-10-22 a picture or file sent with no words reaches Claude Code as only its "Attached:" lines, which the
+      // watcher reads back as text '' plus attachedFiles. Dropping that here meant the sender's bubble was never
+      // confirmed (pinned under every later reply) and the message was missing from the chat after a reopen.
+      if (!ev.data.text && !ev.data.attachedFiles?.length) return [];
       return [{
         type: 'TRANSCRIPT_USER_MESSAGE',
         sessionId,
@@ -124,6 +126,8 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         timestamp,
         // Per-message model, so the reducer can stamp turn.model on a turn's first text.
         model: ev.data.model,
+        // Claude Code's own error label (card #236) — the chat draws a sign-in card from it.
+        apiError: ev.data.apiError,
         // Native runtime: per-token delta id; the same partId merges into the last segment.
         partId: ev.data.partId,
         // The stamp routes a subagent's text into the parent's Agent card instead

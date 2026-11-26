@@ -18,6 +18,8 @@
 // through `actionsRef` (latest-handlers ref), and nothing here receives a fresh
 // object from ChatView's render. The markup is exactly what ChatView rendered
 // inline before, so the DOM is unchanged.
+import { announceFailed } from '../utils/announce';
+import { copyText } from './context-menu/clipboard';
 import React from 'react';
 import type { AssistantTurn, TimelineEntry } from '../state/chat-types';
 import type { ChatAction } from '../state/chat-types';
@@ -62,6 +64,8 @@ interface Props {
   keepTime?: boolean;
   /** Assistant-turn rows: this turn is the one being written right now (a primitive, so the row's memo holds). */
   streaming?: boolean;
+  /** Assistant-turn rows: the conversation's most recent reply (card #236 — only its sign-in card is live). */
+  latest?: boolean;
   /** Above the last /compact or /clear: faded, with a hint beside it. */
   archived: boolean;
   archiveKind: 'compact' | 'clear' | null;
@@ -121,6 +125,7 @@ function renderContent(p: Props): React.ReactNode {
           provider={p.provider}
           showTimestamps={showTimestamps}
           streaming={p.streaming}
+          latest={p.latest}
         />
       );
     case 'prompt': {
@@ -164,9 +169,9 @@ function renderContent(p: Props): React.ReactNode {
           id={pickerId}
           options={entry.options}
           onCopy={(text, label) => {
-            navigator.clipboard.writeText(text).catch(() => {});
+            // The picker closes either way; a failed copy is said in the toast (announce needs no prop path).
+            void copyText(text).then((ok) => { if (!ok) announceFailed('copy'); });
             dismiss();
-            // onToast would be nicer but ChatView doesn't have it — minimal UX for now
             void label;
           }}
           onDismiss={dismiss}

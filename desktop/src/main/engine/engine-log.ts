@@ -20,6 +20,12 @@ export interface EngineLog {
   /** Mark the start of a spawn, so one file's runs can be told apart. */
   begin(args: readonly string[]): void;
   write(chunk: Buffer | string): void;
+  /** Flush and close the file; resolves once nothing more can land on disk.
+   *  WHY: the log's open and writes are async, so without this a stopped engine
+   *  could still create/append engine.log AFTER stop() returned — which made a test's
+   *  temp-folder cleanup fail with ENOTEMPTY on slow runners. Safe to call twice;
+   *  a later write() simply reopens (append) for a restarted engine. */
+  close(): Promise<void>;
 }
 
 export function openEngineLog(filePath: string, maxBytes = MAX_BYTES): EngineLog {
@@ -27,6 +33,7 @@ export function openEngineLog(filePath: string, maxBytes = MAX_BYTES): EngineLog
   let size = 0;
   let rotating = false;
   let failed = false;
+  let rotation: Promise<void> = Promise.resolve();
 
   // Opened on first write: the folder is the one models.ini was just written to
   // before the spawn, so it exists — no blocking mkdir needed.
@@ -40,9 +47,12 @@ export function openEngineLog(filePath: string, maxBytes = MAX_BYTES): EngineLog
     rotating = true;
     const old = stream;
     stream = null;
-    old.end(() => {
-      fs.promises.rename(filePath, `${filePath}.1`).catch(() => { /* keep appending to the same file */ })
-        .finally(() => { size = 0; rotating = false; });
+    // Kept as a promise so close() can wait for the rename too.
+    rotation = new Promise<void>((resolve) => {
+      old.end(() => {
+        fs.promises.rename(filePath, `${filePath}.1`).catch(() => { /* keep appending to the same file */ })
+          .finally(() => { size = 0; rotating = false; resolve(); });
+      });
     });
   };
 
@@ -61,5 +71,15 @@ export function openEngineLog(filePath: string, maxBytes = MAX_BYTES): EngineLog
   return {
     begin: (args) => write(`\n===== ${new Date().toISOString()} engine start: ${args.join(' ')}\n`),
     write,
+    close: async () => {
+      const s = stream;
+      stream = null;
+      if (s && !s.destroyed) {
+        // 'close' fires after the (possibly still pending) open and every queued
+        // write have finished — or after an error destroyed the stream.
+        await new Promise<void>((resolve) => { s.once('close', () => resolve()); s.end(); });
+      }
+      await rotation;
+    },
   };
 }

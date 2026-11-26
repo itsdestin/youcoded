@@ -13,6 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { readFolders, writeFolders, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
+import { folderUsage, noteProjectUsed } from './folder-usage';
 import { getManagedRoots, isRemovedProject } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
@@ -56,22 +57,57 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   // flow rewrites saved entries to their new managed path) — badge it like the synthesized rows.
   const projectsRoot = getManagedRoots()?.projectsRoot;
   const projectsPrefix = projectsRoot ? pathKey(projectsRoot) + path.sep : null;
-  const result: PickerFolder[] = folders.map((f) => ({
-    ...f,
-    exists: fs.existsSync(f.path),
-    ...(projectsPrefix && pathKey(f.path).startsWith(projectsPrefix) ? { managed: true as const } : {}),
-  }));
+  const managed = getManagedRoots()?.listProjects() ?? [];
+  // Last-use stamps of synced projects live in their own small file (folder-usage.ts, built from `usagePath`), read from memory here.
+  const usage = managed.length ? folderUsage(file) : {};
+  const result: PickerFolder[] = folders.map((f) => {
+    // A synced project that was stamped and LATER became a saved folder keeps its recency: use the usage stamp when it is newer than
+    // the saved entry's own (read-only; the saved-folders file is never written for this).
+    const stamp = usage[pathKey(f.path)];
+    const lastUsedAt = stamp && stamp > (f.lastUsedAt ?? 0) ? stamp : f.lastUsedAt;
+    return {
+      ...f,
+      ...(lastUsedAt ? { lastUsedAt } : {}),
+      exists: fs.existsSync(f.path),
+      ...(projectsPrefix && pathKey(f.path).startsWith(projectsPrefix) ? { managed: true as const } : {}),
+    };
+  });
   // Managed projects (sync spec §3) always appear in the picker, deduped against saved folders by
   // normalized path. addedAt:0 sorts them below user-added folders.
-  const managed = getManagedRoots()?.listProjects() ?? [];
   const known = new Set(result.map((f) => pathKey(f.path)));
+  // The rows that are only synthesized get their stamp the same way, so a project used most recently sorts first without ever
+  // becoming a saved folder.
   for (const p of managed) {
     if (isRemovedFromLists(p.path, saved)) continue;
     if (!known.has(pathKey(p.path))) {
-      result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true });
+      const at = usage[pathKey(p.path)];
+      result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true, ...(at ? { lastUsedAt: at } : {}) });
     }
   }
-  return result;
+  // Card #143 b: most recently used first. A stable sort, so folders never used (no stamp) keep the order they always had,
+  // and the synced projects appended above (addedAt 0) stay last among them.
+  return result.map((f, i) => ({ f, i })).sort((a, b) => ((b.f.lastUsedAt ?? 0) - (a.f.lastUsedAt ?? 0)) || a.i - b.i).map((x) => x.f);
+}
+
+/** Stamp a folder as just used (a session the person started in it): a saved folder on its own entry, a synced project in the usage file.
+ *  A start in a one-off folder (neither) must not add it to the list. Never throws. */
+export function noteFolderUsed(folderPath: unknown, file?: string): void {
+  try {
+    if (typeof folderPath !== 'string' || !folderPath) return;
+    const folders = readFolders(file);
+    const entry = folders.find((f) => keyOf(f.path) === keyOf(folderPath));
+    if (entry) {
+      entry.lastUsedAt = Date.now();
+      writeFolders(folders, file);
+      return;
+    }
+    // Not saved: a synced project is still a row in the picker, so it is stamped too, in its own file and WITHOUT being saved. A one-off
+    // folder that is neither saved nor a project gets nothing. Stamps of projects that no longer exist are dropped on every write.
+    const projects = getManagedRoots()?.listProjects() ?? [];
+    const here = projects.find((p) => keyOf(p.path) === keyOf(folderPath));
+    if (!here || isRemovedFromLists(here.path, folders)) return;
+    noteProjectUsed(keyOf(here.path), new Set(projects.map((p) => keyOf(p.path))), file);
+  } catch { /* an unwritable list must never stop a session from starting */ }
 }
 
 export function addFolder(folderPath: string, nickname: string | undefined, file?: string): SavedFolder {

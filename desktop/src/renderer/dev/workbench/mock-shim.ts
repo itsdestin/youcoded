@@ -250,6 +250,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
   'office.versions', 'office.restore', 'office.saveCopy',
+  // Home's row actions (card #143) — real channels (office:rename / duplicate / forget-recent); faked here for the workbench.
+  'office.rename', 'office.duplicate', 'office.forgetRecent',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -545,7 +547,7 @@ import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fa
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
-import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
+import type { OfficeBridge, OfficeFile, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 import { sameEndpoint } from '../../../shared/endpoint-address';
 import { FIXTURE_BASE } from './fixtures/clock';
@@ -595,12 +597,12 @@ function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void 
   }
 }
 
-/** `?update=available` — the status pill's update, which no scenario otherwise sends.
+/** `?update=none` — up to date (the chip still shows). `?update=available` — the status pill's update, which no scenario otherwise sends.
  *  `?update=ready` (#183): the update already downloaded in the background and waiting for a
  *  restart; `?update=ready-password` the same on a computer where installing asks for a
  *  password (a Linux package, or a Mac account that is not an administrator). */
 function updateStatusSwitch(): {
-  current: string; latest: string; update_available: true; download_url: string;
+  current: string; latest: string; update_available: boolean; download_url: string;
   downloaded?: boolean; needs_password?: boolean; installs_on_quit?: boolean;
 } | null {
   const mode = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('update');
@@ -612,6 +614,13 @@ function updateStatusSwitch(): {
     downloaded: true,
     needs_password: mode === 'ready-password',
     installs_on_quit: mode === 'ready',
+  };
+  // ?update=none: up to date, so the chip opens the full release notes (no Update button).
+  if (mode === 'none') return {
+    current: '1.3.4',
+    latest: '1.3.4',
+    update_available: false,
+    download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.3.4',
   };
   if (mode !== 'available') return null;
   return {
@@ -1331,6 +1340,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     chatgptPin === 'official' ? { state: 'signed-in', email: 'destin@example.com', plan: '', usage: null, route: 'official' }
     : chatgptPin === 'reauth' ? { state: 'signed-out', reauth: true }
     : chatgptPin === 'signed-out' ? { state: 'signed-out' }
+    : chatgptPin === 'expired' ? { state: 'signed-out', expired: true } // card #236
     : chatgptPin === 'waiting' ? { state: 'waiting' }
     : chatgptPin === 'blocked' ? { state: 'blocked', email: 'destin@example.com', reason: 'Your workspace admin has turned off Codex for this account.' }
     : chatgptPin === 'free' ? CHATGPT_SIGNED_IN_FREE
@@ -1408,8 +1418,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     : claudeCodePin === 'not-installed' ? { state: 'not-installed' }
     : claudeCodePin === 'unknown' ? { state: 'unknown' }
     : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
-    : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
+    // Card #236: a sign-in that has run out (the CLI still says loggedIn; replies fail).
+    : claudeCodePin === 'expired' ? { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false, expiresAt: '2026-11-16T08:29:49.037Z', expired: true }
+    : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false, expiresAt: '2026-11-23T08:29:49.037Z' };
+  // `?signIn=waiting` pins a started sign-in on "finish in your browser"; unpinned it
+  // finishes after 2.5 s, like the ChatGPT and OpenRouter fakes above.
+  const signInPin = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('signIn') : null;
+  let claudeSignInTimer: ReturnType<typeof setTimeout> | null = null;
   const claudeCode = { status: async () => claudeCodeStatus,
+    // Card #236 (MOCK_ONLY): the first-launch browser sign-in, offered again from the chat and Settings.
+    signIn: async () => {
+      if (claudeSignInTimer) clearTimeout(claudeSignInTimer);
+      if (signInPin !== 'waiting') {
+        claudeSignInTimer = setTimeout(() => { claudeCodeStatus = { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false, expiresAt: '2026-12-17T08:29:49.037Z' }; }, 2500);
+      }
+      return true;
+    },
+    cancelSignIn: async () => { if (claudeSignInTimer) clearTimeout(claudeSignInTimer); claudeSignInTimer = null; return true; },
     // First-run local models (F-5): a short wait, then installed but signed out —
     // what a real install leaves behind before the Claude sign-in.
     install: async () => {
@@ -1417,6 +1442,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       claudeCodeStatus = { state: 'signed-out' };
       return true;
     },
+  };
+
+  // Card #236 (MOCK_ONLY): the app's own connection check. `?online=0` = offline.
+  const network = {
+    check: async () => ({ online: typeof location === 'undefined' || new URLSearchParams(location.search).get('online') !== '0' }),
   };
 
   // Web search backends: two rows, neither keyed, as a fresh install has them.
@@ -3438,6 +3468,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
         : []),
       overallProgress: setupChecklist?.overallProgress ?? 100,
+      // Card #236: `?online=0` on the sign-in step = a sign-in button pressed with no internet.
+      ...(firstRunStep === 'AUTHENTICATE' && firstRunParams.get('online') === '0' ? { lastError: 'No internet connection. Connect, then try again.', lastErrorOffline: true } : {}),
       ...(prereqsPin === 'failed' ? { lastError: 'Error: HTTP 503 downloading https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0-64-bit.7z.exe' } : {}),
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
@@ -3727,6 +3759,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // `?marketplace=empty` keeps the registry-less state reachable (the Marketplace
   // and Library empty states are real surfaces too); default is the sampled
   // registry in fixtures/marketplace/registry.ts.
+  let marketplaceListCalls = 0;
   const marketplaceEmpty = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('marketplace') === 'empty';
   // Marketplace detail states nobody could photograph before (marketplace-detail friction,
@@ -3818,7 +3851,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // WHY the stress branch (render-cost plan, Task 0 step 2b): `?stressRows=`
     // must reach the Marketplace too, or the DOM-size sweep measures ~60 cards
     // and a whole-list render looks cheap.
-    listMarketplace: async () => (marketplaceEmpty ? []
+    // `?mpRefresh=fail`: the FIRST load works and every later one rejects, so a refresh that fails over an older list can be photographed.
+    listMarketplace: async () => (marketplaceListCalls++ > 0 && typeof location !== 'undefined' && new URLSearchParams(location.search).get('mpRefresh') === 'fail'
+      ? Promise.reject(new Error('The registry did not answer'))
+      : marketplaceEmpty ? []
       : activeScenario === 'stress' ? buildStressCatalog(MARKETPLACE_PLUGINS, stressRowCount())
       : buildCatalog(MARKETPLACE_PLUGINS)),
     list: async () => (marketplaceEmpty ? [] : installedSkills.map((s) => ({ ...s }))),
@@ -4084,8 +4120,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       ],
       fromCache: false,
     }) : ({
-      markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
-      entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
+      // WHY the real file's top lines (title, intro, empty [Unreleased]): the no-update view once
+      // drew them at the top of the notes (Destin, 2026-11-22); keeping them here shows that they
+      // stay hidden.
+      markdown: '# Changelog\n\nAll notable changes to YouCoded are documented in this file.\n\n## [Unreleased]\n\n## [1.3.4] — 2026-11-19\n\nA rebuilt buddy, a much smoother app, Office Home and faster local models.\n\n## [1.3.3] — 2026-11-02\n\n- Fixes for the file viewer.\n\n## [1.3.0] — 2026-09-11\n\n- Clearer messages when something goes wrong.',
+      entries: [
+        { version: '1.3.4', date: '2026-11-19', body: 'A rebuilt buddy, a much smoother app, Office Home and faster local models.' },
+        { version: '1.3.3', date: '2026-11-02', body: '- Fixes for the file viewer.' },
+        { version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' },
+      ],
       fromCache: false,
     }),
     getCachedDownload: async () => updateInstall ? { filePath: '/tmp/youcoded-1.3.0.pacman', version: '1.3.0' } : null,
@@ -4164,6 +4207,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         return { ok: true as const, value: { id: v.id, hidden: v.hidden } };
       },
     },
+    // WHY only behind ?pastedPicture=1 (card #134): the phone-paste review screen needs a picture to land in the message box,
+    // and the workbench has no clipboard or file picker. Both routes answer with the same practice picture path.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('pastedPicture') === '1' ? { dialog: {
+      openFile: async () => ['/home/you/uploads/pasted-image.png'],
+      openFolder: async () => null, openSound: async () => null, readTranscriptMeta: async () => null,
+      saveClipboardImage: async () => '/home/you/uploads/pasted-image.png',
+    } } : {}),
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its
@@ -4174,7 +4224,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       store.getState().sessions.forEach((x: any, i: number) => { perSession[x.id] = { status: colours[i] ?? 'gray' }; });
       return { anyNeedsAttention: true, perSession };
     } } } : {}),
-    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
+    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, network, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),
     office: createOfficeMock(activeScenario === 'empty'),
@@ -4469,11 +4519,14 @@ function createPagesMock(scenario: string): PagesBridge {
         const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
         if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
           w.__shootInflight += 1;
-          w.__shootHoldUntil = performance.now() + 8000;
+          // WHY 30 s, not 8 (2026-11-18, load-flaky-tests): at load 58-149 the house's first answer took longer than 8 s, the hold
+          // gave up and `page-home` was shot "Loading your rooms…", tripping the look-alike check. The hold ends the moment the
+          // answer lands (homeFirstAnswer, +250 ms), so the longer cap costs nothing on a quiet machine (same reasoning as below).
+          w.__shootHoldUntil = performance.now() + 30000;
           let held = true;
           const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
           homeFirstAnswer = () => { setTimeout(release, 250); };
-          setTimeout(release, 8000);
+          setTimeout(release, 30000);
         }
       }
       // WHY (2026-10-21, `shoot --check` failed once under heavy load, then passed): the `#menu-open` screen opens the
@@ -4667,20 +4720,51 @@ const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null
 function createOfficeMock(empty: boolean): OfficeBridge {
   const HOUR = 3_600_000;
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
-  const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  // WHY `let` lists (card #143 design stage): Home's Rename, Make a copy and Remove from Recent
+  // change them, and the next status answer must show it — as main's would.
+  let recent: OfficeFile[] = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  // Files beyond Recent, so the "In <project>" list has something of its own to show (Recent's
+  // files are not repeated there), and more than 12 of them, so "Show all" appears. They open the
+  // fixture of their kind.
+  const PROJ = '/home/you/Projects/community-garden';
+  let projectFiles: OfficeFile[] = empty ? [] : [
+    ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
+    { ...OFFICE_FILES[1], path: `${PROJ}/Volunteer rota.xlsx`, name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
+    { ...OFFICE_FILES[0], path: `${PROJ}/Grant report.docx`, name: 'Grant report.docx', at: ago(120 * HOUR) },
+    ...['Seed order', 'Plot map', 'Compost schedule', 'Harvest log', 'Workshop flyer', 'Meeting notes March', 'Meeting notes April',
+      'Budget 2027', 'Tool library', 'Rain barrel quote', 'Bee survey', 'Fall planting', 'Newsletter draft'].map((n, i) => {
+      const f = OFFICE_FILES[i % 3];
+      const name = `${n}${f.name.slice(f.name.lastIndexOf('.'))}`;
+      return { ...f, path: `${PROJ}/archive/${name}`, name, folder: 'archive', at: ago((130 + i * 20) * HOUR) };
+    }),
+  ];
+  const everywhere = () => [...recent, ...projectFiles];
+  const withName = (f: OfficeFile, name: string): OfficeFile => ({ ...f, name, path: `${f.path.slice(0, f.path.lastIndexOf('/') + 1)}${name}` });
   let created = 0;
   return {
-    status: async () => ({
-      available: true,
-      recent,
-      // Two files beyond Recent, so the "In <project>" list has something of its own to show
-      // (Recent's files are not repeated there). They open the fixture of their kind.
-      project: empty ? null : { name: 'community-garden', files: [
-        ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
-        { ...OFFICE_FILES[1], path: '/home/you/Projects/community-garden/Volunteer rota.xlsx', name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
-        { ...OFFICE_FILES[0], path: '/home/you/Projects/community-garden/Grant report.docx', name: 'Grant report.docx', at: ago(120 * HOUR) },
-      ] },
-    }),
+    status: async () => ({ available: true, recent, project: empty ? null : { name: 'community-garden', files: projectFiles } }),
+    // MOCK_ONLY (card #143): Home's row actions, designed ahead of main (mock-only.ts).
+    rename: async (path, newName) => {
+      const f = everywhere().find((x) => x.path === path);
+      if (!f) return { ok: false, message: "Office can't find this file." };
+      if (/[\\/]/.test(newName)) return { ok: false, message: 'A name can’t contain / or \\.' };
+      if (everywhere().some((x) => x.path !== path && x.folder === f.folder && x.name.toLowerCase() === newName.toLowerCase())) {
+        return { ok: false, message: 'A file with that name is already in this folder.' };
+      }
+      const next = withName(f, newName);
+      recent = recent.map((x) => (x.path === path ? next : x));
+      projectFiles = projectFiles.map((x) => (x.path === path ? next : x));
+      return { ok: true, file: next };
+    },
+    duplicate: async (path) => {
+      const f = everywhere().find((x) => x.path === path);
+      if (!f) return { ok: false, message: "Office can't find this file." };
+      const dot = f.name.lastIndexOf('.');
+      const copy = { ...withName(f, `${f.name.slice(0, dot)} (copy)${f.name.slice(dot)}`), at: new Date().toISOString() };
+      projectFiles = [copy, ...projectFiles];
+      return { ok: true, file: copy };
+    },
+    forgetRecent: async (path) => { recent = recent.filter((x) => x.path !== path); },
     create: async (kind) => {
       created += 1;
       const base = OFFICE_FILES.find((f) => f.kind === kind)!;

@@ -8,6 +8,8 @@ export const PROJECTS: readonly ScreenEntry[] = [
   pr('projects/files/filter', 'popover'),
   // The hero's description being written (close-session-4: the box keeps the card's margins).
   { ...pr('projects/files#description-edit', 'view'), open: [{ do: 'click', target: { role: 'button', labelStarts: '“The desktop and Android app' } }] },
+  // Card #134 round 4: the project list itself refused (the Before is the old bare "Select a project" line).
+  { ...pr('projects#list-failed', 'view', 'error-state'), params: { fail: 'artifacts.listProjectsIndex' }, newIn: 'after' as const, mark: 'projects' },
   pr('projects/conversations', 'view'),
   // Card #134 batch 2: the project's conversations / context lists refused.
   { ...pr('projects/conversations#load-failed', 'view', 'error-state'), params: { fail: 'project.listConversations' } },

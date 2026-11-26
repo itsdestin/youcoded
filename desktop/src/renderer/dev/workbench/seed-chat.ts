@@ -17,6 +17,8 @@ import { loadFixture } from './fixture-loader';
 import type { SessionTotals } from '../../state/session-totals';
 import type { ScenarioId } from './scenarios';
 import { RUNS } from './specialist-runs';
+// Card #143 a: a picture the practice chat can really draw (react-markdown drops data: pictures), for `shoot chat/menu/image`.
+import shootPictureUrl from '../../components/brand/app-icon-192.png';
 
 // @ts-ignore TS1343 — Vite rewrites import.meta.glob statically at build time.
 const convos = import.meta.glob('./fixtures/conversations/*.jsonl', {
@@ -207,7 +209,7 @@ export function buildHydratePayload(): SerializedChatState {
       const target = isCcQuestion ? 'claude-code' : 'native';
       const targetIndex = sources.findIndex(([name]) => name === target);
       sources.splice(targetIndex >= 0 ? targetIndex : sources.length, targetIndex >= 0 ? 1 : 0,
-        [`bubbles-${bubbleName}`, raw, isCcQuestion ? 'wb-1' : 'wb-2']);
+        [`bubbles-${bubbleName}`, raw.replace('__SHOOT_PICTURE__', shootPictureUrl), isCcQuestion ? 'wb-1' : 'wb-2']);
     } else {
       console.warn(`[workbench] no bubble-grouping fixture named "${bubbleName}"`);
     }

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog, net } from 'electron';
+import { useFetchForNetworkCheck } from './network-check';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -1806,6 +1807,7 @@ void app.whenReady().then(async () => {
 
   // Start native sync service — owns push/pull lifecycle, background timer,
   // session-end sync. Replaces bash hook sync when app is running.
+  useFetchForNetworkCheck((url, init) => net.fetch(url, init)); // WHY: the online check goes through the system proxy (network-check.ts)
   const syncService = new SyncService();
   setSyncService(syncService);
   syncService.start().catch(e => log('ERROR', 'Main', 'SyncService start failed', { error: String(e) }));

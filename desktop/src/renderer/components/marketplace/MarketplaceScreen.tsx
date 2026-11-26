@@ -20,7 +20,9 @@ import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetail
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
-import { Button, EmptyState, LoadingState, ScreenError } from "../ui";
+import { Button, EmptyState, ErrorState, LoadingState, ScreenError } from "../ui";
+import { useMarketplaceStats } from "../../state/marketplace-stats-context";
+import { plainMessage } from "../../utils/ipc-error";
 import { ScreenBand } from "../ScreenBand";
 import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
 import { useEscClose } from "../../hooks/use-esc-close";
@@ -33,6 +35,7 @@ import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 // Integrations carry their catalog metadata plus live installed/connected state
 // (type and detail page: IntegrationDetailOverlay.tsx since the 2026-10-04 redesign).
 import { IntegrationDetailOverlay, type IntegrationCardItem } from "./IntegrationDetailOverlay";
+import { announceFailed } from '../../utils/announce';
 
 // Integration icons live in the marketplace repo at integrations/icons/,
 // referenced via raw.githubusercontent.com. Pre-built once at module scope
@@ -80,6 +83,14 @@ export default function MarketplaceScreen({
   onExit, settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
 }: Props) {
   const mp = useMarketplace();
+  // Card #134: the install / like / vote chips vanish when the community totals fail to load, which
+  // read as "nobody has installed anything". `stats.error` is only reported when nothing is on screen to
+  // show instead (the context keeps totals it already had).
+  const stats = useMarketplaceStats();
+  // Destin: the two strips are one thin line each, so the raw reason is not shown; it is logged once per failure so it is not lost.
+  useEffect(() => { if (mp.registryError) console.warn('[marketplace] refresh failed:', plainMessage(mp.registryError)); }, [mp.registryError]);
+  useEffect(() => { if (stats.error) console.warn('[marketplace] counts failed to load:', plainMessage(stats.error)); }, [stats.error]);
+  const statsFailed = !!stats.error && Object.keys(stats.plugins).length === 0 && Object.keys(stats.themes).length === 0;
   const currentPlatform = useCurrentPlatform();
   const isPhoneDevice = deviceNoun() === 'phone';
   const [filter, setFilter] = useState<FilterState>(() => {
@@ -91,6 +102,7 @@ export default function MarketplaceScreen({
   // Photo-only build: `shoot` opens a tab, a search, or a detail by name. Fixture ids from the
   // practice marketplace: the civic-report skill and the meadow-mist theme.
   useScreenOpen('marketplace/skills', () => setFilter({ ...emptyFilter(), type: 'plugin' }));
+  useScreenOpen('marketplace/refresh-failed', () => { setFilter({ ...emptyFilter(), type: 'plugin' }); void mp.refresh(); });
   useScreenOpen('marketplace/themes', () => setFilter({ ...emptyFilter(), type: 'theme' }));
   useScreenOpen('marketplace/search', () => setFilter({ ...emptyFilter(), query: 'civic' }));
   // WHY one screen per KIND of detail page (2026-10-04, detail-page redesign): the page
@@ -150,11 +162,19 @@ export default function MarketplaceScreen({
        .catch(() => setIntegrations([]));
   }, []);
 
-  const refreshIntegrations = async () => {
+  // Card #134 round 4: returns the fresh list (or null if it could not be read) so the open detail page can show the NEW state
+  // — it holds its own copy, so a failed install's recorded error never reached it. A list that cannot be read is said so by the
+  // caller, because the screen may then be out of date.
+  const refreshIntegrations = async (): Promise<IntegrationCardItem[] | null> => {
     try {
-      const items = await (window as any).claude.integrations.list();
-      setIntegrations(items || []);
-    } catch { /* ignore */ }
+      const items: IntegrationCardItem[] = (await (window as any).claude.integrations.list()) || [];
+      setIntegrations(items);
+      setIntegrationDetail((prev) => (prev ? items.find((it) => it.slug === prev.slug) ?? prev : prev));
+      return items;
+    } catch (e) {
+      console.warn('[marketplace] integrations list refresh failed:', e);
+      return null;
+    }
   };
 
   // Compute the status-pill text/tone for an integration. Mirrors the
@@ -188,37 +208,53 @@ export default function MarketplaceScreen({
   // command — that path was timing-fragile and frequently no-op'd against a
   // still-booting CLI.
   const openSetupSession = async (displayName: string) => {
-    const info = await (window as any).claude.session.create({
-      name: `Set up ${displayName}`,
-      cwd: "",
-      skipPermissions: false,
-      model: "claude-sonnet-4-6",
-    });
-    if (info?.id) onExit();
+    // Card #134 round 4: a refused/failed create used to do nothing — the marketplace stayed as it was with no word. Only a real
+    // failure speaks: a result without an id, or a rejection.
+    try {
+      const info = await (window as any).claude.session.create({
+        name: `Set up ${displayName}`,
+        cwd: "",
+        skipPermissions: false,
+        model: "claude-sonnet-4-6",
+      });
+      if (info?.id) onExit();
+      else announceFailed('open a setup session', (info as { error?: unknown } | undefined)?.error);
+    } catch (e) {
+      announceFailed('open a setup session', e);
+    }
   };
 
   const installIntegration = async (item: IntegrationCardItem) => {
     if (item.status !== "available") return;
-    const result = await (window as any).claude.integrations.install(item.slug);
-    await refreshIntegrations();
+    let result: any;
+    try { result = await (window as any).claude.integrations.install(item.slug); }
+    catch (e) { announceFailed(`install ${item.displayName}`, e); return; }
+    // A refused install is recorded by main and shows on the detail page ("Couldn't install" + Try again) once the list is re-read.
+    if ((await refreshIntegrations()) === null) announceFailed('refresh the integrations list');
     if (result?.postInstallCommand) {
       setSetupHint({ slug: item.slug, displayName: item.displayName, command: result.postInstallCommand });
     }
   };
 
   const connectIntegration = async (item: IntegrationCardItem) => {
-    const result = await (window as any).claude.integrations.connect(item.slug);
-    await refreshIntegrations();
+    let result: any;
+    try { result = await (window as any).claude.integrations.connect(item.slug); }
+    catch (e) { announceFailed(`connect ${item.displayName}`, e); return; }
+    // Unlike install, main does NOT record a refused connect anywhere the page reads, so it is said here.
+    if (result?.error) announceFailed(`connect ${item.displayName}`, result.error);
+    if ((await refreshIntegrations()) === null) announceFailed('refresh the integrations list');
     if (result?.postInstallCommand) {
       setSetupHint({ slug: item.slug, displayName: item.displayName, command: result.postInstallCommand });
     }
   };
 
   const uninstallIntegration = async (item: IntegrationCardItem) => {
-    await (window as any).claude.integrations.uninstall(item.slug);
-    await refreshIntegrations();
+    try { await (window as any).claude.integrations.uninstall(item.slug); }
+    catch (e) { announceFailed(`uninstall ${item.displayName}`, e); return false; }
+    if ((await refreshIntegrations()) === null) announceFailed('refresh the integrations list');
     // Clear any setup hint for this slug — the command's moot now.
     setSetupHint((prev) => (prev?.slug === item.slug ? null : prev));
+    return true;
   };
 
   // Register with the dismissal stack. ESC (desktop) and hardware back
@@ -517,6 +553,19 @@ export default function MarketplaceScreen({
       <div className="px-3 sm:px-4 mt-2">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
+      {/* N4 (Destin): the marketplace's OWN refresh failed while an older list is on screen (registryError, not `error`, which also carries a failed installed-skills read). The list stays usable; the strip says it may be
+          out of date and offers Try again. `mp.error` is cleared when the next load starts and only set again on failure, so
+          it disappears on the next successful refresh. A screen with NOTHING loaded gets the full-screen error instead. */}
+      {!!mp.registryError && !registryEmpty && (
+        <div className="px-3 sm:px-4 mt-2">
+          <ErrorState variant="inline" message="Couldn't refresh the marketplace, so this list may be out of date." onRetry={() => { void mp.refresh(); }} />
+        </div>
+      )}
+      {statsFailed && (
+        <div className="px-3 sm:px-4 mt-2">
+          <ErrorState variant="inline" message="Couldn't load the install and like counts, so they are hidden." onRetry={() => { void stats.refresh(); }} />
+        </div>
+      )}
 
       {/* Tightened section spacing: gap-2 between rails (was gap-6) lets the
           rail's pt-3/pb-6 shadow buffers carry the visual rhythm instead of
@@ -736,8 +785,8 @@ export default function MarketplaceScreen({
               await connectIntegration(integrationDetail);
             }}
             onUninstall={async () => {
-              await uninstallIntegration(integrationDetail);
-              setIntegrationDetail(null);
+              // Stay on the page when the uninstall failed (the toast says so); close only when it worked.
+              if (await uninstallIntegration(integrationDetail)) setIntegrationDetail(null);
             }}
             statusBadge={integrationStatusBadge(integrationDetail)}
             iconUrl={integrationDetail.iconUrl ? `${INTEGRATION_ICON_BASE}/${integrationDetail.iconUrl}` : undefined}

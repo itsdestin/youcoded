@@ -1,4 +1,5 @@
 import { KeepGoingRow } from './KeepGoingRow';
+import { announceFailed } from '../utils/announce';
 import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
@@ -51,6 +52,7 @@ import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
+import { HistoryTopMarker, useHeldFlag } from './HistoryTopMarker';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -217,6 +219,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         if (cancelled || !res?.ok || !Array.isArray(res.artifacts)) return;
         artifactDispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: res.artifacts });
       })
+      // WHY silent: a background pre-warm so inline file pills can resolve; nothing is waiting on it. The files drawer
+      // runs its own read and shows its own "Couldn't load this chat's files" notice with Try again when that one fails.
       .catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, sessionId, artifactDispatch]);
@@ -487,6 +491,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   /** The timer fires long after the closure that scheduled it went stale. */
   const loadOlderPageRef = useRef<() => void>(() => {});
 
+  // Card #134 r4: set only by a real failure of the CURRENT conversation's request; cleared by success, Try again, switching conversation.
+  const [olderFailed, setOlderFailed] = useHeldFlag(scrollContainerRef, prependAnchorRef, captureScrollAnchor);
+  const liveSessionRef = useRef(sessionId); liveSessionRef.current = sessionId;
   const loadOlderPage = useCallback(async () => {
     const cursor = history.cursor;
     if (!cursor || history.loading) return;
@@ -494,7 +501,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // Announce FIRST: `loading` is the one-in-flight guard, so a second sentinel
     // hit in the same frame must already see it set.
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
-    try {
+    const stillHere = () => liveSessionRef.current === sessionId;    try {
       const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: cursor });
       // Main could not LOCATE the transcript — NOT "this is the beginning of the
       // conversation". Recording it as a page would write hasMore:false and a
@@ -516,33 +523,35 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             unresolvedRetryRef.current.notBefore = 0;
             void loadOlderPageRef.current();
           }, delay);
-        }
+        } else if (stillHere()) { console.warn('[chat] older history could not be located after retries'); setOlderFailed(true); }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
         return;
       }
       if (page) {
-        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; if (stillHere()) setOlderFailed(false);
         // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
         // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
         dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true });
       } else {
+        if (stillHere()) { console.warn('[chat] older history request returned nothing'); setOlderFailed(true); }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
-    } catch {
-      // Clear the flag so the next scroll retries — a stuck `loading` would make
-      // the rest of the conversation permanently unreachable.
+    } catch (e) {
+      // FAILED clears `loading` (a stuck flag would make the rest of the conversation unreachable).
+      if (stillHere()) { console.warn('[chat] older history request failed:', e); setOlderFailed(true); }
       dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
     }
-  }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor]);
+  }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor, setOlderFailed]);
 
   useEffect(() => { loadOlderPageRef.current = loadOlderPage; });
+  useEffect(() => { setOlderFailed(false); }, [history.cursor, history.hasMore]); // refilled by something else: the old failure is moot
 
   // A pending retry belongs to the conversation that scheduled it. Switching
   // sessions (this component is reused per session id) must not fire it against
   // the new one, and must give the new one a full budget of its own.
   useEffect(() => {
-    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false);
     return () => {
       if (unresolvedTimerRef.current) clearTimeout(unresolvedTimerRef.current);
       unresolvedTimerRef.current = null;
@@ -550,7 +559,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [sessionId]);
 
   useEffect(() => {
-    if (!history.hasMore || history.loading || !history.cursor) return;
+    if (!history.hasMore || history.loading || !history.cursor || olderFailed) return;
     // No IntersectionObserver (an exotic WebView): fall back to nothing rather
     // than eagerly loading the whole conversation, which is the cost this
     // feature exists to avoid. There is NO scroll-handler backstop — this
@@ -567,7 +576,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [history.hasMore, history.loading, history.cursor, loadOlderPage]);
+  }, [history.hasMore, history.loading, history.cursor, loadOlderPage, olderFailed]);
 
   // Hold the reader's place across a prepended page. Runs BEFORE paint (useLayoutEffect), so the prepended
   // turns are never SEEN to push the view down, and keeps correcting for a short window afterwards because
@@ -626,7 +635,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       if (endAnchorWindowRef.current === end) endAnchorWindowRef.current = null;
     }
     endAnchorWindowRef.current = end;
-  }, [state.timeline]);
+  }, [state.timeline, olderFailed]);   // olderFailed: the notice box above the messages also holds the reader's place
   // WHY separate: the window must outlive later timeline changes (a streamed delta must not cut the
   // correction short), so the layout effect above has no cleanup of its own; only leaving the chat ends it.
   useEffect(() => () => { endAnchorWindowRef.current?.(); }, []);
@@ -1182,7 +1191,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             only while there IS older history, so reaching the beginning of the
             conversation stops the fetching for good. */}
         {history.hasMore && (
-          <div ref={historySentinelRef} data-history-sentinel className="h-px" aria-hidden="true" />
+          <HistoryTopMarker failed={olderFailed} sentinelRef={historySentinelRef} onRetry={() => { unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false); void loadOlderPage(); }} />
         )}
         {state.timeline.length === 0 && !state.isThinking ? null : (
           <>
@@ -1197,6 +1206,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // timeline instead, which threw away readable history to express a
               // context reset (Destin, 2026-07-28).
               const { index: lastArchiveIdx, kind: archiveKind } = archiveBoundary;
+              // Card #236: a sign-in card shows only while its reply is the last thing in the chat — it leaves
+              // as soon as the person sends another message (review round 2, R2-3), before any reply arrives.
+              let lastAssistantIdx = -1;
+              for (let i = presentation.timeline.length - 1; i >= 0; i--) {
+                const kind = presentation.timeline[i].kind;
+                if (kind === 'assistant-turn') { lastAssistantIdx = i; break; }
+                if (kind === 'user') break;
+              }
               return presentation.timeline.map((entry, idx) => {
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
@@ -1237,6 +1254,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     // "the model is writing this turn now". Lets a long open code fence be drawn in
                     // chunks only while that is true (MarkdownContent `live`).
                     streaming={isAssistant && !!turn && streamingTurnId === turn.id}
+                    latest={isAssistant && idx === lastAssistantIdx}
                     archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
                     archiveKind={archiveKind}
                     foldHeight={foldHeight}
@@ -1397,7 +1415,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               ? MODEL_LOADING_DEMOS[demoLoading] ?? MODEL_LOADING_DEMOS['1']
               : { modelState: state.modelState, modelInfo: state.modelInfo, loadedBytes: state.modelLoadedBytes,
                 loadExpectedMs: state.modelLoadExpectedMs, everResident: state.modelEverResident, isThinking: state.isThinking })}
-            onReload={(modelId) => { void window.claude.models.load(modelId, sessionId); }}
+            onReload={(modelId) => { void Promise.resolve(window.claude.models.load(modelId, sessionId)).catch((e) => announceFailed('reload the model', e)); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.

@@ -20,6 +20,7 @@ import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { toolOutcome } from '../utils/tool-outcome';
 import { Tooltip } from './ui';
+import { ClaudeSignInNotice, ClaudeConnectionNotice } from './SignInNotices';
 
 interface Props {
   turn: AssistantTurn;
@@ -31,6 +32,8 @@ interface Props {
   showTimestamps: boolean;
   /** This turn is the one the model is writing right now (the chat's currentTurnId). False/absent for finished and history turns. */
   streaming?: boolean;
+  /** The conversation's most recent reply — only its sign-in card offers buttons (card #236). */
+  latest?: boolean;
 }
 
 // Non-end_turn stop reasons rendered inline under the affected turn.
@@ -284,7 +287,7 @@ export interface VisualBubble {
   /** Every reasoning segment of the bubble, joined by a blank line, keyed by
    *  the first one's messageId. */
   reasoning?: { content: string; messageId: string };
-  text?: { content: string; messageId: string; findIndex: number };
+  text?: { content: string; messageId: string; findIndex: number; apiError?: string };
   plan?: { content: string; messageId: string; planFilePath?: string; allowedPrompts?: unknown };
   /** Every tool group in the bubble, in call order. Rendered as ONE group. */
   toolGroupIds: string[];
@@ -319,7 +322,7 @@ export function splitIntoBubbles(turn: Pick<AssistantTurn, 'segments'>): VisualB
       // text / tool / text shape keeps one bubble per text block).
       if (spoken()) { bubbles.push(current!); current = null; }
       const bubble = current ?? open(seg.messageId);
-      bubble.text = { content: seg.content, messageId: seg.messageId, findIndex: textIndex++ };
+      bubble.text = { content: seg.content, messageId: seg.messageId, findIndex: textIndex++, apiError: seg.apiError };
     } else if (seg.type === 'plan') {
       // A plan counts as speech; the following ExitPlanMode group attaches below.
       if (spoken()) { bubbles.push(current!); current = null; }
@@ -448,6 +451,9 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   if (prev.showTimestamps !== next.showTimestamps) return false;
   // The turn ending flips this with no change to the turn object; the text must redraw once as one piece.
   if (prev.streaming !== next.streaming) return false;
+  // WHY (card #236 review F2): `latest` flips true to false on the OLD reply when the person sends another
+  // message, with no change to the turn object. Without this the sign-in card stayed on screen instead of leaving.
+  if (prev.latest !== next.latest) return false;
 
   // Same turn object (checked above) ⇒ same segments ⇒ same group IDs. We only
   // need to walk one side's IDs.
@@ -464,7 +470,7 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   return true;
 }
 
-export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps, streaming }: Props) {
+export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps, streaming, latest }: Props) {
   // Read opt-in metadata preference here so the strip below only renders when
   // the user has explicitly turned it on in PreferencesPopup (default false).
   const { showTurnMetadata } = useTheme();
@@ -539,6 +545,12 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   return (
     <>
       {shown.map(({ bubble, sentFiles }, i) => {
+        // Card #236: a reply Claude Code wrote ITSELF because the sign-in ran out
+        // ("Login expired · Please run /login") becomes the sign-in card, chosen by
+        // CC's own label, never by its words.
+        if (bubble.text?.apiError === 'authentication_failed' && bubble.toolGroupIds.length === 0) {
+          return <ClaudeSignInNotice key={bubble.key} latest={!!latest} />;
+        }
         const hasTools = bubble.toolGroupIds.length > 0;
         // A sent-files card counts as content: a bubble holding only that card
         // must get the prose padding, not the tight tools-only padding.
@@ -581,7 +593,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
             </div>
           )}
         </>);
-        return (
+        const normal = (
           <div key={bubble.key} className="flex justify-start px-4 py-0.5">
             <div className={`assistant-bubble max-w-[85%] break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : reasoningOnly ? 'py-2.5' : 'py-3.5'}`}>
               {/* Fixed order, one of each (Destin, 2026-09-02): the reasoning
@@ -634,6 +646,13 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
             </div>
           </div>
         );
+        // Card #236 (round 2 S-offline-chat): Claude Code's own connection-error reply on the LATEST
+        // turn asks the app's connection check; only a confirmed "offline" swaps it for the
+        // No internet card. Online, or an older reply, keeps today's bubble — never a guess.
+        const connectionError = bubble.text?.apiError === 'server_error' || bubble.text?.apiError === 'unknown';
+        return connectionError && latest
+          ? <ClaudeConnectionNotice key={bubble.key} fallback={normal} />
+          : normal;
       })}
     </>
   );

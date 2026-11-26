@@ -1,1 +1,1 @@
-2026-11-18: Download v1.3.3 from youcoded.ai
+Our companion app for Android is now fully functional and available at youcoded.ai. If you encounter any issues, please report them from Settings > Help & Feedback > Report a Bug.

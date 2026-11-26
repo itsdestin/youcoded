@@ -17,6 +17,17 @@ Well.... kind of everything? Youcoded is an AI assistant at its core, but it's a
 
 Free and open source for Windows, macOS, Linux and Android, plus any web browser through remote access. iOS/iPadOS in exploration. **[Download at youcoded.ai](https://youcoded.ai)**
 
+<!-- WHY (2026-11-18, Destin): the README described what youcoded does but never why it
+exists, so it read as "another AI assistant". This section carries the vision written
+down in youcoded-dev docs/vision/VISION.md. Keep future plans labeled as plans. -->
+## Why it exists
+
+For twenty years, software has drifted toward "own nothing and be happy": every program a subscription, every file and photo held by a handful of companies. Those companies stayed on top partly because they could afford to hire nearly every good engineer. AI changes that. When anyone can describe what they want and have it built, a community of ordinary people can make what used to take a whole company.
+
+Youcoded is built on that idea. It isn't open source in the usual sense, where you *can* contribute if you happen to know how to code. The premise is that **everyone who installs it becomes a developer**: make a page, a theme, a skill or a fix just by asking for it, then share it with everyone else. An app owned by nobody, improved by everybody.
+
+Where it's headed: an everything app, the home base for your whole digital life. Your devices working together as one, your data on hardware you own, your home, money and documents run from one place, and no subscription required, down to running fully offline on a model on your own computer. Some of that is here today; the rest is being built in the open.
+
 ## What's inside
 
 - Themes, Pages and skills you create by describing them, and a community marketplace to share them

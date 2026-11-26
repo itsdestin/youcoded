@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Tooltip } from './ui';
 
 const BRAILLE_CHARS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -34,6 +34,10 @@ interface Props {
 
 export default function BrailleBurst({ children, onTrigger, disabled, className, title }: Props) {
   const [particles, setParticles] = useState<Particle[]>([]);
+  // WHY (round 4 review): the 500 ms clean-up timer was never cleared, so leaving the screen (or a test ending) inside that window
+  // ran setParticles on nothing, and a test torn down first threw "window is not defined" as an unhandled error. Invisible to users.
+  const cleanupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (cleanupTimer.current) clearTimeout(cleanupTimer.current); }, []);
 
   const burst = useCallback(() => {
     if (disabled) return;
@@ -52,7 +56,8 @@ export default function BrailleBurst({ children, onTrigger, disabled, className,
     setParticles(batch);
     onTrigger();
     // Clean up after animation completes
-    setTimeout(() => setParticles([]), 500);
+    if (cleanupTimer.current) clearTimeout(cleanupTimer.current);
+    cleanupTimer.current = setTimeout(() => { cleanupTimer.current = null; setParticles([]); }, 500);
   }, [disabled, onTrigger]);
 
   return (

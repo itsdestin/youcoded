@@ -1,0 +1,105 @@
+name: Claude Code message sending
+
+# Can the app still SEND a chat message to the LATEST published Claude Code?
+#
+# WHY (2026-11-18): Claude Code 2.1.326 changed how its message box draws a long draft, and every long message in a
+# new YouCoded chat sat "Paused" from the day it shipped — the pop-up and startup checks never send a message, so
+# nothing noticed. This sends real messages the way the app does (the real queue, the Claude Code plugin and the real
+# screen reader, desktop/test-conpty/check-send-drift.mjs) at several message lengths, terminal sizes and both
+# renderers, plus one case that must wait for a permission menu to close, and passes only when Claude Code records
+# each message.
+#
+# Needs NO secrets and costs nothing: Claude Code talks to a local stand-in API (fake-anthropic.mjs). A failure turns
+# the run red, writes the report to the run's summary page and (daily run only) pings Destin's phone.
+on:
+  schedule:
+    # 09:47 UTC daily, after the pop-up check, off the hour on purpose.
+    - cron: '47 9 * * *'
+  workflow_dispatch:
+  # A change to the sending path is checked before it merges, against the same latest Claude Code.
+  # Broad on purpose (review, 2026-11-18): the send path reaches the queue, the Claude Code plugin source, the worker,
+  # the screen reader and the shared parsers it imports — a narrow list missed several of them.
+  pull_request:
+    paths:
+      - 'desktop/src/main/**'
+      - 'desktop/src/shared/**'
+      - 'desktop/hook-scripts/statusline.sh'
+      - 'desktop/test-conpty/check-send-drift.mjs'
+      - 'desktop/test-conpty/cc-capture-lib.mjs'
+      - 'desktop/test-conpty/fake-anthropic.mjs'
+      - '.github/workflows/cc-send-drift.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.check.outputs.verdict }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      # No token left in .git/config: the job runs an untrusted package (npm's
+      # latest Claude Code) and nothing it starts should find one.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      # No `cache: npm`: an untrusted package runs here, and the npm cache is
+      # shared with the build workflows.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Build the app's backend
+        run: npm run build:main
+
+      # One retry before deciding: a slow runner can miss a deadline once; a real change fails both runs the same way.
+      # The verdict (ok / changed / broken / check-failed) goes to the alert job; exit codes are in the script's header.
+      - name: Send messages to the latest Claude Code through the app's queue
+        id: check
+        run: |
+          set +e
+          node test-conpty/check-send-drift.mjs --latest --jobs 3; code=$?
+          case "$code" in 0) ;; *)
+            echo "::warning::First run ended with code $code — retrying once to rule out a flake."
+            node test-conpty/check-send-drift.mjs --latest --jobs 3; code=$? ;;
+          esac
+          [ "$code" = 0 ] && { echo "verdict=ok" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$code" = 1 ] && { echo "verdict=broken" >> "$GITHUB_OUTPUT"; exit 1; }
+          echo "verdict=check-failed" >> "$GITHUB_OUTPUT"; exit 1
+
+  # Ping Destin's phone through the shared alert (.github/actions/drift-alert): when users are affected (new, or a
+  # repeat saying how long it has lasted), once when that clears, and when the check itself broke. Harmless changes
+  # send nothing. WHY its own job: the job above runs an untrusted package and is given no secrets on purpose; this one
+  # runs only that action from the repository. Silent when the NTFY_TOPIC secret is not set.
+  alert:
+    needs: send
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read    # this workflow's run history: a new problem, or day N of the same one
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/drift-alert
+      - uses: ./.github/actions/drift-alert
+        with:
+          verdict: ${{ needs.send.outputs.verdict }}
+          check-name: message sending
+          workflow-file: cc-send-drift.yml
+          broken-title: "YouCoded: messages may not send"
+          broken-body: "The newest Claude Code broke message sending in YouCoded's test: chat messages may not go through. YouCoded needs an update."
+          ntfy-topic: ${{ secrets.NTFY_TOPIC }}
+          github-token: ${{ github.token }}

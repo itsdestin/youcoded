@@ -15,6 +15,9 @@ export interface SavedFolder {
   // (backlog row 10): this computer lists it again. Without it the entry would stay hidden like
   // every other device's, because the removed marker is per project, not per device.
   readded?: true;
+  // When a session last started in this folder (ms). Card #143 b (deck C-3, Destin 2026-11-13: reorder the one list by
+  // last use). Absent until the folder is used once after this was added; those keep their old order, below the used ones.
+  lastUsedAt?: number;
 }
 
 /** A row of the new-session folder picker: a saved folder, or a synced project shown beside them. */

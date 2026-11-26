@@ -621,6 +621,56 @@ describe('SessionManager', () => {
     expect(manager.listSessions()).toHaveLength(0);
   });
 
+  // Review of the unexpected-exit fix: Node can deliver the process 'exit' event BEFORE the parent has read the worker's
+  // {type:'exit'} message (~2% of clean exits). The decision must wait for the channel, and the real message must win.
+  describe('a worker process exit', () => {
+    const lastHandler = (ev: string) => mockWorker.on.mock.calls.slice().reverse().find((c: any) => c[0] === ev)?.[1];
+    beforeEach(() => { vi.useFakeTimers(); (mockWorker as any).connected = true; });
+    afterEach(() => { vi.useRealTimers(); delete (mockWorker as any).connected; });
+
+    it('reports a clean exit as code 0 when the process exit event arrives BEFORE the exit message', () => {
+      manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      lastHandler('exit')();                                   // process 'exit' first ...
+      expect(codes).toEqual([]);                               // ... nothing decided yet
+      lastHandler('message')({ type: 'exit', exitCode: 0 });   // ... the real message then arrives
+      lastHandler('disconnect')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([0]);                              // exactly one answer, and it is the clean one
+    });
+
+    it('keeps a deliberate handoff stop clean (0) when the exit event comes first and the frame carries a signal code', () => {
+      const info = manager.createSession({ name: 'handoff', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      void manager.stopSessionForHandoff(info.id);
+      lastHandler('exit')();                                       // process exit event first (handoff entry cleared here)
+      lastHandler('message')({ type: 'exit', exitCode: 143 });     // then the frame, carrying SIGTERM's code
+      lastHandler('disconnect')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([0]);
+    });
+
+    it('reports a worker that died without any exit message as an unexpected exit (1), once the channel has closed', () => {
+      manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      lastHandler('exit')();
+      lastHandler('disconnect')();
+      expect(codes).toEqual([1]);
+    });
+
+    it('also decides after the settle time when the channel never reports closing', () => {
+      manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      lastHandler('exit')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([1]);
+    });
+  });
+
   it('does not emit session-exit after explicit destroy', () => {
     manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
 

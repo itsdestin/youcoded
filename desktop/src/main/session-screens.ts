@@ -106,6 +106,9 @@ const fresh = (): PerSession => ({
   screenGen: 0, screenCache: null, focusScreen: null, queueHeldByRecord: false,
 });
 
+/** Why queue automation may not type into a session (SessionScreens.queueInputBlock). */
+export type QueueInputBlock = 'no-terminal' | 'updating' | 'question' | 'screen';
+
 export class SessionScreens {
   private readonly per = new Map<string, PerSession>();
   private readonly now: () => number;
@@ -162,12 +165,25 @@ export class SessionScreens {
   }
   hasTerminal(sessionId: string): boolean { return !!this.per.get(sessionId)?.term; }
   /** Queue automation needs positive parsed ownership; a missing/unknown reading is NEVER safe. */
-  queueInputSafe(sessionId: string): boolean {
+  queueInputSafe(sessionId: string): boolean { return this.queueInputBlock(sessionId) === null; }
+
+  /**
+   * Why queue automation may not type into this session right now, or null when it may. The reasons are for saying why a
+   * message waits (Send now, card #278), never for deciding: every non-null reason refuses alike.
+   *  - 'no-terminal' / 'updating': no reading yet, or bytes still being parsed (both pass on their own);
+   *  - 'question': the conversation's own question, a password ask, or a card the app is showing for a terminal menu;
+   *  - 'screen': the screen shows something other than the message box (a pop-up, history search, the agents view).
+   * A helper agent's question is NOT a reason (record `holdsMessageBox`): it never takes the box, and if Claude Code ever
+   * drew it over the box the screen reading below still refuses.
+   */
+  queueInputBlock(sessionId: string): QueueInputBlock | null {
     const s = this.per.get(sessionId); const need = this.deps.records.screenNeed(sessionId);
-    if (!s?.term || s.pending > 0 || !need || need.asking || need.permissionCard || s.reader?.shownCardId) return false;
+    if (!s?.term || !need) return 'no-terminal';
+    if (s.pending > 0) return 'updating';
+    if (need.holdsMessageBox || s.reader?.shownCardId) return 'question';
     // WHY read the actual current generation synchronously: a prior null input-block
     // can mean unknown, and a 100ms cached verdict can predate a newly parsed popup.
-    return readInputFocus(this.readScreen(s)).kind === 'message-box';
+    return readInputFocus(this.readScreen(s)).kind === 'message-box' ? null : 'screen';
   }
 
   // ------------------------------------------------------------------------------------------------------------------------------------
@@ -287,7 +303,7 @@ export class SessionScreens {
     else if (!gate && s.stuckShown) this.clearStuck(sessionId, s);
     // WHY (2026-10-22): a card or ask closing can make input safe with no new terminal output, and only output used to
     // wake the queue, so waiting messages sat until the next idle poll. Checked only on that closing edge (a screen read).
-    const held = need.asking || !!need.permissionCard;
+    const held = need.holdsMessageBox;
     if (s.queueHeldByRecord && !held && this.queueInputSafe(sessionId)) this.deps.onQueueInputReady?.(sessionId);
     s.queueHeldByRecord = held;
   }

@@ -413,10 +413,34 @@ describe('native host delivery boundaries (offline investigation)', () => {
     undefined, undefined, undefined, undefined, undefined, undefined, b.home);
     host.on('transcript-event', e => { if (e.type === 'user-message' && e.data.injected === 'specialist-report') injected.push(e); });
     expect(await host.resume('parent', root)).toBe(true);
+    // Reopen alone never wakes the model; the report rides in with the user's next message.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(injected).toHaveLength(0); expect(prompts).toHaveLength(0);
+    host.send('parent', 'next'); await vi.waitFor(() => expect(prompts).toHaveLength(1));
     await (host as any).live.get('parent').running;
-    expect(injected).toHaveLength(1); expect(prompts).toHaveLength(1);
+    expect(injected).toHaveLength(1);
     expect(JSON.stringify(prompts[0])).toContain('SYNTHETIC-REPORT-TOKEN');
     expect((host as any).ledger.listFor(root, 'parent').find((r: any) => r.childId === child).delivered).toBe(true);
+  });
+
+  it('destroy waits for an in-flight delivered-flag write so a quit cannot lose it (card #266)', async () => {
+    const b = await boot(), child = await b.spawn();
+    const writeStarted = gate(), writeRelease = gate();
+    releases.push(writeRelease.resolve);
+    const original = b.h.ledger.confirmDelivered.bind(b.h.ledger);
+    vi.spyOn(b.h.ledger, 'confirmDelivered').mockImplementation(async (...args: any[]) => {
+      writeStarted.resolve(); await writeRelease.promise; return original(...args);
+    });
+    b.childRelease.resolve();
+    await writeStarted.promise; // report injected; the delivered flag write is now stuck in flight
+    let destroyed = false;
+    const destroying = host.destroy('parent').then(() => { destroyed = true; });
+    // Negative check: destroy must still be waiting. Let the event loop turn a few times.
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(destroyed).toBe(false);
+    writeRelease.resolve();
+    await destroying;
+    expect(b.record(child).delivered).toBe(true);
   });
 
   it('does not duplicate an injected report when both marker and confirmation writes fail', async () => {
@@ -447,9 +471,13 @@ describe('native host delivery boundaries (offline investigation)', () => {
       async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null,
       undefined, undefined, undefined, undefined, undefined, undefined, b.home);
     host.on('transcript-event', e => { if (e.type === 'user-message' && e.data.injected === 'specialist-report') injected++; });
-    await host.resume('parent', root); await (host as any).live.get('parent').running;
+    await host.resume('parent', root);
+    // Reopen never starts a turn by itself; a user message then carries any report that was never shown.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(requests).toBe(0);
+    host.send('parent', 'next'); await vi.waitFor(() => expect(requests).toBe(1));
+    await (host as any).live.get('parent').running;
     expect(injected).toBe(injectedBeforeRestart ? 0 : 1);
-    expect(requests).toBe(injectedBeforeRestart ? 0 : 1);
     expect((host as any).ledger.listFor(root, 'parent').find((r: any) => r.childId === child).delivered).toBe(true);
   });
 

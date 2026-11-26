@@ -1,0 +1,64 @@
+{
+ "fps": 24,
+ "width": 1440,
+ "height": 900,
+ "duration": 10.37,
+ "actions": [
+  {
+   "i": 0,
+   "kind": "hold",
+   "mark": null,
+   "start": 0.016,
+   "end": 0.316
+  },
+  {
+   "i": 1,
+   "kind": "click",
+   "mark": null,
+   "start": 0.316,
+   "end": 0.775
+  },
+  {
+   "i": 2,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 0.975,
+   "end": 2.56
+  },
+  {
+   "i": 3,
+   "kind": "key",
+   "mark": null,
+   "start": 2.96,
+   "end": 2.967
+  },
+  {
+   "i": 4,
+   "kind": "waitForText",
+   "mark": null,
+   "start": 3.268,
+   "end": 4.311
+  },
+  {
+   "i": 5,
+   "kind": "waitForText",
+   "mark": null,
+   "start": 4.312,
+   "end": 6.465
+  },
+  {
+   "i": 6,
+   "kind": "eval",
+   "mark": "swap",
+   "start": 6.966,
+   "end": 6.968
+  },
+  {
+   "i": 7,
+   "kind": "hold",
+   "mark": null,
+   "start": 7.868,
+   "end": 10.068
+  }
+ ]
+}

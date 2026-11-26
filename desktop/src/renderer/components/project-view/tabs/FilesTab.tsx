@@ -15,6 +15,8 @@
 // Drawer (artifacts.listSession) — that stays their home.
 // Cards use .layer-surface; the deleted badge is a plain word "deleted" (the ●◐○ / ✕
 // glyph language is disliked — plain words instead).
+import { announceFailed } from '../../../utils/announce';
+import { copyText } from '../../context-menu/clipboard';
 import { makeDraftToken, type ComposeRef } from '../../context-menu/compose-ref';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // WHY no useArtifact import: this file must not read ArtifactContext — see the
@@ -1273,10 +1275,11 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   const handleDownload = () => { void downloadFile(absPath, { projectRoot: project.path, artifactId: artifact.id }); };
   const narrowViewport = useNarrowViewport();
   const handleCopyPath = () => {
-    navigator.clipboard?.writeText(absPath).then(() => {
+    void copyText(absPath).then((ok) => {
+      if (!ok) { announceFailed('copy the path'); return; }
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    }).catch(() => { /* clipboard unavailable — ignore */ });
+    });
   };
 
   // Header tools: Edit ↔ Save/Cancel (only for editable formats) + Reveal + Copy.

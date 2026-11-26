@@ -32,6 +32,7 @@ import { rememberLastComputer, forgetLastComputer } from './last-computer';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
 import { withStartSize } from './components/terminal-hidden-size';
+import { computerAnswers, PHONE_COMPUTER_TOO_OLD, PHONE_COMPUTER_UNREACHABLE } from './computer-answers';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -1617,14 +1618,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // completed the TCP/HTTP-upgrade handshake — on Android that's usually
         // the cleartext-traffic policy or a wrong host/port/firewall.
         let message: string;
+        if (!didOpen && isAndroidAppPage() && !localBridge) {
+          // WHY a check first (Destin, 2026-11-18, wording deck W-1): an out-of-date computer refuses the phone app's
+          // page and looks unreachable to the socket; one that answers a web request is there, just too old.
+          void computerAnswers(url).then((a) => reject(signInError(a ? PHONE_COMPUTER_TOO_OLD : PHONE_COMPUTER_UNREACHABLE, { kind: 'unreachable' }))); return;
+        }
         if (!didOpen) {
-          // WHY two wordings (Destin, 2026-11-10, his Flip against a computer on 1.3.3): the phone app got a technical address
-          // and "host, port, network (VPN/firewall)" when the real cause was an out-of-date computer app, which refuses the
-          // phone app's page address — and the phone cannot tell that from "unreachable". So the phone app names every cause
-          // it cannot rule out, in plain words, the update first; the address is on the saved computer's row just below.
-          message = isAndroidAppPage() && !localBridge
-            ? 'Couldn’t connect to your computer. Make sure YouCoded on it is up to date and open, and that Tailscale is on for both devices.'
-            : `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
+          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
         } else if (code === 4029) {
           message = 'Too many failed attempts. Wait a minute and try again.';
         } else if (code === 4000) {
@@ -2139,23 +2139,62 @@ async function pickAndUploadFiles(): Promise<string[]> {
 
   // Read each file as base64 and upload to the desktop
   for (const file of Array.from(files)) {
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      const base64 = btoa(binary);
-      const result = await invoke('file:upload', {
-        name: file.name,
-        data: base64,
-        size: file.size,
-      });
-      // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
-      if (result?.path) { paths.push(result.path); rememberAttachmentPreview(result.path, file); /* card #194: the browser's own copy, for the card's picture */ } else if (typeof result?.error === 'string') announce(result.error, 5000);
-    } catch (err) {
-      console.error('Failed to upload file:', file.name, err);
-    }
+    const uploaded = await uploadFileToDesktop(file);
+    if (uploaded) paths.push(uploaded);
   }
   return paths;
+}
+
+/**
+ * Uploads one browser File to the remote desktop (base64 over the 'file:upload' route) and returns the
+ * desktop-side path, or null if it did not arrive (a refusal sentence is announced here).
+ * WHY extracted (card #134): the Attach button and a pasted picture must share one upload route, so both
+ * honour the same size-cap refusal and remember the same preview copy.
+ */
+async function uploadFileToDesktop(file: File): Promise<string | null> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const base64 = btoa(binary);
+    const result = await invoke('file:upload', {
+      name: file.name,
+      data: base64,
+      size: file.size,
+    });
+    // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
+    if (result?.path) { rememberAttachmentPreview(result.path, file); /* card #194: the browser's own copy, for the card's picture */ return result.path; }
+    if (typeof result?.error === 'string') announce(result.error, 5000);
+  } catch (err) {
+    console.error('Failed to upload file:', file.name, err);
+  }
+  return null;
+}
+
+/**
+ * Card #134: a picture pasted on a phone. The desktop's own clipboard is unreachable from a phone, so the picture
+ * comes from the paste itself (`pasted`) or, for the right-click Paste route, the browser's clipboard if it allows
+ * reading one. Returns the desktop path, or undefined for every "nothing to attach" case (nothing there, reading
+ * not allowed, or an upload that already announced its own refusal) so the composer stays silent.
+ */
+async function uploadPastedImage(pasted?: File): Promise<string | undefined> {
+  let file: File | undefined = pasted;
+  if (!file) {
+    try {
+      const items = await navigator.clipboard?.read?.();
+      for (const item of items ?? []) {
+        const type = item.types.find((t) => t.startsWith('image/'));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        file = new File([blob], `pasted-image.${type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'}`, { type });
+        break;
+      }
+    } catch { /* permission refused or unsupported: same as nothing to paste */ }
+  }
+  if (!file) return undefined;
+  // A pasted File from some browsers has an empty or generic name; give it one so the desktop copy is recognisable as a picture.
+  const named = file.name && /\.[a-z0-9]+$/i.test(file.name) ? file : new File([file], `pasted-image.${(file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '')}`, { type: file.type });
+  return (await uploadFileToDesktop(named)) ?? undefined;
 }
 
 /** Install the window.claude shim. Call once on app startup in browser mode. */
@@ -2603,7 +2642,10 @@ export function installShim(): void {
       openFolder: () => invoke('dialog:open-folder').catch(() => null),
       openSound: () => invoke('dialog:open-sound').catch(() => null),
       readTranscriptMeta: (p: string) => invoke('transcript:read-meta', { path: p }),
-      saveClipboardImage: async () => null,
+      // Card #134: over remote, upload the picture from the paste event (or the browser clipboard) to the desktop.
+      // Local Android has no paste-upload route in its host, so it stays silent (undefined) as before.
+      // WHY `|| !isAndroidAppPage()`: a phone browser opened straight on the computer's address has no saved target yet is still remote.
+      saveClipboardImage: async (file?: File): Promise<string | null | undefined> => (targetUrl || !isAndroidAppPage()) ? uploadPastedImage(file) : undefined,
     },
     shell: {
       // Matches the URL hardcoded in desktop's ipc-handlers.ts OPEN_CHANGELOG
@@ -2632,6 +2674,8 @@ export function installShim(): void {
       // No-op on remote/Android — a browser can't reveal a file in the host's
       // file manager. The artifact panel hides the button on touch anyway.
       showItemInFolder: async () => {},
+      // A phone's browser cannot read the computer's clipboard or pick a save place on it; the picture menu does its own copy there.
+      pictureAction: async () => ({ ok: false, reason: 'not-on-this-device' }),
       // No-op on remote/Android — a browser can't launch the host's default app
       // for a local path. The "Open externally" button is desktop-gated, so this
       // only exists to keep the window.claude shape symmetric.
@@ -2747,7 +2791,7 @@ export function installShim(): void {
     settings: {
       get: (field: string) => invoke('settings:get', { field }),
       set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
-      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // desktop-only channel: a phone gets null, never an error
+      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // open to a phone since card #11 a (deck C-1); an older computer refuses it, which reads as no notice
     },
     modes: {
       get: () => invoke('modes:get'),
@@ -3015,6 +3059,10 @@ export function installShim(): void {
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
       onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
       saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
+      // Office Home's row actions (card #143): refused like the rest.
+      rename: (filePath: string, newName: string) => invoke('office:rename', { path: filePath, newName }),
+      duplicate: (filePath: string) => invoke('office:duplicate', { path: filePath }),
+      forgetRecent: (filePath: string) => invoke('office:forget-recent', { path: filePath }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel
@@ -3509,6 +3557,15 @@ export function installShim(): void {
       // for a phone too. A failure or refusal answers {ok:false}, which REJECT_ON_NOT_OK turns
       // into an error the Settings card shows.
       install: () => invoke('claude-code:install'),
+      // Card #236: refused over remote access (a visiting phone answers false; the card tells
+      // people to sign in from the host computer). Invokes exist for parity.
+      signIn: () => invoke('claude-code:sign-in'),
+      cancelSignIn: () => invoke('claude-code:cancel-sign-in'),
+    },
+    // Card #236: the computer's own connection check. Refused to a visiting phone (main/ipc/network.ts
+    // says why); the Android app's own screen, the backend's owner, gets the real answer.
+    network: {
+      check: () => invoke('network:check'),
     },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).

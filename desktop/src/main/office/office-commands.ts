@@ -56,6 +56,14 @@ const MSG = {
   saveAsSelf: "That's the file you're editing. Choose another name.",
   // Print (Task 3): x2t prints from the saved document, which carries no selection.
   printSelection: "Office can't print only the selected part. Print the whole document, or choose its pages.",
+  // WHY (office review 2026-11-14): the file is gone from where it was opened (renamed, moved or
+  // deleted by another program). Saving there anyway brought a deleted file back, or left a stale
+  // copy under the old name beside the renamed one. Certain, so specific; Save a copy is the way out.
+  movedAway: 'This file is no longer where Office opened it — it was moved, renamed or deleted. Save a copy to keep your changes.',
+  // WHY: a save writes a hidden folder beside the file first, so a folder that refuses new files
+  // fails every save even when the file itself is writable. Says which one is the problem.
+  folderLocked: "Office can't save in this file's folder because it isn't allowed to add files there. Save a copy to keep your changes.",
+  replaceBlocked: "Office couldn't replace this file. If it's open in another program, close it there and try again.",
   refused: 'refused',
 } as const;
 
@@ -455,6 +463,10 @@ export function createOfficeCommands(deps: {
       if (e.code === 'ENOENT') return null;
       throw e;
     });
+    // WHY (office review 2026-11-14): the file was there when it opened (knownStamp) and is gone
+    // now — renamed, moved or deleted outside Office. Writing would recreate it at the old name.
+    // A file never stamped (no open_file ran) keeps the old behaviour.
+    if (!orig && s.knownStamp) throw userError(MSG.movedAway);
     // WHY: a read-only file stays read-only — Office reports it instead of replacing it anyway.
     if (orig) await fsp.access(s.path, fsc.W_OK);
     const base = path.basename(s.path);
@@ -477,7 +489,7 @@ export function createOfficeCommands(deps: {
     // accounts. mkdtemp makes the folder 0700 — nobody else can enter it — and it sits beside
     // the file, on the same disk, so the final rename stays one atomic step. The leading dot
     // keeps it out of file lists and the project watcher.
-    const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
+    const priv = await makeSaveDir(dir, base);
     const tmp = path.join(priv, base);
     try {
       try {
@@ -500,7 +512,14 @@ export function createOfficeCommands(deps: {
       noteOwnWrite(s.path);
       // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
       // if quit gives up on this save meanwhile, it must stop rather than land late.
-      await renameReplacing(tmp, s.path, process.platform, () => isClosing(s));
+      await renameReplacing(tmp, s.path, process.platform, () => isClosing(s)).catch((e: NodeJS.ErrnoException) => {
+        // WHY (office review 2026-11-14): on Windows, Word or Excel holding the file open makes the
+        // final replace fail with EPERM/EBUSY, which read "doesn't have permission". The folder took
+        // a new folder and the file passed the write check above, so a lock is the likely cause —
+        // said as a condition, not asserted (docs/error-message-standards.md).
+        if (process.platform === 'win32' && !isClosing(s) && (e?.code === 'EPERM' || e?.code === 'EACCES' || e?.code === 'EBUSY')) throw userError(MSG.replaceBlocked);
+        throw e;
+      });
       // What we just wrote is what we know: the next save only counts a DIFFERENT file as an outside change.
       const written = await fsp.stat(s.path).catch(() => null);
       s.knownStamp = written ? { size: written.size, mtimeMs: written.mtimeMs } : undefined;
@@ -691,7 +710,7 @@ export function createOfficeCommands(deps: {
     // Leftovers of an earlier copy or export to this same name that a crash cut short — the only
     // moment anything looks beside an exported file again (see sweepStaleSaveDirsSoon).
     sweepStaleSaveDirsSoon(dir, base);
-    const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
+    const priv = await fsp.mkdtemp(path.join(dir, saveDirPrefix(base)));
     const tmp = path.join(priv, base);
     try {
       const hash = exporting ? '' : await hashFile(bin);
@@ -854,6 +873,37 @@ export function createOfficeCommands(deps: {
 // Private save folders are named `.<file><SAVE_DIR_MARK><random>` beside the file.
 // Exported for versions.ts (Task 7): a restore writes the file back through the same kind of folder.
 export const SAVE_DIR_MARK = '.office-save-';
+/** The private save folder's name before mkdtemp's random part: `.<file name>.office-save-`.
+ *  WHY shortened for long names (office review 2026-11-14): a folder name may be at most 255 bytes,
+ *  and this one adds ~20 to the file's own — so a file named with ~230+ bytes (about 75 Chinese
+ *  characters, or 55 emoji) could never be saved. A long name keeps its first 100 bytes plus a
+ *  short fingerprint of the whole, so it still matches only this file's leftovers in the sweep. */
+const SAVE_DIR_NAME_BYTES = 100;
+export function saveDirPrefix(base: string): string {
+  if (Buffer.byteLength(base) <= SAVE_DIR_NAME_BYTES) return `.${base}${SAVE_DIR_MARK}`;
+  let head = '';
+  // By code point, so a character is never cut in half.
+  for (const ch of base) {
+    if (Buffer.byteLength(head + ch) > SAVE_DIR_NAME_BYTES) break;
+    head += ch;
+  }
+  const print = createHash('sha256').update(base).digest('hex').slice(0, 8);
+  return `.${head}~${print}${SAVE_DIR_MARK}`;
+}
+
+/** The private folder a save of `base` is translated into, beside the file (see saveFile). An
+ *  EACCES/EPERM here means the FOLDER refuses new files, which the general permission sentence
+ *  ("…permission to save this file") would blame on the file. */
+async function makeSaveDir(dir: string, base: string): Promise<string> {
+  try {
+    return await fsp.mkdtemp(path.join(dir, saveDirPrefix(base)));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code === 'EACCES' || code === 'EPERM') throw userError(MSG.folderLocked);
+    throw e;
+  }
+}
+
 // Same rule as cas-write's stale-tmp sweep: an hour is far longer than any real save, so a
 // folder that old was left by a crash and a live save's folder is never touched.
 const STALE_SAVE_DIR_MS = 60 * 60 * 1000;
@@ -879,7 +929,7 @@ export async function awaitSaveDirSweeps(): Promise<void> {
 // WHY (fix round 2): a crash mid-save leaves its private folder, holding a copy of the
 // document, beside the user's file. Best-effort, like sweepStaleTmp: it must never fail a save.
 async function sweepStaleSaveDirs(dir: string, base: string): Promise<void> {
-  const prefix = `.${base}${SAVE_DIR_MARK}`;
+  const prefix = saveDirPrefix(base);
   try {
     const now = Date.now();
     for (const name of await fsp.readdir(dir)) {

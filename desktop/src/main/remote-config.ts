@@ -123,9 +123,16 @@ export class RemoteConfig {
   }
 
   async setPassword(plaintext: string): Promise<void> {
+    const before = { hash: this.passwordHash, weak: this.weakPassword };
     this.passwordHash = await bcrypt.hash(plaintext, BCRYPT_ROUNDS);
     this.weakPassword = plaintext.length < MIN_REMOTE_PASSWORD_LENGTH;
-    this.save();
+    try { this.save(); }
+    catch (err) {
+      // Card #134 round 4: a save that throws must not leave the running server on a password the file does not hold (the
+      // screen says it was not set). Restore, then let the rejection reach the screen. The password itself is never logged.
+      this.passwordHash = before.hash; this.weakPassword = before.weak;
+      throw err;
+    }
   }
 
   async verifyPassword(plaintext: string): Promise<boolean> {

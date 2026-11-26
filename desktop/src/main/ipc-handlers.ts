@@ -1,4 +1,5 @@
 import { setBrowserAskListener } from './ipc/browser';
+import { checkNamingModel } from './naming-model-check';
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -52,7 +53,7 @@ import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { ProviderRegistry } from './providers/provider-registry';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
-import { ClaudeAccount } from './providers/claude-account';
+import { ClaudeAccount, noteAuthFailureFromEvent } from './providers/claude-account';
 // Welcome back (design 2026-09-24 §1-3): the per-install "open at last
 // shutdown" store, constructed in main.ts and passed in (T1 built the store
 // itself; this file only calls its API).
@@ -1519,6 +1520,9 @@ export function registerIpcHandlers(
     const event = liveFacts.prepareTranscript(sourceEvent);
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
+    // WHY (card #236): this listener is the LIVE tail only (history is paged by transcript-page.ts), so an
+    // old "login expired" line in a reopened chat never marks today's login refused.
+    noteAuthFailureFromEvent(claudeAccount, event);
     // Conversation Store (Phase 2a): feed live activity into the record store.
     // event.sessionId is the DESKTOP id; the store keys by CLAUDE id, so resolve
     // via sessionIdMap and skip if we haven't seen the mapping yet (a hook event
@@ -2270,10 +2274,9 @@ export function registerIpcHandlers(
         }
         // Same confirm-against-the-catalog rule as the specialist defaults: a
         // model we cannot see is refused, never quietly swapped for another.
-        const catalog = await modelCatalog.get(await providerRegistry.list()).catch(() => null);
-        if (catalog && !catalog.some((m) => m.id === choice.modelId && m.providerId === choice.providerId)) {
-          return { ok: false, error: `"${choice.modelId}" isn’t in the model list right now — pick it from the list.` };
-        }
+        // WHY a list that fails to load now REFUSES (R-1 batch 1; main/naming-model-check.ts): it used to skip the check.
+        const problem = await checkNamingModel(async () => modelCatalog.get(await providerRegistry.list()), { providerId: choice.providerId, modelId: choice.modelId });
+        if (problem) return { ok: false, error: problem };
         model = { providerId: choice.providerId, modelId: choice.modelId };
       }
       await namingSettings.update({ mode: v.mode, model });

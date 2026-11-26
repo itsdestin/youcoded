@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { announceFailed } from '../../utils/announce';
 import { AdminRefusedNote } from '../permissions/AdminRefusedNote';
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
 import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
@@ -35,6 +36,7 @@ import { SpecialistActions } from '../specialists/SpecialistActions';
 import { RunStatusLine } from '../specialists/RunStatusLine';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../../shared/send-user-link';
 import { shellEndKind, shellFacts, specialistFacts } from '../../state/native-run-facts';
+import { whenEditsSaved } from '../artifact-views/dirty-editor-guard';
 
 // Parsed views for expanded tool cards. One dispatcher + inline view functions;
 // splitting per-file only becomes worthwhile if a single view grows past ~80
@@ -176,7 +178,8 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
   const open = () => {
     if (!sessionId) return; // per-session drawer needs a session to scope to
     artifactDispatch?.({ type: 'DRAWER_OPENED', sessionId });
-    artifactDispatch?.({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
+    // An Office edit open in the panel saves first, so switching never drops its newest typing.
+    whenEditsSaved(() => artifactDispatch?.({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id }));
   };
 
   return (
@@ -406,7 +409,11 @@ function ShellView({ tool, commandField, sessionId }: {
       const r = await window.claude.native.killShell(sessionId, run.shellId);
       // A refusal (already ended, unknown id) must not leave "Stopping…" up forever.
       if (!r.ok) setStopping(false);
-    } catch (err) { console.error('KillShell failed:', err); setStopping(false); }
+    } catch (err) {
+      // Card #134 round 4: a request that itself failed used to leave only a console line. A host REFUSAL (not-running, unknown,
+      // not-live) is deliberately still quiet: those mean the task is already over, so "Couldn't stop" would be false.
+      announceFailed('stop this task', err); setStopping(false);
+    }
   }, [run, sessionId]);
 
   // Description is already shown as the collapsed-header label (see

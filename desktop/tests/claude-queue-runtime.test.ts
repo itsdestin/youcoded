@@ -6,15 +6,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeQueueRuntime } from '../src/main/claude-queue-runtime';
 import type { ClaudeQueueTransport } from '../src/main/claude-queue-transport';
+import type { QueueInputBlock } from '../src/main/session-screens';
 const roots: string[] = [];
 function deferred() { let resolve!: () => void; const promise=new Promise<void>(r=>{resolve=r;});return {promise,resolve}; }
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 5 }); });
-async function fixture() {
+async function fixture(opts: { inputBlock?: (id: string) => QueueInputBlock | null } = {}) {
  const root = await mkdtemp(join(tmpdir(), 'queue-runtime-')); roots.push(root);
  const bridge = Object.assign(new EventEmitter(), { attachQueueTransport: vi.fn(), setQueueInitializer: vi.fn(), isReady: ():boolean => true, executeQueueClear: vi.fn(async () => ({ status: 'accepted', requestId: 'clear', claudeSessionId: 'new-conversation' })) });
  const manager = { getSession: () => ({ id: 's', cwd: root, provider: 'claude' }), sendInput: vi.fn(() => true), queueWorkerCommand: vi.fn(async (_id: string, command: {type:string}) => ({ status: command.type==='queue-acquire'?'owned':['queue-release','queue-abandon'].includes(command.type)?'released':'revoked' })) };
  const publish = vi.fn(); const noteSend = vi.fn(); let safe = false;
- const runtime = new ClaudeQueueRuntime({ userDataRoot: () => root, bridge: bridge as any, manager: manager as any, inputSafe: () => safe, working: () => false, publish, noteSend });
+ const runtime = new ClaudeQueueRuntime({ userDataRoot: () => root, bridge: bridge as any, manager: manager as any, inputSafe: () => safe, ...(opts.inputBlock ? { inputBlock: opts.inputBlock } : {}), working: () => false, publish, noteSend });
  bridge.emit('native-ready', 's', 'inc'); bridge.emit('state', 's', { claudeSessionId: 'conversation', turnId: null });
  await vi.waitFor(async () => expect((await runtime.action('s', { kind: 'identity' })).status).toBe('identity'));
  return { root, bridge, manager, runtime, publish, noteSend, safe: () => { safe = true; } };
@@ -87,6 +88,36 @@ describe('instance-owned Claude queue runtime', () => {
   try {const sending=f.runtime.action('s',{kind:'send-now',itemId:q.itemId});await vi.waitFor(()=>expect(revoke).toHaveBeenCalled());expect(prioritize).not.toHaveBeenCalled();
    barrier.resolve();expect(await sending).toMatchObject({status:'done'});expect(prioritize).toHaveBeenCalledTimes(1);
   }finally{barrier.resolve();revoke.mockRestore();prioritize.mockRestore();await f.runtime.close();}
+ });
+ it('Send now that still cannot send says why on that message, and says nothing for a reason that passes by itself', async () => {
+  let block: QueueInputBlock | null = 'question';
+  const f=await fixture({ inputBlock: () => block });const identity=await f.runtime.action('s',{kind:'identity'});if(identity.status!=='identity')throw Error('identity');
+  const enqueue=async(sendId:string)=>{const q=await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId,originalText:sendId,attachments:[],displayContent:sendId}});if(q.status!=='queued')throw Error('enqueue');return q.itemId;};
+  const first=await enqueue('first');const second=await enqueue('second');
+  const rows=()=>(f.publish.mock.lastCall?.[1] as {queue:{queueId:string;notice?:string}[]}).queue;
+  expect(await f.runtime.action('s',{kind:'send-now',itemId:second})).toMatchObject({status:'done'});
+  expect(rows().find(r=>r.queueId===second)?.notice).toBe('Waiting for your answer to the question in this chat.');
+  expect(rows().find(r=>r.queueId===first)?.notice).toBeUndefined(); // only the message the person pressed
+  block='screen';
+  expect(await f.runtime.action('s',{kind:'send-now',itemId:first})).toMatchObject({status:'done'});
+  expect(rows().find(r=>r.queueId===first)?.notice).toMatch(/terminal has the keyboard/);
+  block='updating';
+  expect(await f.runtime.action('s',{kind:'send-now',itemId:second})).toMatchObject({status:'done'});
+  expect(rows().every(r=>r.notice===undefined)).toBe(true);
+  await f.runtime.close();
+ });
+ it('a Send now note goes away once what blocked it is gone, while the message still waits', async () => {
+  let block: QueueInputBlock | null = 'question';
+  const f=await fixture({ inputBlock: () => block });const identity=await f.runtime.action('s',{kind:'identity'});if(identity.status!=='identity')throw Error('identity');
+  const q=await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'held',originalText:'held',attachments:[],displayContent:'held'}});if(q.status!=='queued')throw Error('enqueue');
+  const rows=()=>(f.publish.mock.lastCall?.[1] as {queue:{queueId:string;notice?:string}[]}).queue;
+  await f.runtime.action('s',{kind:'send-now',itemId:q.itemId});
+  expect(rows()[0].notice).toMatch(/your answer/);
+  block=null;f.safe();          // the question is answered: the screen check now passes
+  f.runtime.wake('s');
+  await vi.waitFor(()=>expect(rows()[0].notice).toBeUndefined());
+  expect(rows()[0].queueId).toBe(q.itemId); // still queued, just no longer claiming a reason that has gone
+  await f.runtime.close();
  });
  it('is lazy, receives actual identity and notes durable enqueue without a premature transcript bubble', async () => {
   const f = await fixture(); const identity = await f.runtime.action('s', { kind: 'identity' }); if (identity.status !== 'identity') throw Error('identity');
