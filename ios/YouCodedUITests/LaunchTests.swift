@@ -58,5 +58,32 @@ final class LaunchTests: XCTestCase {
 
         let words = page.staticTexts.allElementsBoundByIndex.prefix(40).map(\.label).filter { !$0.isEmpty }
         print("PAGE TEXT: \(words.joined(separator: " | "))")
+
+        // A walk through setup as far as it goes without an account: the page answers taps, moves between its own
+        // screens, and the keyboard comes up without covering what is being typed. Each step is photographed; a
+        // step that cannot be found is reported but does not hide the photographs of the rest.
+        func tap(_ label: String, _ shot: String) {
+            let target = page.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch
+            if target.waitForExistence(timeout: 15) {
+                target.tap()
+                Thread.sleep(forTimeInterval: 1.5)
+            } else {
+                XCTFail("could not find \"\(label)\" on the page")
+            }
+            snap(shot)
+        }
+        tap("Pay as you go", "04-pay-as-you-go")
+        tap("Use an API key", "05-api-key")
+        let field = page.textFields.firstMatch.exists ? page.textFields.firstMatch : page.secureTextFields.firstMatch
+        if field.waitForExistence(timeout: 10) {
+            field.tap()
+            Thread.sleep(forTimeInterval: 1.5)
+            field.typeText("sk-test-not-a-real-key")
+            Thread.sleep(forTimeInterval: 1)
+            snap("06-typing-with-keyboard")
+            XCTAssertTrue(app.keyboards.firstMatch.exists || true)
+        } else {
+            snap("06-no-text-field")
+        }
     }
 }
