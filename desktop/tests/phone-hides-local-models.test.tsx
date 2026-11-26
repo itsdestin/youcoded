@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Pins 2026-11-01 findings #10/#11: a phone can't run a model, so it is never offered "Free, on this computer"; since
-// 2026-11-25 it sees a greyed "Free, on this phone · Coming soon" row that cannot be opened.
+// 2026-11-25 it sees a greyed "Free on this phone · Coming soon" row that cannot be opened.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SignInChoices } from '../src/renderer/components/first-run/SignInChoices';
@@ -18,7 +18,7 @@ describe('first-run provider choice on a phone', () => {
     const onPick = vi.fn();
     render(<SignInChoices chatGpt onPick={onPick} />);
     expect(screen.queryByText('Free, on this computer')).toBeNull();
-    const row = screen.getByText('Free, on this phone').closest('[aria-disabled="true"]')!;
+    const row = screen.getByText('Free on this phone').closest('[aria-disabled="true"]')!;
     expect(row).toBeTruthy();
     expect(screen.getByText('Coming soon')).toBeTruthy();
     fireEvent.click(row);

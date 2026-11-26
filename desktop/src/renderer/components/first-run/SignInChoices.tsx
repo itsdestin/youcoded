@@ -205,7 +205,7 @@ export function SignInChoices({ chatGpt, onPick, offline, lastWay }: { chatGpt: 
   const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
   const phone = deviceNoun() === 'phone';
   const list = groups(chatGpt).map((g) => (g.id === 'local' && phone
-    ? { ...g, title: 'Free, on this phone', badge: 'Coming soon', summary: 'Running a model on your phone is not available yet.', unavailable: true }
+    ? { ...g, title: 'Free on this phone', badge: 'Coming soon', summary: 'Local models not yet available on mobile', unavailable: true }
     : g));
   return <Guided list={list} onPick={onPick} initial={pick} offline={offline} lastWay={lastWay} />;
 }
