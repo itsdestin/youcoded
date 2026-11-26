@@ -91,7 +91,7 @@ export function installRegExpPropertyFallback(tables: UnicodeTables, force = fal
       : (flags === undefined ? (Native as (p: unknown) => RegExp)(p) : (Native as (p: unknown, f: string) => RegExp)(p, flags));
   } as unknown as RegExpConstructor & { __ycPatched?: boolean };
   // Same prototype object, so `x instanceof RegExp`, literals and every method are untouched.
-  Patched.prototype = Native.prototype;
+  (Patched as unknown as { prototype: RegExp }).prototype = Native.prototype;
   Object.setPrototypeOf(Patched, Native);
   Patched.__ycPatched = true;
   Object.defineProperty(Native.prototype, 'constructor', { value: Patched, writable: true, configurable: true });

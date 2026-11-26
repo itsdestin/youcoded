@@ -86,7 +86,12 @@ function toHeaders(raw: string[]): Headers {
   return h;
 }
 
+/** Node's connect-time name lookup (net.connect's `lookup`): lets a caller decide which addresses a name may use. */
+export type ConnectLookup = NonNullable<http.RequestOptions['lookup']>;
+
 interface Attempt {
+  /** Applied to EVERY hop, redirects included: an address rule must not be dodged by a redirect. */
+  lookup?: ConnectLookup;
   url: URL;
   method: string;
   headers: Headers;
@@ -112,7 +117,7 @@ function once(a: Attempt): Promise<Response> {
     if (a.body.contentType && !('content-type' in headers)) headers['content-type'] = a.body.contentType;
 
     const lib = a.url.protocol === 'https:' ? https : http;
-    const req = lib.request(a.url, { method: a.method, headers });
+    const req = lib.request(a.url, { method: a.method, headers, ...(a.lookup ? { lookup: a.lookup } : {}) });
     let settled = false;
     const onAbort = () => { req.destroy(abortError(a.signal)); };
     a.signal?.addEventListener('abort', onAbort, { once: true });
@@ -198,7 +203,7 @@ function once(a: Attempt): Promise<Response> {
 }
 
 /** `fetch`, without WebAssembly. Same call shape as the built-in. */
-export async function iosFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
+export async function iosFetch(input: string | URL | Request, init: RequestInit = {}, extra: { lookup?: ConnectLookup } = {}): Promise<Response> {
   const isRequest = typeof Request !== 'undefined' && input instanceof Request;
   const req = isRequest ? (input as Request) : null;
   const url = new URL(req ? req.url : String(input));
@@ -213,5 +218,5 @@ export async function iosFetch(input: string | URL | Request, init: RequestInit 
   // A URL may carry its own sign-in (https://user:pass@host); http.request honours it, fetch forbids it.
   if (url.username || url.password) throw new TypeError('Request cannot be constructed from a URL that includes credentials');
   const redirect = (init.redirect ?? req?.redirect ?? 'follow') as 'follow' | 'manual' | 'error';
-  return once({ url, method, headers, body, signal, redirect, hops: 0 });
+  return once({ url, method, headers, body, signal, redirect, hops: 0, lookup: extra.lookup });
 }

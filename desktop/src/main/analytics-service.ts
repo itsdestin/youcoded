@@ -16,6 +16,7 @@
 // Privacy: the raw machine_id never leaves the device. See the design
 // spec at docs/superpowers/specs/2026-05-01-device-id-analytics-design.md
 // for the threat model.
+import { hostOs } from './headless/host-bridge';
 import { app } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -206,6 +207,10 @@ export function setAndroidId(id: string | undefined): void {
 }
 
 async function postEvent(p: string, body: unknown): Promise<boolean> {
+  // WHY nothing is sent from an iPhone (2026-11-25, card #89): the counting service knows only "desktop" and
+  // "android" (worker/src/app/routes.ts). Until it learns "ios", an iPhone would be counted as one of those, which is
+  // worse than not being counted. One gate here covers the daily message and the two one-time ones.
+  if (hostOs() === 'ios') return false;
   try {
     const res = await fetch(`${API_BASE}${p}`, {
       method: "POST",

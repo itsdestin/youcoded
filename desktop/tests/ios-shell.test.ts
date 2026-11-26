@@ -63,7 +63,11 @@ describe('the backend\'s calls to the phone', () => {
 
   it('the app starts the backend with the entry, the environment names and the ready line the backend uses', () => {
     const runner = swift('BackendRunner.swift');
-    expect(runner).toContain('dist/main/headless/ios-main.js');
+    // The app starts the small loader, which the build writes and which loads the real bundle inside a try.
+    expect(runner).toContain('dist/main/headless/ios-boot.js');
+    const build = read('ios/runtime/build-backend.mjs');
+    expect(build).toContain("dist/main/headless/ios-boot.js");
+    expect(build).toContain("require('./ios-main.js')");
     for (const name of ['YOUCODED_HEADLESS_PORT', 'YOUCODED_SECRETS_ON_STDIN', 'YOUCODED_USER_DATA', 'YOUCODED_HOST_SOCKET', 'YOUCODED_HOST_TOKEN', 'YOUCODED_HOST_OS', 'YOUCODED_APP_VERSION']) {
       expect(runner).toContain(`"${name}"`);
     }
@@ -112,8 +116,11 @@ describe('what an iPhone can do', () => {
 });
 
 describe('the backend bundle the app carries', () => {
-  it('builds every worker thread the headless backend starts', async () => {
-    const { WORKER_ENTRIES } = await import('../../ios/runtime/build-backend.mjs') as { WORKER_ENTRIES: string[] };
+  it('builds every worker thread the headless backend starts', () => {
+    // Read from the build script's text (it lives outside this TypeScript project, so it cannot be imported here).
+    const build = read('ios/runtime/build-backend.mjs');
+    const block = build.slice(build.indexOf('export const WORKER_ENTRIES = ['), build.indexOf('];', build.indexOf('export const WORKER_ENTRIES = [')));
+    const WORKER_ENTRIES = [...block.matchAll(/'([^']+\.ts)'/g)].map((m) => m[1]);
     const srcMain = path.join(repo, 'desktop/src/main');
     const starters: string[] = [];
     const walk = (dir: string) => {

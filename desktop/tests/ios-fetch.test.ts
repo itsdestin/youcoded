@@ -219,6 +219,26 @@ describe('the iPhone backend\'s fetch', () => {
     await expect(iosFetch('ftp://example.com/x')).rejects.toThrow(TypeError);
   });
 
+  it('a caller\'s connect-time lookup decides the address, on the first request and on every redirect', async () => {
+    const { Agent, fetch: guarded } = await import('../src/main/headless/ios-undici');
+    const port = new URL(base).port;
+    const seen: string[] = [];
+    // A name that does not exist is sent to this computer by the lookup; a refusing lookup stops the request.
+    // (Node asks for either one address or a list, depending on its version: answer in the shape asked for.)
+    const lookup = ((host: string, o: { all?: boolean }, cb: (e: Error | null, address: unknown, family?: number) => void) => {
+      seen.push(host);
+      if (o?.all) cb(null, [{ address: '127.0.0.1', family: 4 }]); else cb(null, '127.0.0.1', 4);
+    }) as never;
+    const agent = new Agent({ connect: { lookup } });
+    const r = await guarded(`http://name-that-does-not-exist.invalid:${port}/redirect`, { dispatcher: agent });
+    expect(r.status).toBe(200);
+    expect(seen.filter((h) => h === 'name-that-does-not-exist.invalid').length).toBeGreaterThanOrEqual(2); // the request and its redirect
+    const refuse = ((_h: string, _o: unknown, cb: (e: Error | null) => void) => cb(new Error('refused by the guard'))) as never;
+    const err = await guarded(`http://another-name.invalid:${port}/echo`, { dispatcher: new Agent({ connect: { lookup: refuse } }) }).catch((e) => e);
+    expect(err).toBeInstanceOf(TypeError);
+    expect(String((err as { cause?: Error }).cause?.message)).toContain('refused by the guard');
+  });
+
   it('agrees with the built-in fetch on the same requests', async () => {
     for (const [path, init] of [['/echo', { method: 'POST', body: 'same' }], ['/gzip', {}], ['/redirect', {}], ['/missing', {}]] as Array<[string, RequestInit]>) {
       const [mine, theirs] = await Promise.all([iosFetch(base + path, init), fetch(base + path, init)]);

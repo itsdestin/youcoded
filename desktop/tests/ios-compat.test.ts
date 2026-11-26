@@ -85,12 +85,14 @@ describe('Unicode property escapes without the Unicode data library', () => {
 
 describe('the other fills', () => {
   it('installing everything on a current Node changes nothing it already has', () => {
-    const before = { fetch: globalThis.fetch, crypto: globalThis.crypto, any: AbortSignal.any, toSorted: Array.prototype.toSorted };
+    // Read by name: the test project's TypeScript library list predates toSorted.
+    const proto = Array.prototype as unknown as Record<string, unknown>;
+    const before = { fetch: globalThis.fetch, crypto: globalThis.crypto, any: AbortSignal.any, toSorted: proto.toSorted };
     installIosCompat();
     expect(globalThis.fetch).toBe(before.fetch);
     expect(globalThis.crypto).toBe(before.crypto);
     expect(AbortSignal.any).toBe(before.any);
-    expect(Array.prototype.toSorted).toBe(before.toSorted);
+    expect(proto.toSorted).toBe(before.toSorted);
     expect(RegExp).toBe(NativeRegExp);
   });
 });

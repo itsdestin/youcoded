@@ -1,3 +1,5 @@
+import { canRunPrograms } from './headless/host-bridge';
+import { gitFromSnapshots } from './git-snapshot';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -167,6 +169,9 @@ function runShell(command: string, cwd: string): Promise<{ ok: boolean; output: 
 const installsInProgress = new Set<string>();
 
 function runGit(...args: string[]): Promise<{ ok: boolean; output: string }> {
+  // WHY (2026-11-25, iPhone app): an iPhone cannot start git (or any program). The same command lines are answered
+  // there from GitHub's commit archives (git-snapshot.ts), so every install path below stays one path.
+  if (!canRunPrograms()) return gitFromSnapshots(args);
   return new Promise((resolve) => {
     execFile('git', args, { timeout: GIT_TIMEOUT, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {

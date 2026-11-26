@@ -6,6 +6,7 @@ import { useSaveNotice } from '../hooks/useSaveNotice';
 import { Toggle } from './settings-toggle';
 import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow, ErrorState } from './ui';
 import { formatVersionLine } from '../../shared/version-line';
+import { phoneOs } from '../android-page';
 
 // Shared About popup for Desktop and Android settings. Previously this was an
 // inline collapsible inside SettingsPanel on both platforms, which didn't match
@@ -38,6 +39,15 @@ const DESKTOP_LIBS: { lib: string; license: string; source: string }[] = [
   { lib: 'highlight.js', license: 'BSD 3-Clause', source: 'github.com/highlightjs/highlight.js' },
   { lib: 'partysocket', license: 'MIT / ISC', source: 'github.com/partykit/partykit' },
   { lib: 'Cascadia Code', license: 'SIL OFL', source: 'github.com/microsoft/cascadia-code' },
+];
+
+// The iPhone app's own pieces (2026-11-25): the page and backend are the desktop's; the shell adds only Node for iOS.
+const IOS_LIBS: { lib: string; license: string; source: string }[] = [
+  { lib: 'Node.js for Mobile Apps (nodejs-mobile)', license: 'MIT', source: 'github.com/nodejs-mobile/nodejs-mobile' },
+  { lib: 'Node.js, V8, OpenSSL and their bundled libraries', license: 'MIT / BSD / Apache 2.0', source: 'nodejs.org' },
+  { lib: 'React', license: 'MIT', source: 'github.com/facebook/react' },
+  { lib: 'Tailwind CSS', license: 'MIT', source: 'github.com/tailwindlabs/tailwindcss' },
+  { lib: 'highlight.js', license: 'BSD 3-Clause', source: 'github.com/highlightjs/highlight.js' },
 ];
 
 const ANDROID_LIBS: { lib: string; license: string; source: string }[] = [
@@ -119,7 +129,10 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
 
   if (!open) return null;
 
-  const libs = platform === 'desktop' ? DESKTOP_LIBS : ANDROID_LIBS;
+  // WHY `ios`: the iPhone app shows the phone layout of this screen, but its bundled programs, downloads and usage
+  // messages are not Android's, and saying they are would be untrue.
+  const ios = phoneOs() === 'ios';
+  const libs = platform === 'desktop' ? DESKTOP_LIBS : ios ? IOS_LIBS : ANDROID_LIBS;
   const versionLine = formatVersionLine({ version, build, channel });
 
   return createPortal(
@@ -165,7 +178,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                     <ul className="text-2xs text-fg-dim leading-relaxed list-disc pl-5 space-y-0.5">
                   <li>An irreversible hash of your device's hardware ID (the raw ID never leaves your device — it's hashed locally before transmission)</li>
                   <li>Installed app version (e.g. <code>1.3.0</code>)</li>
-                  <li>Platform (<code>android</code>)</li>
+                  <li>Platform (<code>android</code>){ios ? ' — the iPhone app does not send these messages yet' : ''}</li>
                   <li>Country and approximate region (e.g. US state), derived from your IP address by Cloudflare. IP addresses are never stored.</li>
                 </ul>
                   )}
@@ -182,7 +195,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                     <p className="text-2xs text-fg-dim leading-relaxed">Multiplayer game moves are relayed through the YouCoded server (hosted by Cloudflare) only while a game is open; challenges and the friends lobby go through the YouCoded server. No game traffic is retained server-side beyond the active room.</p>
                   </div>
                 </FoldRow>
-              ) : (
+              ) : ios ? null : (
                 <FoldRow title="Setup downloads">
                   <p className="text-2xs text-fg-dim leading-relaxed">During initial setup, Termux runtime packages are downloaded from packages.termux.dev over HTTPS with SHA256 verification.</p>
                 </FoldRow>
@@ -197,6 +210,11 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                 <>
                   <p className="text-2xs text-fg-dim leading-relaxed">The YouCoded desktop application is licensed under the MIT License.</p>
                   <p className="text-2xs text-fg-dim leading-relaxed">The YouCoded Android application is MIT-licensed as well; it includes Termux&apos;s terminal-emulator library under the Apache License 2.0.</p>
+                </>
+              ) : ios ? (
+                <>
+                  <p className="text-2xs text-fg-dim leading-relaxed">The YouCoded iPhone application is licensed under the MIT License, the same as the desktop app and the shared interface that powers both.</p>
+                  <p className="text-2xs text-fg-dim leading-relaxed">It includes Node.js for Mobile Apps, which is licensed under the MIT License.</p>
                 </>
               ) : (
                 <>

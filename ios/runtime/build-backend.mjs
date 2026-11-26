@@ -124,7 +124,11 @@ async function bundle(entry, unicodeTables = {}) {
     // Syntax only (optional chaining etc. are fine on 18; this guards anything newer). Library gaps: ios-compat.ts.
     target: 'node18',
     // WHY an alias and not Android's Module._resolveFilename hook: a bundler resolves `electron` at build time.
-    alias: { electron: path.join(SRC, 'main/headless/electron-headless.ts') },
+    alias: {
+      electron: path.join(SRC, 'main/headless/electron-headless.ts'),
+      // undici needs WebAssembly, which the iPhone's Node lacks: see ios-undici.ts.
+      undici: path.join(SRC, 'main/headless/ios-undici.ts'),
+    },
     external: EXTERNAL,
     plugins: [virtualPaths],
     // The fills (ios-compat.ts) run before any module of the bundle: see ios-prelude.ts.
