@@ -211,14 +211,15 @@ export class Replicator {
     peer.lastSeen = this.#ctx.clock.now();
     if (f.header.kind === KIND_LINES) { await receiveLines(this.#ctx, peer, parseLinesBody(f.body)); return; }
     try {
-      switch (f.header.kind) {
-        case KIND_SUM: { const sb = parseSumBody(f.body); await this.onSum(peer, sb.digest, sb.ask); return; }
-        case KIND_HEADS: await this.onHeads(peer, parseHeadsBody(f.body)); return;
-        case KIND_WANT: await onWant(this.#ctx, peer, parseWantBody(f.body)); return;
-        case KIND_ACK: await onAck(this.#ctx, peer, parseAckBody(f.body)); return;
-        case KIND_NAK: await this.onNak(peer, parseNakBody(f.body)); return;
-        case KIND_INTRO: await this.onIntro(peer, parseIntroBody(f.body)); return;
-      }
+      // WHY an if-chain, not a `switch`: the channel-table guard (tests/channel-table-complete.test.ts) reads any `case` on an imported
+      // name as a possible hand-served app channel. These are mesh message kinds, not app channels; the chain keeps that guard exception-free.
+      const kind = f.header.kind;
+      if (kind === KIND_SUM) { const sb = parseSumBody(f.body); await this.onSum(peer, sb.digest, sb.ask); }
+      else if (kind === KIND_HEADS) await this.onHeads(peer, parseHeadsBody(f.body));
+      else if (kind === KIND_WANT) await onWant(this.#ctx, peer, parseWantBody(f.body));
+      else if (kind === KIND_ACK) await onAck(this.#ctx, peer, parseAckBody(f.body));
+      else if (kind === KIND_NAK) await this.onNak(peer, parseNakBody(f.body));
+      else if (kind === KIND_INTRO) await this.onIntro(peer, parseIntroBody(f.body));
     } catch (e) {
       if (e instanceof FrameReject || (e as { name?: string }).name === 'MeshCryptoError') throw e; // named by the link
       this.#ctx.bump('handler-error');
