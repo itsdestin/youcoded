@@ -601,12 +601,12 @@ function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void 
   }
 }
 
-/** `?update=available` — the status pill's update, which no scenario otherwise sends.
+/** `?update=none` — up to date (the chip still shows). `?update=available` — the status pill's update, which no scenario otherwise sends.
  *  `?update=ready` (#183): the update already downloaded in the background and waiting for a
  *  restart; `?update=ready-password` the same on a computer where installing asks for a
  *  password (a Linux package, or a Mac account that is not an administrator). */
 function updateStatusSwitch(): {
-  current: string; latest: string; update_available: true; download_url: string;
+  current: string; latest: string; update_available: boolean; download_url: string;
   downloaded?: boolean; needs_password?: boolean; installs_on_quit?: boolean;
 } | null {
   const mode = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('update');
@@ -618,6 +618,13 @@ function updateStatusSwitch(): {
     downloaded: true,
     needs_password: mode === 'ready-password',
     installs_on_quit: mode === 'ready',
+  };
+  // ?update=none: up to date, so the chip opens the full release notes (no Update button).
+  if (mode === 'none') return {
+    current: '1.3.4',
+    latest: '1.3.4',
+    update_available: false,
+    download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.3.4',
   };
   if (mode !== 'available') return null;
   return {
@@ -4134,8 +4141,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       ],
       fromCache: false,
     }) : ({
-      markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
-      entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
+      // WHY the real file's top lines (title, intro, empty [Unreleased]): the no-update view once
+      // drew them at the top of the notes (Destin, 2026-11-22); keeping them here shows that they
+      // stay hidden.
+      markdown: '# Changelog\n\nAll notable changes to YouCoded are documented in this file.\n\n## [Unreleased]\n\n## [1.3.4] — 2026-11-19\n\nA rebuilt buddy, a much smoother app, Office Home and faster local models.\n\n## [1.3.3] — 2026-11-02\n\n- Fixes for the file viewer.\n\n## [1.3.0] — 2026-09-11\n\n- Clearer messages when something goes wrong.',
+      entries: [
+        { version: '1.3.4', date: '2026-11-19', body: 'A rebuilt buddy, a much smoother app, Office Home and faster local models.' },
+        { version: '1.3.3', date: '2026-11-02', body: '- Fixes for the file viewer.' },
+        { version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' },
+      ],
       fromCache: false,
     }),
     getCachedDownload: async () => updateInstall ? { filePath: '/tmp/youcoded-1.3.0.pacman', version: '1.3.0' } : null,

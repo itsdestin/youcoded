@@ -2,11 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
-// WHY (2026-09-29 one-core R1): startOAuthLogin used to read Electron's `app` itself; it now takes
-// the flag so prerequisite-installer.ts (also loaded by the native runtime) needs no Electron.
-import { app } from 'electron';
 import { log } from './logger';
 import { returnToApp } from './headless/host-bridge';
+// WHY: first launch and "Sign in again" open Claude's login through the same function (1.3.4 bug:
+// two copies of these steps drifted and the newer one broke in the installed app).
+import { openClaudeLogin, NO_LOGIN_LINK_MESSAGE } from './claude-sign-in';
 import {
   FirstRunState,
   FirstRunStep,
@@ -510,17 +510,21 @@ export class FirstRunManager extends EventEmitter {
     // Cancelled while Claude Code was installing: keep the install, skip the login.
     if (round !== this.authRound) return { url: null };
 
-    // Spawn the login process — it outputs the auth URL then waits for callback
-    const oauth = startOAuthLogin(app?.isPackaged);
-    this.stopOAuth = () => oauth.kill();
+    // Spawn the login process — it prints the auth URL then waits for the browser callback.
+    // openClaudeLogin waits until the link appears (or gives up) and ends the process when none came.
+    // WHY stopOAuth is set inside start, before the wait: the wait screen's Cancel must end the
+    // process during the link wait too (a lingering login holds the browser-callback port a retry needs).
+    const oauth = await openClaudeLogin(() => {
+      const l = startOAuthLogin();
+      this.stopOAuth = () => l.kill();
+      return l;
+    });
+    if (round !== this.authRound) { oauth?.kill(); return { url: null }; } // cancelled while waiting
+    const url = oauth?.url ?? null;
 
-    // Wait briefly for the URL to be captured from stdout
-    await new Promise(r => setTimeout(r, 1500));
-    const url = oauth.url;
-
-    if (!url) {
-      oauth.kill();
-      this.updateState({ lastError: 'Could not get login URL from Claude Code.' });
+    if (!oauth || !url) {
+      this.stopOAuth = null; // openClaudeLogin already ended the process
+      this.updateState({ lastError: NO_LOGIN_LINK_MESSAGE });
       this.updatePrereq('auth', { status: 'failed', error: 'No login URL' });
       return { url: null };
     }

@@ -446,7 +446,6 @@
     {"file": "prerequisite-installer.ts", "fn": "persistPathToShellProfiles", "call": "fs.readFileSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "refreshPath", "call": "execSync", "count": 2},
     {"file": "prerequisite-installer.ts", "fn": "resolveClaudeCommand", "call": "fs.existsSync", "count": 1},
-    {"file": "prerequisite-installer.ts", "fn": "startOAuthLogin", "call": "fs.existsSync", "count": 1},
     {"file": "project-context.ts", "fn": "discoverContextGroups", "call": "fs.realpathSync.native", "count": 1},
     {"file": "project-conversations.ts", "fn": "listProjectConversations", "call": "fs.realpathSync.native", "count": 1},
     {"file": "providers/chatgpt-auth.ts", "fn": "ChatGptAuth.readAccountSync", "call": "fs.readFileSync", "count": 1},

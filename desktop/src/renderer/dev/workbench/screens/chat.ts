@@ -328,6 +328,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#manage-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-manage-cc' } },
   { ...chat('chat#manage-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-manage-native' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // No update waiting (the version chip's "What's new"): every version's notes, and never the
+  // file's own title, intro or empty [Unreleased] heading (Destin, 2026-11-22).
+  { ...chat('chat/update#up-to-date', 'dialog'), params: { update: 'none' } },
   // Automatic updates (#183): the update already downloaded in the background — the chip, the
   // popup's Restart to update, the password variant, and the close-window prompt it raises
   // when chats are open (closing it cancels the restart).

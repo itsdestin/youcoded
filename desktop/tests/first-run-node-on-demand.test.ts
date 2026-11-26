@@ -88,7 +88,7 @@ describe('"Log in with Claude" installs Node.js first', () => {
     const order: string[] = [];
     m.ensureNode.mockImplementation(async () => { order.push('node'); return { success: true }; });
     m.installClaude.mockImplementation(async () => { order.push('claude'); return { success: true }; });
-    m.startOAuthLogin.mockReturnValue({ url: null, kill: vi.fn() } as never);
+    m.startOAuthLogin.mockReturnValue({ url: null, kill: vi.fn(), waitForUrl: async () => null } as never);
 
     const fr = new FirstRunManager();
     fr.forceStep('AUTHENTICATE');
@@ -110,5 +110,27 @@ describe('"Log in with Claude" installs Node.js first', () => {
     expect(fr.getState().authMode).toBe('none');
     // The card must not keep showing "Installing Claude Code…".
     expect(row(fr, 'claude').status).not.toBe('installing');
+  });
+});
+
+describe('"Log in with Claude" Cancel during the link wait', () => {
+  it('ends the login process immediately, not after the wait', async () => {
+    m.detectNode.mockResolvedValue({ installed: true, version: 'v22' });
+    m.detectClaude.mockResolvedValue({ installed: true, version: '2.1' });
+    let deliver: (u: string | null) => void = () => {};
+    const kill = vi.fn(() => deliver(null));
+    m.startOAuthLogin.mockReturnValue({
+      url: null, kill, onExit: vi.fn(),
+      waitForUrl: () => new Promise<string | null>((r) => { deliver = r; }),
+    } as never);
+
+    const fr = new FirstRunManager();
+    fr.forceStep('AUTHENTICATE');
+    const p = fr.handleOAuthLogin();
+    await vi.waitFor(() => expect(m.startOAuthLogin).toHaveBeenCalled());
+    await fr.cancelAuth();
+    expect(kill).toHaveBeenCalled(); // no link arrived yet
+    await expect(p).resolves.toEqual({ url: null });
+    expect(fr.getState().lastError).toBeUndefined(); // a cancel is not an error
   });
 });
