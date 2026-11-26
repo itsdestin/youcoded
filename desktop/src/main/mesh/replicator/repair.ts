@@ -104,6 +104,10 @@ export async function onCorruptRead(ctx: RepCtx, wire: Buffer, local: Buffer): P
   const run = ctx.runOf(wire);
   ctx.bump('corrupt-read');
   const dmg = await scrubAll(ctx, local);
-  if (dmg === null) { run.stuck = 'corrupt-read-unexplained'; reportFailure({ what: 'explain a damaged read of a chat copy (the scrub found nothing)', where: 'mesh.replicator' }); return; }
+  if (dmg === null) {
+    // the scrub names nothing: either the damage was healed between the failing read and now (a resend repaired it), or it is real and unexplained. A full check tells them apart.
+    if ((await ctx.store.verify(local)).ok) { ctx.bump('corrupt-read-already-healed'); return; }
+    run.stuck = 'corrupt-read-unexplained'; reportFailure({ what: 'explain a damaged read of a chat copy (the scrub found nothing)', where: 'mesh.replicator' }); return;
+  }
   await checkRepair(ctx, wire);
 }

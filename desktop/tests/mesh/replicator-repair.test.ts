@@ -71,6 +71,33 @@ describe('a copy that was rolled back or damaged', () => {
   });
 });
 
+describe('two rotted lines', () => {
+  it('a second rotted line BELOW the one the store named first is not declared healed (guard: a refill clears only when the whole version reads back)', async () => {
+    w = await repWorld(['A', 'B']);
+    const world = w; const V = wireId('rot2');
+    await world.create('A', V);
+    await world.devs.A.rep.appendLocal(V, lineSet(10));
+    await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(10));
+    await world.settle();
+    world.devs.A.carrier.setOnline(false);
+    const body = nodePath.join(vdir(world, 'B', V), 'body-0000000000000000.bin');
+    const lineLen = lineSet(1, 'm', 0)[0].length;
+    let b = world.devs.B;
+    for (const at of [lineLen * 4 + 10, 12]) { // the first rot is in line 4, then another in line 0 (below it), both while the writer is away
+      b.rep.stop(); b.link.stop(); await b.store.close();
+      const raw = fs.readFileSync(body); raw[at] ^= 0xff; fs.writeFileSync(body, raw);
+      b = await world.restart('B', { graceful: true });
+      const hd = await b.store.head(V);
+      await b.store.read(V, 0, 0, hd.lines).catch(async (e: { code?: string }) => { if (e?.code === 'corrupt') await b.rep.reportCorrupt(V); });
+    }
+    world.devs.A.carrier.setOnline(true);
+    await world.elapse(120_000, 10_000);
+    await vi.waitFor(async () => expect((await b.store.head(V)).damagedFromLine).toBeNull(), { timeout: 30_000 });
+    expect(await world.readAll('B', V)).toEqual(await world.readAll('A', V)); // every line reads back, including line 0
+    expect((await b.store.verify(V)).ok).toBe(true);
+  });
+});
+
 describe('a copy that differs from the writer\'s', () => {
   it('lines signed by the writer that contradict my copy set it aside (kept) and recopy under a NEW id; the old id is never used again (guard: retired id is never reused)', async () => {
     w = await repWorld(['A', 'B']);

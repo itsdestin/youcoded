@@ -50,6 +50,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const note = (k: string): void => { ops[k] = (ops[k] ?? 0) + 1; trace.push(k); };
   const fail = (msg: string): never => { throw new Error(`replicator fuzz seed ${seed}: ${msg} [ops: ${trace.join(',')}]`); };
   try {
+    try {
     for (const [i, wr] of ['A', 'B'].entries()) {
       const v = wireId(`fuzz-${seed}-${i}`);
       await world.devs[wr].rep.createVersion({ version: v, chatId: i === 0 ? CHAT : `${CHAT}-2`, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null });
@@ -66,7 +67,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
-        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling/.test(String(e))) throw e; });
+        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready/.test(String(e))) throw e; });
         note('append');
       } else if (r < 42) { const d = pick(NAMES); if (online.has(d)) { world.devs[d].carrier.setOnline(false); online.delete(d); } else { world.devs[d].carrier.setOnline(true); online.add(d); } note('toggle-link'); }
       else if (r < 48) { const d = pick(NAMES); await world.restart(d, { graceful: rand() < 0.5 }); if (!online.has(d)) world.devs[d].carrier.setOnline(false); note('restart'); }
@@ -161,6 +162,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       if (have < a.lines && st.state === 'in-sync') fail(`${a.holder} acknowledged ${a.lines} lines of ${a.v.toString('hex').slice(0, 6)}, holds ${have} and says in-sync (P3)`);
     }
     return { seed, ops, excuses, steps };
+    } catch (e) { if (e instanceof Error && !e.message.startsWith('replicator fuzz seed')) throw new Error(`replicator fuzz seed ${seed}: ${e.message} [ops: ${trace.join(',')}]`, { cause: e }); throw e; }
   } finally {
     for (const s of snaps.values()) fs.rmSync(s.dir, { recursive: true, force: true });
     await world.stopAll(); world.cleanup();

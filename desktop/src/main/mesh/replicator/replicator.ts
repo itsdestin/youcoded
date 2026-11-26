@@ -233,7 +233,13 @@ export class Replicator {
       // the digest covers every (version, count, chain value, state): equal means this peer holds exactly what I hold, for every version
       this.#ctx.bump('sum-equal');
       const now = this.#ctx.clock.now();
-      for (const e of entries) peer.heads.set(e.version.toString('hex'), { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
+      for (const e of entries) {
+        const k = e.version.toString('hex');
+        peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
+        // a version still marked diverged or pulling is looked at again now that this peer holds exactly what I hold (a stale or forged claim no longer stands)
+        const r = this.#ctx.runs.get(k);
+        if (r && (r.diverged || r.pull)) void this.reconsider(e.version);
+      }
       return;
     }
     await this.sendHeads(peer, true); // the summaries differ: say what I hold and ask for theirs
@@ -381,9 +387,12 @@ export class Replicator {
   /** Adapter entry point: append lines to a version this device is the writer of. Refuses otherwise (invariant 7). The new lines are pushed to every device. */
   async appendLocal(wire: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string }> {
     const out = await this.queue(wire, async () => {
+      const desc = this.#directory.describe(wire);
+      if (!desc) throw new Error('unknown version');
+      if (!desc.writer.equals(this.#ctx.crypto.self)) throw new Error('not-the-writer');
+      // a version that is announced but cannot be opened yet (a takeover's child while its parent copy is still being repaired) refuses by NAME; the caller tries again later
       const v = await this.localOf(wire);
-      if (!v) throw new Error('unknown version');
-      if (!v.desc.writer.equals(this.#ctx.crypto.self)) throw new Error('not-the-writer');
+      if (!v) throw new Error('version-not-ready');
       const head = await this.#o.store.head(v.local);
       if (repairFrom(head) !== null) throw new Error('refilling');
       const res = await this.#o.store.append(v.local, 0, head.lines, lines);
