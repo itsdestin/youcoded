@@ -24,6 +24,8 @@ interface Group {
   summary: string;
   facts: { kind: FactKind; text: string }[];
   ways: { id: WayIn; label: string }[];
+  /** Shown but not pressable: the row's line under the title says why. */
+  unavailable?: boolean;
 }
 
 // WHY these words: every fact is something the user can check for themselves, and none
@@ -161,7 +163,21 @@ function Guided({ list, onPick, initial, offline, lastWay }: { list: Group[]; on
   }
   return (
     <div className="w-full flex flex-col gap-3 max-sm:gap-2">
-      {list.map((x) => (
+      {list.map((x) => x.unavailable ? (
+        // WHY a row that cannot be pressed (Destin, 2026-11-25): on a phone every other choice costs money, and
+        // dropping the free row hid that a free way exists at all; a greyed "Coming soon" row says it is on its way.
+        // Its badge stays visible on a narrow screen: it is the row's whole point.
+        <div key={x.id} aria-disabled="true" className="brand-card w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3 opacity-60 select-none">
+          <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg">
+            {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
+          </span>
+          <span className="flex-1 min-w-0">
+            <span className="block brand-heading text-lg max-sm:text-base text-fg">{x.title}</span>
+            <span className="block text-sm max-sm:text-sm-tight text-fg-dim">{x.summary}</span>
+          </span>
+          <span className="brand-badge shrink-0">{x.badge}</span>
+        </div>
+      ) : (
         <button key={x.id} type="button" onClick={() => setOpen(x.id)} className="brand-card brand-card--press w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3">
           <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg">
             {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
@@ -180,12 +196,15 @@ function Guided({ list, onPick, initial, offline, lastWay }: { list: Group[]; on
 }
 
 export function SignInChoices({ chatGpt, onPick, offline, lastWay }: { chatGpt: boolean; onPick: (w: WayIn) => void; offline?: boolean; lastWay?: WayIn | null }) {
-  // WHY the local-model row is dropped on a phone: the phone cannot run a model (the old page spun on "Checking this
-  // computer…" forever), so offering it only leads to a dead end (2026-11-01 test, #11). A phone paired to a computer
-  // is not 'phone' here, so that case is unchanged.
+  // WHY the local-model row cannot be opened on a phone: the phone cannot run a model yet (the old page spun on
+  // "Checking this computer…" forever, 2026-11-01 test, #11), so it shows as "Coming soon" instead (2026-11-25).
+  // A phone paired to a computer is not 'phone' here, so that case is unchanged.
   // `?signInPick=<kind>` is the workbench's photo switch for the second page; the real
   // app's address never carries it, so it always opens on the three rows.
   const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
-  const list = groups(chatGpt).filter((g) => !(g.id === 'local' && deviceNoun() === 'phone'));
+  const phone = deviceNoun() === 'phone';
+  const list = groups(chatGpt).map((g) => (g.id === 'local' && phone
+    ? { ...g, title: 'Free, on this phone', badge: 'Coming soon', summary: 'Running a model on your phone is not available yet.', unavailable: true }
+    : g));
   return <Guided list={list} onPick={onPick} initial={pick} offline={offline} lastWay={lastWay} />;
 }
