@@ -264,7 +264,7 @@ export class RosterStore {
       return 'appended';
     };
     const p = this.#queue.then(run, run);
-    this.#queue = p.catch(() => undefined);
+    this.#queue = p.catch(() => undefined); /* benign: p itself is returned, so its caller gets the failure; this copy only keeps one failed write from blocking the queue */
     return p;
   }
 
@@ -298,7 +298,7 @@ function validRecordFollows(raw: Buffer, from: number): boolean {
     try {
       parseEntry(body);
       return true;
-    } catch { /* a coincidence of bytes, not a record */ }
+    } catch { /* benign: bytes that do not parse as a record are a coincidence, not a record (the scan goes on) */ }
   }
   return false;
 }

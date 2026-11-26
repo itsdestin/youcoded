@@ -173,7 +173,7 @@ export class MeshKeyStore {
       return next;
     };
     const p = this.#queue.then(run, run);
-    this.#queue = p.catch(() => undefined);
+    this.#queue = p.catch(() => undefined); /* benign: p itself is returned, so its caller gets the failure; this copy only keeps one failed write from blocking the queue */
     return p;
   }
 

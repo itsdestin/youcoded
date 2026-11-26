@@ -86,9 +86,9 @@ export class MeetingClient extends EventEmitter {
   close(): void {
     const ws = this.#ws;
     if (!ws || this.#closed) return;
-    try { if (this.#open) ws.send(packMessage({ op: 'meet-close' })); } catch { /* already gone */ }
+    try { if (this.#open) ws.send(packMessage({ op: 'meet-close' })); } catch { /* benign: closing a meeting whose socket is already gone */ }
     // Give the close message a moment to leave, then drop the socket either way.
-    setTimeout(() => { try { ws.close(1000, 'done'); } catch { /* closed */ } }, 200).unref?.();
+    setTimeout(() => { try { ws.close(1000, 'done'); } catch { /* benign: the socket was already closed */ } }, 200).unref?.();
     this.#closed = true;
   }
 }

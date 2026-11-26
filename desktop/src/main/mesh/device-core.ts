@@ -331,7 +331,7 @@ export class DeviceCore {
           const s = parseStatement(raw);
           const mk = v?.devices.get(toHex(s.minter));
           if (mk && s.label === label && verifyStatement(s, mk.signKey, this.o.setId, creator) && secretMatches(s, secret)) stmt = s;
-        } catch { /* keep the secret without a statement */ }
+        } catch { /* benign: a statement that does not parse or verify is simply not adopted; the secret itself is kept and the statement can be asked for again */ }
       }
       this.o.book.set(label, { stmt, secret });
     }
@@ -362,7 +362,7 @@ export class DeviceCore {
       changed = this.o.roster.size !== before || v === 'accepted';
       if (v === 'wait') return { out, wait: true, changed };
       if (v.startsWith('reject:')) {
-        if (v === 'reject:bad-blob') { try { out.push({ kind: KIND_NEED, body: needBody([], [parseStatement(b.stmt).label]) }); } catch { /* not a statement */ } }
+        if (v === 'reject:bad-blob') { try { out.push({ kind: KIND_NEED, body: needBody([], [parseStatement(b.stmt).label]) }); } catch { /* benign: a blob that is not even a statement has no label to ask for; the reject itself is still answered */ } }
         return { out, reject: v.slice(7), changed };
       }
     } else if (kind === KIND_HEADS) {

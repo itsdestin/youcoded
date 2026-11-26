@@ -1938,7 +1938,7 @@ void app.whenReady().then(async () => {
   startTagRegistry();
 
   // After the store AND tag registry — the index denormalizes both.
-  startChatsearchIndex(); void import('./mesh/boot-hook').then((m) => m.startMeshIfEnabled({ userData: app.getPath('userData'), safeStorage, packaged: app.isPackaged })).catch(() => {}); // Mesh, SWITCHED OFF by default: one guarded call (same line: main.ts is at its line budget); see mesh/boot-hook.ts
+  startChatsearchIndex(); void import('./mesh/boot-hook').then((m) => m.startMeshIfEnabled({ userData: app.getPath('userData'), safeStorage, packaged: app.isPackaged })).catch((cause) => import('./report-failure').then((r) => r.reportFailure({ what: 'start Mesh', cause, where: 'mesh.start' }))); /* same line: main.ts is at its line budget; the dynamic import keeps the top imports unchanged */ // Mesh, SWITCHED OFF by default: one guarded call (same line: main.ts is at its line budget); see mesh/boot-hook.ts
   // WHY after the index: the drainer reads the same store root; requests it
   // applies trigger the index rebuild through emitConversationMetaChanged.
   startOutboxDrain(outboxBroadcast);

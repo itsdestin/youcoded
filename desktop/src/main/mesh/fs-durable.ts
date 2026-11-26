@@ -17,8 +17,10 @@ export async function syncDir(dir: string): Promise<void> {
   try {
     h = await fs.promises.open(dir, 'r');
     await h.sync();
-  } catch {
-    /* Windows cannot open a directory; the rename is still atomic there */
+  } catch (e) {
+    // WHY only Windows may ignore it (review of the silent catches): on Linux and macOS a failed directory fsync means the rename or new file may NOT survive a crash, so it must fail loudly like the chat store's own
+    // fsyncDir (store/fsio.ts). Windows cannot open a directory at all (EISDIR/EPERM/EACCES/EINVAL); the rename is still atomic there.
+    if (!(process.platform === 'win32' && ['EISDIR', 'EPERM', 'EACCES', 'EINVAL'].includes((e as { code?: string }).code ?? ''))) throw e;
   } finally {
     await h?.close();
   }

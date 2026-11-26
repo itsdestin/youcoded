@@ -124,7 +124,7 @@ export class RelayClient extends EventEmitter {
     const ws = this.#ws;
     this.#ws = null;
     this.failAll(new Error('stopped'));
-    try { ws?.close(1000, 'stopping'); } catch { /* already closed */ }
+    try { ws?.close(1000, 'stopping'); } catch { /* benign: stopping a socket that is already closed */ }
   }
 
   private clearTimers(): void {
@@ -157,7 +157,7 @@ export class RelayClient extends EventEmitter {
     this.#keepalive = setInterval(() => {
       if (this.#ws !== ws) return;
       if (Date.now() - this.#lastRx > ms * 3) { this.log('silent-socket'); ws.terminate(); return; }
-      try { ws.send('ping'); } catch { /* closing */ }
+      try { ws.send('ping'); } catch { /* benign: a ping on a socket that is closing; the reconnect logic handles the close */ }
     }, ms);
     this.#keepalive.unref?.();
   }
@@ -220,7 +220,7 @@ export class RelayClient extends EventEmitter {
           this.log('relay-oversize-answer');
           p.reject(new Error('relay-oversize-answer'));
           // A relay that ignores the limits is not served any longer: hang up (the normal reconnect loop then dials again).
-          try { this.#ws?.terminate(); } catch { /* gone */ }
+          try { this.#ws?.terminate(); } catch { /* benign: terminating a socket that is already gone */ }
           return;
         }
         p.frames.push({ seq: h.seq as number, bytes: Buffer.from(m.payload), writer: typeof h.w === 'string' && /^[0-9a-f]{32}$/.test(h.w) ? h.w : null });

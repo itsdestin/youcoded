@@ -15,6 +15,7 @@
 // File: `<userData>/mesh/relay-sync.json`. Public ids and public entry bytes only; no secrets.
 import path from 'path';
 import { readFileIfExists, writeFileDurable } from './fs-durable';
+import { reportFailure } from '../report-failure';
 
 export interface PendingJoin { dev: string; /** the signed `add` entry, base64 (public data) */ entry: string; at: number }
 interface State { v: 1; pending: string[]; acked: string | null; joins: PendingJoin[] }
@@ -38,7 +39,7 @@ export class RelaySyncState {
         acked: hex(j.acked) ? j.acked : null,
         joins: Array.isArray(j.joins) ? j.joins.filter((x): x is PendingJoin => !!x && typeof x.dev === 'string' && typeof x.entry === 'string' && Number.isSafeInteger(x.at)).slice(0, 64) : [],
       };
-    } catch { /* a damaged file is an empty queue: the log is the truth, and an add/remove the relay missed is refused loudly by it */ }
+    } catch (cause) { reportFailure({ what: 'read the saved relay sync queue (starting with an empty one; the log is the truth and an add or remove the relay missed is refused loudly by it)', cause, where: 'mesh.relay-sync' }); }
   }
   get pending(): readonly string[] { return this.#s.pending; }
   get acked(): string | null { return this.#s.acked; }
@@ -47,7 +48,7 @@ export class RelaySyncState {
     const snapshot = JSON.stringify(this.#s);
     const run = (): Promise<void> => writeFileDurable(this.file, Buffer.from(snapshot), 0o600);
     const p = this.#queue.then(run, run);
-    this.#queue = p.catch(() => undefined);
+    this.#queue = p.catch(() => undefined); /* benign: p itself is returned, so its caller gets the failure; this copy only keeps one failed write from blocking the queue */
     return p;
   }
   /** Remember (durably) that this entry must be told to the relay. Call BEFORE the entry is written to the log. */

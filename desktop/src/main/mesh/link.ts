@@ -43,6 +43,7 @@ import { MeshCryptoError } from './crypto/errors';
 import { FrameReceiver, FrameSender, peekHeader, type OpenedFrame } from './crypto/frames';
 import type { DeviceIdentity } from './crypto/identity';
 import { readFileIfExists, writeFileDurable } from './fs-durable';
+import { reportFailure } from '../report-failure';
 
 /** What the link needs from a path to the other devices. */
 export interface Carrier {
@@ -330,7 +331,7 @@ export class Link {
         // crash lose it. Skip the save AND the acknowledgement; the next clean batch writes both.
         if (this.#failedOpen.size === 0) {
           await this.persist(); // durable BEFORE the acknowledgement below
-          if (advanced) await this.#o.carrier.received(group, committed).catch(() => undefined);
+          if (advanced) await this.#o.carrier.received(group, committed).catch((cause) => reportFailure({ what: 'acknowledge received frames to the relay (they will be offered again)', cause, where: 'mesh.link' }));
         }
       }
       if (blocked) {
@@ -433,7 +434,7 @@ export class Link {
       const from = this.prefixOf(wire);
       if (code === 'unknown-signer') {
         let removed = false;
-        try { removed = this.#o.isRemoved?.(peekHeader(wire).from) === true; } catch { /* not a frame header */ }
+        try { removed = this.#o.isRemoved?.(peekHeader(wire).from) === true; } catch { /* benign: bytes that are not a frame header cannot name a removed device; the frame goes on to the normal checks */ }
         // A removed device's leftover frame can never become judgeable: waiting for it would only fill a slot.
         if (removed) { this.reject(group, seq, from, 'signer-removed'); return 'rejected'; }
       }

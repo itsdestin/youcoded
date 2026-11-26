@@ -58,6 +58,7 @@ import { hostSecretStoreBackend } from './electron-headless';
 import type { Platform } from '../platform';
 import { hasHost, hostNotify, onHostEvent, returnToApp } from './host-bridge';
 import { startBackgroundStatus } from '../background-status';
+import { reportFailure } from '../report-failure';
 
 export interface HeadlessOptions {
   /** Loopback port the app's page connects to. */
@@ -316,7 +317,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   startOutboxDrain(ipcWiring.outboxBroadcast);
   // Mesh ("Chats on every device"), SWITCHED OFF: one guarded call. Off by default it reads one optional file and does nothing else;
   // the wiring lives in mesh/boot-hook.ts because this file has a line budget. The phone's backend reports itself as 'android'.
-  const mesh = await import('../mesh/boot-hook').then((m) => m.startMeshIfEnabled({ userData, safeStorage, packaged: false, platform: 'android', secretStoreBackend: () => hostSecretStoreBackend() })).catch(() => null);
+  const mesh = await import('../mesh/boot-hook').then((m) => m.startMeshIfEnabled({ userData, safeStorage, packaged: false, platform: 'android', secretStoreBackend: () => hostSecretStoreBackend() })).catch((cause) => { reportFailure({ what: 'start Mesh', cause, where: 'mesh.start' }); return null; });
 
   // Last: open the door. The app waits for this line before it loads its page.
   await remoteServer.start();

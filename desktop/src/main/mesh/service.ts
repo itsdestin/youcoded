@@ -49,6 +49,7 @@ import { RosterStore } from './roster-store';
 import { ensureDir, readFileIfExists, writeFileDurable } from './fs-durable';
 import { generateIdentity } from './crypto/identity';
 import { GROUP_ROSTER, GROUP_TEST_NOTE, KIND_NOTE, KIND_ROSTER, noteBody, parseNoteBody, rosterBody } from './wire';
+import { reportFailure } from '../report-failure';
 
 type MeshLog = (event: string, fields?: Record<string, string | number | boolean>) => void;
 export interface MeshServiceOptions {
@@ -273,13 +274,13 @@ export class MeshService {
       this.#link?.kick();
     };
     const p = this.#afterChain.then(run, run);
-    this.#afterChain = p.catch(() => undefined);
+    this.#afterChain = p.catch(() => undefined); /* benign: p itself is returned, so its caller gets the failure; this copy only keeps one failed step from blocking the chain */
     return p;
   }
   #lastWaitingHeads = 0;
   private emit(out: Out[]): void {
     // optional: a frame that needs the current secret when none is held yet is dropped, not queued (it would block the bundle that creates that secret); heads and requests repeat
-    for (const o of out) void this.#link?.sendDurable({ group: GROUP_ROSTER, kind: o.kind, body: o.body, to: o.to, wide: o.wide === true, optional: o.wide !== true }).catch(() => undefined);
+    for (const o of out) void this.#link?.sendDurable({ group: GROUP_ROSTER, kind: o.kind, body: o.body, to: o.to, wide: o.wide === true, optional: o.wide !== true }).catch((cause) => reportFailure({ what: 'send a device-list frame (heads and requests repeat)', cause, where: 'mesh.roster' }));
   }
   private async persistBook(): Promise<void> {
     if (!this.#book.dirty) return;
@@ -353,7 +354,7 @@ export class MeshService {
         await this.#sync.noteAccepted(toHex(entry.id));
       },
       // WHY not awaited: the welcome must not wait for the other devices' copy of the roster; the frame is queued and retried by the link.
-      afterAdded: (entry) => { void this.publishRoster([entry]).catch(() => undefined); },
+      afterAdded: (entry) => { void this.publishRoster([entry]).catch((cause) => reportFailure({ what: 'send the updated device list to the other devices (it is offered again with the next change)', cause, where: 'mesh.roster' })); },
     });
   }
 
@@ -474,7 +475,7 @@ export class MeshService {
         const entry = parseEntry(Buffer.from(j.entry, 'base64'));
         if (!this.roster.has(entry.id)) {
           await this.roster.append(entry);
-          void this.publishRoster([entry]).catch(() => undefined);
+          void this.publishRoster([entry]).catch((cause) => reportFailure({ what: 'send the updated device list to the other devices (it is offered again with the next change)', cause, where: 'mesh.roster' }));
         }
         if (this.roster.confirmedIds().has(j.dev)) await this.#sync.removeJoin(j.dev);
       } catch { await this.#sync.removeJoin(j.dev); }
@@ -516,7 +517,7 @@ export class MeshService {
     });
     client.on('message', (m: { gen: number; bytes: Buffer }) => {
       if (this.#host !== host) return;
-      try { for (const out of host.onMessage(`g${m.gen}`, m.bytes)) client.send(out); } catch { /* meeting closed under us */ }
+      try { for (const out of host.onMessage(`g${m.gen}`, m.bytes)) client.send(out); } catch (cause) { reportFailure({ what: 'handle a pairing message from the meeting (the pairing will not complete; the person can start it again)', cause, where: 'mesh.pairing' }); }
     });
     client.on('closed', () => { if (this.#hostMeeting?.client === client) this.closeHostMeeting(); });
     await client.connect();
@@ -547,7 +548,7 @@ export class MeshService {
     if (hm) {
       // Through the relay: send the answer (the welcome, or a refusal) to the guest, then end the meeting a moment later so it
       // is erased at the relay as soon as it has served. A pairing that did not complete still ends the meeting.
-      try { for (const m of out) hm.client.send(m); } catch { /* the guest is gone */ }
+      try { for (const m of out) hm.client.send(m); } catch { /* benign: the guest closed the meeting before the answer; the pairing is over either way */ }
       setTimeout(() => { if (this.#hostMeeting === hm) this.closeHostMeeting(); }, 1500).unref?.();
     }
     return out;
@@ -639,7 +640,7 @@ export class MeshService {
   /** Run roster operations one at a time (two removals at once would race on the generation number and on the log heads). */
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const p = this.#opChain.then(fn, fn);
-    this.#opChain = p.catch(() => undefined);
+    this.#opChain = p.catch(() => undefined); /* benign: p itself is returned, so its caller gets the failure; this copy only keeps one failed operation from blocking the chain */
     return p;
   }
 
@@ -668,7 +669,7 @@ export class MeshService {
     void this.drainRelay();
     // The new shared secret is made by whoever's turn it is (device-core.ts), not necessarily this device: nothing here waits on a bundle
     // being sent, so a removal can no longer block later operations (review N12).
-    void this.publishRoster([entry]).catch(() => undefined);
+    void this.publishRoster([entry]).catch((cause) => reportFailure({ what: 'send the updated device list to the other devices (it is offered again with the next change)', cause, where: 'mesh.roster' }));
     await this.afterChange(true);
     const wait = this.o.removeWaitMs ?? 10_000;
     const relay = await this.waitForRelay(id, wait);
@@ -685,7 +686,7 @@ export class MeshService {
       await this.#sync.enqueue(toHex(entry.id));
       await this.roster.append(entry);
       void this.drainRelay();
-      void this.publishRoster([entry]).catch(() => undefined);
+      void this.publishRoster([entry]).catch((cause) => reportFailure({ what: 'send the updated device list to the other devices (it is offered again with the next change)', cause, where: 'mesh.roster' }));
       void this.afterChange(true);
     });
   }
