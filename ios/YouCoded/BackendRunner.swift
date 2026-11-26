@@ -78,6 +78,8 @@ final class BackendRunner {
             "YOUCODED_HOST_SOCKET": "tcp:\(hostPort)",
             "YOUCODED_HOST_TOKEN": hostToken,
             "YOUCODED_HOST_OS": "ios",
+            // The backend shares this app's process: it must never call exit (ios-compat.ts installInProcessGuards).
+            "YOUCODED_IN_PROCESS": "1",
             "YOUCODED_DEVICE_NAME": Self.deviceName(),
             // Nothing on an iPhone can update a bundled program; the App Store updates the whole app.
             "DISABLE_AUTOUPDATER": "1",

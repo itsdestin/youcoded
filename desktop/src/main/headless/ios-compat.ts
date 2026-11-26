@@ -26,6 +26,78 @@ export function builtinFetchIsBroken(): boolean {
   return typeof g.WebAssembly === 'undefined';
 }
 
+// ── Unicode property escapes (`\p{…}`) ───────────────────────────────────────────────────────────────────────────────
+// WHY (2026-11-25): nodejs-mobile builds Node for iOS WITHOUT the Unicode data library (ICU, `--with-intl=none`), and
+// without it V8 rejects every regular expression that names a Unicode property — `\p{Extended_Pictographic}`,
+// `\p{Cc}` — with a SyntaxError. Several libraries the backend loads build such an expression AS THEY LOAD (zod's emoji
+// check among them), so the backend could not even start. The build (ios/runtime/build-backend.mjs) finds every
+// property the bundle names, works out its code-point ranges on the build machine (whose Node has the data), and
+// hands them over here as __YC_UNICODE_TABLES__; this turns `\p{Name}` into those plain ranges before the expression
+// reaches V8. Literals are covered too: the build makes esbuild write them as `new RegExp(...)` calls.
+
+/** Property name → the body of a character class (ranges as `\u{…}` escapes), e.g. `Cc` → `\u{0}-\u{1F}\u{7F}-\u{9F}`. */
+export type UnicodeTables = Record<string, string>;
+declare const __YC_UNICODE_TABLES__: UnicodeTables | undefined;
+
+/** Does this runtime understand `\p{…}` itself? */
+export function unicodePropertiesWork(): boolean {
+  try { new RegExp('\\p{L}', 'u'); return true; } catch { return false; }
+}
+
+/** Replace every `\p{Name}` / `\P{Name}` in a pattern with plain ranges. A name with no table is left alone, so V8
+ *  reports it exactly as it would have (never a silently wrong match). */
+export function rewriteUnicodeProperties(pattern: string, tables: UnicodeTables): string {
+  if (pattern.indexOf('\\p{') < 0 && pattern.indexOf('\\P{') < 0) return pattern;
+  let out = '';
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\') {
+      const next = pattern[i + 1];
+      if ((next === 'p' || next === 'P') && pattern[i + 2] === '{') {
+        const end = pattern.indexOf('}', i + 3);
+        const body = end > 0 ? tables[pattern.slice(i + 3, end)] : undefined;
+        if (body !== undefined && end > 0) {
+          if (next === 'p') out += inClass ? body : `[${body}]`;
+          // "Not this property" can only be written as its own class; inside another class there is no plain
+          // spelling, so that one case is left for V8 to refuse loudly.
+          else if (!inClass) out += `[^${body}]`;
+          else { out += pattern.slice(i, end + 1); }
+          i = end;
+          continue;
+        }
+      }
+      out += c + (next ?? '');
+      i++;
+      continue;
+    }
+    if (c === '[' && !inClass) inClass = true;
+    else if (c === ']' && inClass) inClass = false;
+    out += c;
+  }
+  return out;
+}
+
+/** Make `new RegExp(pattern)` accept `\p{…}` on a runtime without Unicode data. No-op where it already works. */
+export function installRegExpPropertyFallback(tables: UnicodeTables, force = false): void {
+  if (!force && unicodePropertiesWork()) return;
+  const Native = RegExp as RegExpConstructor & { __ycPatched?: boolean };
+  if (Native.__ycPatched) return;
+  const Patched = function RegExp(this: unknown, pattern: unknown, flags?: string): RegExp {
+    const p = typeof pattern === 'string' ? rewriteUnicodeProperties(pattern, tables) : pattern;
+    // `new.target` keeps subclasses (and `Reflect.construct`) working; a plain call behaves like RegExp(...).
+    return new.target
+      ? Reflect.construct(Native, flags === undefined ? [p] : [p, flags], new.target === Patched ? Native : new.target) as RegExp
+      : (flags === undefined ? (Native as (p: unknown) => RegExp)(p) : (Native as (p: unknown, f: string) => RegExp)(p, flags));
+  } as unknown as RegExpConstructor & { __ycPatched?: boolean };
+  // Same prototype object, so `x instanceof RegExp`, literals and every method are untouched.
+  Patched.prototype = Native.prototype;
+  Object.setPrototypeOf(Patched, Native);
+  Patched.__ycPatched = true;
+  Object.defineProperty(Native.prototype, 'constructor', { value: Patched, writable: true, configurable: true });
+  (globalThis as unknown as { RegExp: RegExpConstructor }).RegExp = Patched;
+}
+
 /** Node 18 loads its whole built-in fetch (undici) the first time ANY of `Headers`, `Request`, `Response` or
  *  `FormData` is touched — and that load starts compiling the WebAssembly HTTP parser, which without WebAssembly
  *  becomes an unhandled rejection in the log on every launch ("WebAssembly is not defined"). The parser is never
@@ -46,7 +118,8 @@ function quietBuiltinFetchLoad(): void {
  *    code that asked to exit really does stop running. */
 export function installInProcessGuards(): void {
   process.on('uncaughtException', (e) => console.error('[ios] uncaught exception:', e));
-  if ((process.platform as string) !== 'ios') return; // a laptop run of this entry exits like any program
+  // Only when the backend really is inside an app (the Swift shell says so); a laptop run of this entry exits like any program.
+  if (process.env.YOUCODED_IN_PROCESS !== '1' && (process.platform as string) !== 'ios') return;
   const hold = (code?: number | string | null): never => {
     try { require('fs').writeSync(1, `YOUCODED_HEADLESS_EXIT ${code ?? 0}\n`); } catch { /* the app's timeout still catches it */ }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -57,6 +130,9 @@ export function installInProcessGuards(): void {
 }
 
 export function installIosCompat(opts: { forceFetch?: boolean } = {}): void {
+  // 0. Regular expressions first: modules loaded after this build `\p{…}` expressions as they load.
+  installRegExpPropertyFallback(typeof __YC_UNICODE_TABLES__ === 'undefined' ? {} : __YC_UNICODE_TABLES__);
+
   // 1. fetch. WHY replaced only when broken: on a runtime where the built-in works, it stays the one in use, so a
   // laptop run of this entry behaves like the desktop.
   if (opts.forceFetch || builtinFetchIsBroken()) {

@@ -22,6 +22,7 @@ import { build } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP = path.resolve(HERE, '../../desktop');
@@ -61,7 +62,55 @@ const virtualPaths = {
   },
 };
 
-async function bundle(entry) {
+/** Code-point ranges of one Unicode property, as the body of a character class. Worked out HERE, on the build
+ *  machine, whose Node has the Unicode data the iPhone's Node lacks (see ios-compat.ts). */
+function unicodeTable(name) {
+  const re = new RegExp(`\\p{${name}}`, 'u');
+  const esc = (cp) => `\\u{${cp.toString(16).toUpperCase()}}`;
+  let body = '';
+  let start = -1;
+  for (let cp = 0; cp <= 0x110000; cp++) {
+    // Lone surrogates cannot be written in a /u class range end-to-end with their neighbours; skip that block.
+    const hit = cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) && re.test(String.fromCodePoint(cp));
+    if (hit && start < 0) start = cp;
+    if (!hit && start >= 0) { body += start === cp - 1 ? esc(start) : `${esc(start)}-${esc(cp - 1)}`; start = -1; }
+  }
+  return body;
+}
+
+/** Every Unicode property the given bundle text names in a `\p{…}` (as a literal, or inside a string). */
+function propertiesNamedIn(text) {
+  const names = new Set();
+  for (const m of text.matchAll(/\\{1,2}[pP]\{([A-Za-z_=]+)\}/g)) names.add(m[1]);
+  return names;
+}
+
+/** Rewrite every regular-expression LITERAL that names a Unicode property as a `new RegExp("…", "flags")` call.
+ *  WHY: on the iPhone's Node such a literal is a syntax error that stops the WHOLE file from loading, before any
+ *  fallback can run; as a call it goes through the fallback in ios-compat.ts. Literals are found with the TypeScript
+ *  parser (the desktop's own dependency), not a text pattern: telling a regex literal from a division by eye is
+ *  exactly the mistake a text pattern makes. */
+function lowerPropertyLiterals(file, text) {
+  if (!/\\[pP]\{/.test(text)) return text;
+  const ts = createRequire(path.join(DESKTOP, 'package.json'))('typescript');
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, false, ts.ScriptKind.JS);
+  const edits = [];
+  const visit = (node) => {
+    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+      const raw = node.getText(source);
+      const close = raw.lastIndexOf('/');
+      const body = raw.slice(1, close);
+      if (/\\[pP]\{/.test(body)) edits.push({ start: node.getStart(source), end: node.getEnd(), text: `new RegExp(${JSON.stringify(body)}, ${JSON.stringify(raw.slice(close + 1))})` });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  let out = text;
+  for (const e of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  return out;
+}
+
+async function bundle(entry, unicodeTables = {}) {
   const outfile = path.join(OUT, 'dist', entry.replace(/\.ts$/, '.js'));
   // How many folders up from this bundle's own folder the layout root is ("dist/main/headless" → 3).
   const up = path.posix.dirname('dist/' + entry).split('/').map(() => '..').join('/');
@@ -77,6 +126,9 @@ async function bundle(entry) {
     alias: { electron: path.join(SRC, 'main/headless/electron-headless.ts') },
     external: EXTERNAL,
     plugins: [virtualPaths],
+    // The fills (ios-compat.ts) run before any module of the bundle: see ios-prelude.ts.
+    inject: [path.join(SRC, 'main/headless/ios-prelude.ts')],
+    define: { __YC_UNICODE_TABLES__: JSON.stringify(unicodeTables) },
     banner: { js: `const __ycRoot = require('path').resolve(__dirname, ${JSON.stringify(up)});\nconst __ycPath = (rel) => require('path').join(__ycRoot, rel);` },
     legalComments: 'none',
     logLevel: 'warning',
@@ -85,7 +137,10 @@ async function bundle(entry) {
     minify: false,
     keepNames: true,
   });
-  return { outfile, inputs: Object.keys(result.metafile.inputs).length };
+  const built = await fs.promises.readFile(outfile, 'utf8');
+  const text = lowerPropertyLiterals(outfile, built);
+  if (text !== built) await fs.promises.writeFile(outfile, text);
+  return { outfile, inputs: Object.keys(result.metafile.inputs).length, text };
 }
 
 async function main() {
@@ -94,8 +149,19 @@ async function main() {
   await fs.promises.rm(OUT, { recursive: true, force: true });
   await fs.promises.mkdir(OUT, { recursive: true });
 
+  // Two passes: the first finds which Unicode properties the code names, the second bakes their tables in.
+  const names = new Set();
   for (const entry of [MAIN_ENTRY, ...WORKER_ENTRIES]) {
-    const { outfile, inputs } = await bundle(entry);
+    for (const n of propertiesNamedIn((await bundle(entry)).text)) names.add(n);
+  }
+  const tables = {};
+  for (const name of [...names].sort()) {
+    try { tables[name] = unicodeTable(name); } catch { console.warn(`[ios-backend] unknown Unicode property \\p{${name}} left as written`); }
+  }
+  console.log(`[ios-backend] Unicode properties baked in: ${Object.keys(tables).join(', ') || '(none)'}`);
+
+  for (const entry of [MAIN_ENTRY, ...WORKER_ENTRIES]) {
+    const { outfile, inputs } = await bundle(entry, tables);
     const size = (await fs.promises.stat(outfile)).size;
     console.log(`[ios-backend] ${path.relative(OUT, outfile)}  ${(size / 1e6).toFixed(1)} MB  (${inputs} modules)`);
   }
