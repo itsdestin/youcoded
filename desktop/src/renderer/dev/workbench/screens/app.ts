@@ -48,6 +48,10 @@ export const APP: readonly ScreenEntry[] = [
   // Waiting-notice T3: a quick toast above two notices that need you (the first shows "1 more").
   { name: 'dev/toast#two-needs-you-and-quick', tags: ['dev', 'notice'], session: 'wb-1', params: { toast: 'stack' }, newIn: 'after' as const },
   { name: 'dev/toast#two-needs-you-and-quick-phone', tags: ['dev', 'notice', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'stack' }, newIn: 'after' as const },
+  // Waiting-notice T6: held back in a chat you are not looking at (floating, names that chat); the strips on a phone, buttons below.
+  { name: 'dev/toast#held-elsewhere', tags: ['dev', 'notice'], session: 'wb-1', params: { toast: 'held-elsewhere' }, newIn: 'after' as const },
+  ...['held', 'failed'].map((w) => ({ name: `dev/toast#strip-${w}-phone`, tags: ['dev', 'notice', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'none', strip: w }, newIn: 'after' as const })),
+  { name: 'dev/toast#n-compact-busy-phone', tags: ['dev', 'notice', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'n:compact-busy' }, newIn: 'after' as const },
   { name: 'dev/toast#none', tags: ['dev'], session: 'wb-1', params: { toast: 'none' }, newIn: 'after' as const, sameAs: { name: 'chat#queue-idle-after', why: 'The same chat with no notice raised (the Before picture for the signed-out notice).' } },
   // Card #134 round 4: a button's action failed (Copy path here): the plain sentence in the toast, no invented cause (the Before is dev/toast#none).
   { name: 'dev/toast#action-failed', tags: ['dev'], session: 'wb-1', params: { toast: 'action-failed' }, newIn: 'after' as const, sameAs: { name: 'dev/toast#n-copy-path', why: 'The same notice raised by its catalogue name for the review deck.' } },

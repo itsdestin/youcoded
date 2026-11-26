@@ -12,12 +12,14 @@ import { announceSessionLost } from '../../utils/session-lost-notice';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 import { NOTICE_CATALOGUE } from './notice-catalogue';
 import { showChatNotice, type ChatNotice } from '../../state/chat-notice-store';
+import { blockedSendFloating } from '../../utils/blocked-send-toast';
+import { pendingInteractionRefusalCopy } from '../../state/pty-input-gate';
 
 // Waiting-notice deck round 4: the per-chat strip above the message box, with each kind's real words (`?strip=<which>`).
 const noop = () => {};
 const STRIPS: Record<string, ChatNotice> = {
   // K-1 held back: stays until the question is answered or you send.
-  held: { key: 'held', tone: 'warn', leave: 'resolved', text: 'Claude Code is waiting on something — answer it first. Your message is still in the box.',
+  held: { key: 'held', tone: 'warn', leave: 'resolved', text: pendingInteractionRefusalCopy(),
     actions: [{ label: 'Send anyway', onClick: noop }, { label: 'Show card', onClick: noop, primary: true }] },
   // K-3 can't be done now: leaves on your next action.
   cant: { key: 'cant', tone: 'warn', leave: 'next-action', text: "Can't compact while your assistant is still working. Stop the current turn, or wait for it to finish." },
@@ -28,6 +30,14 @@ const STRIPS: Record<string, ChatNotice> = {
 
 export default function ToastPractice() {
   const [shown, setShown] = useState(false);
+  // The red dot (`?dot=1`, waiting-notice T2): a failure raised for a chat nobody is looking at (wb-2, while wb-1 is on screen)
+  // marks it in the session list. Raised after a short wait so App has already said which chat it is showing; a failure raised
+  // for the chat on screen would (correctly) draw no dot.
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('dot') !== '1') return undefined;
+    const id = setTimeout(() => showChatNotice('wb-2', { key: 'failed', tone: 'error', leave: 'next-action', text: "Couldn't run /review: two installed skills have that name." }), 600);
+    return () => clearTimeout(id);
+  }, []);
   useScreenOpen('dev/toast', () => {
     const which = new URLSearchParams(location.search).get('toast');
     // Waiting-notice review deck: any notice from the catalogue, by id (`?toast=n:<id>`), held on screen for the picture.
@@ -41,6 +51,9 @@ export default function ToastPractice() {
       setShown(true); return;
     }
     const strip = new URLSearchParams(location.search).get('strip');
+    // Held back in a chat you are NOT looking at (`?toast=held-elsewhere`): the short floating notice that names the other chat,
+    // built by the app's own function so the words cannot drift (waiting-notice T1).
+    if (which === 'held-elsewhere') { const f = blockedSendFloating('Research notes'); announce(f.message, 60_000); setShown(true); return; }
     if (strip && STRIPS[strip]) { showChatNotice('wb-1', STRIPS[strip]); setShown(true); return; }
     // K-7 (needs you, app-wide): stays until closed, outlined Dismiss left, its own button filled right (`?toast=k7:<id>`).
     const heads = which?.startsWith('k7:') ? NOTICE_CATALOGUE.find((n) => n.id === which.slice(3)) : undefined;

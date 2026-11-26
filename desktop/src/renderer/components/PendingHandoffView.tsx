@@ -5,6 +5,7 @@ import { HandoffFreshnessInline } from './HandoffFreshnessInline';
 import { ErrorState } from './ui';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
+import { ScreenMark } from '../shoot-mode';
 
 /** WHY: the saved provider-local transcript is a read-only preview, not a
  * fabricated writer. Its pager never opens a native host or Claude process. */
@@ -30,6 +31,7 @@ export default function PendingHandoffView({ tab, visible, onRetry, onContinue, 
       <div className={`framed-shell${drawerOpen || gameOpen ? ' drawer-open' : ''}${expanded && drawerOpen && !gameOpen ? ' drawer-expanded' : ''}`}>
         <div className="frame-edge" />
         <div className="chat-pane">
+          {visible && <ScreenMark name="chat/handoff" />}
           <div className="flex-1 min-h-0 overflow-hidden" style={{ paddingTop: 'var(--top-chrome-bottom, 3rem)', paddingBottom: 'var(--bottom-chrome-height, 5rem)' }}>
             <SessionPreviewPane provider={tab.provider} id={tab.conversationId} title={tab.name} projectSlug={tab.projectSlug} backdrop={false} />
           </div>

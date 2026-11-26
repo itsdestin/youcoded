@@ -62,6 +62,8 @@ export const CHAT: readonly ScreenEntry[] = [
     ...(k.endsWith('detail') ? { open: ['Details'] } : {}), newIn: 'after' as const,
   })),
   { ...chat('chat#control-failure-phone', 'view', 'narrow'), session: 'wb-2', viewport: { width: 390, height: 844 }, params: { controlFailure: 'compact-detail', platform: 'android' }, open: ['Details'], newIn: 'after' as const },
+  // Waiting-notice T2/T6: the session list with the red dot on a chat whose failure you have not seen (wb-2).
+  { ...chat('chat/sessions#failure-dot', 'menu'), session: 'wb-1', params: { dot: '1' }, waitMs: 2_500, newIn: 'after' as const },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
@@ -100,6 +102,12 @@ export const CHAT: readonly ScreenEntry[] = [
   // Destin N1: the write of a setting fails, so the notice shows beside it and the switch goes back.
   { ...chat('chat/preferences#save-failed', 'dialog', 'error-state'), params: { fail: 'settings.set' }, open: [{ do: 'scroll', dir: 'down', times: 2 }, { do: 'click', target: { role: 'switch', label: 'Show turn duration' } }] },
   chat('chat/resume', 'dialog'),
+  // Waiting-notice T3/T6: a failed resume says so inside the list, with Try again; a handoff that is not available says so there too.
+  { ...chat('chat/resume#failed', 'dialog'), params: { resumeNotice: 'failed' }, newIn: 'after' as const },
+  { ...chat('chat/resume#unavailable', 'dialog'), params: { resumeNotice: 'unavailable' }, newIn: 'after' as const },
+  // The screen for moving a chat here, failed, plain and with the take-over sentence (Try again and Continue are its own buttons).
+  { ...chat('chat/handoff', 'view'), session: 'wb-1', newIn: 'after' as const },
+  { ...chat('chat/handoff#note', 'view'), session: 'wb-1', params: { handoffNote: '1' }, newIn: 'after' as const },
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
   chat('chat/tags', 'dialog'),

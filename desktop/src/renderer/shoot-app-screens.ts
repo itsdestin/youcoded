@@ -9,6 +9,8 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useScreenOpen } from './shoot-mode';
 import { GUIDE_STOPS } from './components/guide/guide-stops';
 import { setTourStart } from './components/guide/guide-state';
+import type { ScreenNoticeData } from './components/ScreenNotice';
+import type { PendingTab } from './state/pending-handoff';
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
@@ -58,6 +60,11 @@ export type AppScreenSetters = {
   // The buddy's tour (backlog row 18 needed its pictures); which stop it opens
   // on is handed over through guide-state, so App.tsx carries no extra state.
   setTourOpen: Setter<boolean>;
+  // Waiting-notice T6: the two screens that now carry their own failure notice (R-screen). The resume list's notice and the
+  // move-a-chat screen (a pending handoff in place of the open chat, with its sentence).
+  setResumeNotice: Setter<ScreenNoticeData | null>;
+  setPendingTab: Setter<PendingTab | null>;
+  setHandoffNote: Setter<{ tabId: string; text: string } | null>;
 };
 
 export function useAppScreens(s: AppScreenSetters): void {
@@ -80,7 +87,20 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('chat/skills', () => s.openDrawer(false));
   useScreenOpen('chat/model-picker', () => s.setModelPickerOpen(true));
   useScreenOpen('chat/preferences', () => s.setPreferencesOpen(true));
-  useScreenOpen('chat/resume', () => s.setResumeRequested(true));
+  // `?resumeNotice=failed` (waiting-notice T6): the very words the real resume raises when it fails, drawn inside the list with Try again.
+  useScreenOpen('chat/resume', () => {
+    const which = new URLSearchParams(location.search).get('resumeNotice');
+    if (which === 'failed') s.setResumeNotice({ text: "Couldn't resume this conversation.", tone: 'error', retry: () => {} });
+    else if (which === 'unavailable') s.setResumeNotice({ text: 'Live handoff is available from a computer or a remote connection to one.', tone: 'warn' });
+    s.setResumeRequested(true);
+  });
+  // The screen for moving a chat here, in its "failed" state, optionally with the take-over sentence (`?handoffNote=1`).
+  // WHY a fixture tab with the open chat's id: App swaps the chat for this screen when the pending tab's id matches a chat tab.
+  useScreenOpen('chat/handoff', () => {
+    if (!id) return;
+    s.setPendingTab({ tabId: id, conversationId: 'shoot-handoff', provider: 'claude', projectSlug: 'youcoded', name: 'Conversation', cwd: '/home/destin/youcoded-dev/youcoded', phase: 'failed' });
+    if (new URLSearchParams(location.search).get('handoffNote') === '1') s.setHandoffNote({ tabId: id, text: "Couldn't take over from your other computer. Close the conversation there, then try again." });
+  });
   // Same fixture pattern as chat/takeover just below: a fake session/project id
   // stands in for a real native resume with no model bound yet.
   useScreenOpen('chat/resume/pick-model', s.showNativeResumeModel);
