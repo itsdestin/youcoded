@@ -90,7 +90,7 @@ export class FaultFs implements Fs {
       if (isNew) this.pendingCreates.add(path);
       // A file that already existed is durable at its current length (everything before this run was synced).
       if (!this.synced.has(path)) this.synced.set(path, await f.size());
-    } catch (e) { await f.close().catch(() => undefined); throw e; }
+    } catch (e) { await f.close().catch(() => undefined /* benign: test shim: closing after a failure that is rethrown right here */); throw e; }
     this.openHandles++;
     let closed = false;
     const self = this;

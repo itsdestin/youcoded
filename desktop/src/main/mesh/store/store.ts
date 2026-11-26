@@ -147,12 +147,12 @@ export class ChatStore {
       await sweepTemps(fs, nodePath.join(root, 'retired'));   // the store-root retirement records are written like any small file
       // WHY (fork crash table, step 1-2): a fork that stopped leaves an invisible work folder; its files are copies of lines the parent still holds, so they are cleared here (the empty folder stays)
       for (const n of await fs.readdir(nodePath.join(root, 'forks'))) await clearForkFiles(fs, nodePath.join(root, 'forks', n));
-    } catch (e) { await s.lock.release().catch(() => undefined); s.lock = null; throw isDiskFull(e) ? new StoreError('disk-full', String((e as Error).message)) : e; }   // WHY (restructure fuzz): a full disk at open is one typed refusal like everywhere else
+    } catch (e) { await s.lock.release().catch(() => undefined /* benign: open failed with its own error, rethrown just below; a lock file left behind is judged stale by the next opener */); s.lock = null; throw isDiskFull(e) ? new StoreError('disk-full', String((e as Error).message)) : e; }   // WHY (restructure fuzz): a full disk at open is one typed refusal like everywhere else
     return s;
   }
 
   async close(): Promise<void> {
-    await this.chain.catch(() => undefined);
+    await this.chain.catch(() => undefined /* benign: each queued call returns its own failure to its caller; close only waits for the queue to drain */);
     // WHY the finally (review 3, F8): a close that fails while writing (an I/O error at shutdown) used to skip releasing the lock, so the next open in
     // the same process answered `store-locked` until restart. Whatever happens here, the store is closed and the lock is released; the error still surfaces.
     try {
@@ -172,7 +172,7 @@ export class ChatStore {
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {
     if (this.closed) return Promise.reject(new StoreError('closed'));
     const run = this.chain.then(fn, fn);
-    this.chain = run.catch(() => undefined);
+    this.chain = run.catch(() => undefined /* benign: `run` itself is returned below, so its caller gets the failure; this copy only keeps one failed call from blocking the queue */);
     // WHY (N5): a full disk is one typed refusal everywhere, never a raw ENOSPC from whichever write hit it
     return run.catch((e) => { throw isDiskFull(e) ? new StoreError('disk-full', String((e as Error).message)) : e; });
   }
@@ -926,7 +926,7 @@ export class ChatStore {
       // WHY a rollback (N5): a refused write (full disk) must leave exactly what was there. Cutting the bytes this call added
       // needs no free space. Skipped for the "another writer" error, where the bytes are not ours to cut, and best effort
       // otherwise (after it fails, the next load treats the leftover as surplus like after any kill).
-      if (!(e instanceof StoreError && e.code === 'corrupt')) await this.rollbackAppend(st, chunkStart, created).catch(() => undefined);
+      if (!(e instanceof StoreError && e.code === 'corrupt')) await this.rollbackAppend(st, chunkStart, created).catch(() => undefined /* benign: the append already failed and rethrows; if the rollback cannot be done the next load treats the leftover as surplus and keeps it in torn/ */);
       throw e;
     }
     // WHY the checkpoint BEFORE the acknowledgement, every time (review 3, F3/F9): it is the independent record that says which lines were
@@ -1140,7 +1140,7 @@ export class ChatStore {
           out.push({ ...base, head: this.headOf(st), damaged: null });
         } catch (e) {
           this.versions.delete(key);
-          if (e instanceof StoreError && e.code === 'damaged') { out.push({ ...base, head: null, damaged: (await this.asides.retiredName(key).catch(() => null)) ?? 'damaged' }); continue; }
+          if (e instanceof StoreError && e.code === 'damaged') { out.push({ ...base, head: null, damaged: (await this.asides.retiredName(key).catch(() => null /* benign: the name is only for display; the version is listed as damaged either way */)) ?? 'damaged' }); continue; }
           out.push({ ...base, head: null, damaged: `unreadable: ${e instanceof StoreError ? e.code : ((e as { code?: string })?.code ?? 'error')}` });
         }
       }

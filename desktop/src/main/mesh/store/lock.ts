@@ -113,7 +113,7 @@ async function readLock(path: string): Promise<LockBody | 'unreadable' | null> {
     if (b && typeof b.pid === 'number' && typeof b.host === 'string' && typeof b.token === 'string') {
       return { pid: b.pid, start: typeof b.start === 'string' ? b.start : null, host: b.host, token: b.token, boot: typeof b.boot === 'string' ? b.boot : null, pidns: typeof b.pidns === 'string' ? b.pidns : null };
     }
-  } catch { /* fallthrough */ }
+  } catch { /* benign: JSON that does not parse is the answer 'unreadable' returned just below, which every caller treats as a foreign or damaged lock (kept, never trusted) */ }
   return 'unreadable';
 }
 
@@ -132,7 +132,7 @@ async function createLockFile(path: string, body: string): Promise<boolean> {
       catch (e2: any) { if (e2.code === 'EEXIST') return false; throw e2; }
     }
   // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
-  } finally { await fsp.unlink(tmp).catch(() => undefined); }
+  } finally { await fsp.unlink(tmp).catch(() => undefined /* benign: the private temp name is ours; if it cannot be removed it is old litter that sweepLockLitter removes later */); }
 }
 
 /** N14: temp files a crash left between "create" and "link". Only old ones (an opener in flight owns a fresh one). */
@@ -142,9 +142,9 @@ async function sweepLockLitter(root: string): Promise<void> {
   for (const n of names) {
     if (!/^LOCK\.new-\d+-[0-9a-f]+$/.test(n)) continue;
     const p = nodePath.join(root, n);
-    const st = await fsp.stat(p).catch(() => null);
+    const st = await fsp.stat(p).catch(() => null /* benign: litter sweep only: a file we cannot stat is left for the next sweep */);
     // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
-    if (st && Date.now() - st.mtimeMs > 60_000) await fsp.unlink(p).catch(() => undefined);
+    if (st && Date.now() - st.mtimeMs > 60_000) await fsp.unlink(p).catch(() => undefined /* benign: litter sweep only: it is tried again at the next open */);
   }
 }
 
@@ -171,7 +171,7 @@ export async function acquireLock(root: string, opts: { breakLockToken?: string 
     if (heldRoots.get(key) === token) heldRoots.delete(key);
     const cur = await readLock(path);
     // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
-    if (cur && cur !== 'unreadable' && cur.token === token) await fsp.unlink(path).catch(() => undefined);
+    if (cur && cur !== 'unreadable' && cur.token === token) await fsp.unlink(path).catch(() => undefined /* benign: a lock file left behind is judged stale by the next opener, whose liveness check finds this process gone */);
   };
   const lock: StoreLock = {
     release,
@@ -186,7 +186,7 @@ export async function acquireLock(root: string, opts: { breakLockToken?: string 
   if (cur === null) { if (await createLockFile(path, body)) return got(); throw held('lost a race for the lock'); }
   if (cur === 'unreadable') {
     // never written by us in full (we link a finished file): a foreign or damaged file. Old enough = stale.
-    const st = await fsp.stat(path).catch(() => null);
+    const st = await fsp.stat(path).catch(() => null /* benign: a lock file that cannot be stat-ed counts as not recent; the takeover below re-reads it under the takeover lock and refuses if it changed hands */);
     if (!st || Date.now() - st.mtimeMs < OLD_ENOUGH_MS) throw held('lock file is unreadable and recent');
   } else if (opts.breakLockToken && opts.breakLockToken === cur.token) {
     // the caller looked at this exact lock's evidence and decided to break it
@@ -205,11 +205,11 @@ export async function acquireLock(root: string, opts: { breakLockToken?: string 
     let tStale: boolean;
     if (t === null) tStale = true;
     // WHY the age test (N14): without hard links a takeover file can be seen empty while its owner is still writing it
-    else if (t === 'unreadable') { const st = await fsp.stat(tpath).catch(() => null); tStale = !st || Date.now() - st.mtimeMs >= OLD_ENOUGH_MS; }
+    else if (t === 'unreadable') { const st = await fsp.stat(tpath).catch(() => null /* benign: same as above for the takeover file: re-read and re-checked before anything is removed */); tStale = !st || Date.now() - st.mtimeMs >= OLD_ENOUGH_MS; }
     else tStale = (await judge(t, key)).kind === 'stale';
     if (!tStale) throw held('another opener is taking over a stale lock');
     // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
-    await fsp.unlink(tpath).catch(() => undefined);
+    await fsp.unlink(tpath).catch(() => undefined /* benign: if it cannot be removed the createLockFile on the next line fails and the opener gets store-locked */);
     if (!(await createLockFile(tpath, body))) throw held('lost a race taking over a stale lock');
   }
   try {
@@ -218,9 +218,9 @@ export async function acquireLock(root: string, opts: { breakLockToken?: string 
     const same = cur === 'unreadable' ? again === 'unreadable' : !!again && again !== 'unreadable' && again.token === cur.token;
     if (again && !same) throw held('the lock changed hands');
     // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
-    await fsp.unlink(path).catch(() => undefined);
+    await fsp.unlink(path).catch(() => undefined /* benign: if it cannot be removed the createLockFile on the next line fails and the opener gets store-locked */);
     if (!(await createLockFile(path, body))) throw held('lost a race for the lock');
   // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
-  } finally { await fsp.unlink(tpath).catch(() => undefined); }
+  } finally { await fsp.unlink(tpath).catch(() => undefined /* benign: the short takeover lock; a leftover is judged stale by the next opener and swept as litter */); }
   return got();
 }

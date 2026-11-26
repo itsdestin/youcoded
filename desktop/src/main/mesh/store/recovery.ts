@@ -461,7 +461,7 @@ export class BodyTools {
       // scrub.json: the old mark described the old index. Point the scrub at the first bad line so the next open reports it at once.
       await writeSideFor(this.fs, nodePath.join(dir, 'scrub.json'), { role: 'scrub', key: keyOfDir(dir) }, { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint
       return { count, firstBad, partial, staleConv: convStaleNow };
-    } finally { for (const f of handles) await f.close().catch(() => undefined); }
+    } finally { for (const f of handles) await f.close().catch(() => undefined /* benign: closing handles after the rebuild succeeded or already failed with its own error */); }
   }
 
   private async recFromFile(f: FileLike, slot: number): Promise<Rec | null> {

@@ -58,7 +58,7 @@ export async function buildFork(e: ForkEnv, st: VState, ck: string, fromLine: nu
     } finally { await pf.close(); }
     if (chunkFile) await chunkFile.sync();
     await xf.sync();
-  } finally { await chunkFile?.close().catch(() => undefined); await xf.close(); }
+  } finally { await chunkFile?.close().catch(() => undefined /* benign: closing after an error that is already propagating; the work folder is invisible and is cleared by the next attempt */); await xf.close(); }
   // DESTRUCTIVE-OK(verified-record): the first statement of a NEW folder; its chain values are those of the verified index record
   await writeCheckpoint(fs, work, { count: fromLine, stamp: e.stamp, evLines: 0, evBytes: 0, boundary: null, lostRecs: 0, staleBad: null, h: lastRec ? lastRec.h : Buffer.from(st.seeds.raw), c: lastRec ? lastRec.c : Buffer.from(st.seeds.conversation) });
   await fs.fsyncDir(work); await fs.fsyncDir(forks);
