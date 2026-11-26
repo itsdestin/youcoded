@@ -51,6 +51,8 @@ export class RelaySyncState {
     this.#queue = p.catch(() => undefined); /* benign: p itself is returned, so its caller gets the failure; this copy only keeps one failed write from blocking the queue */
     return p;
   }
+  /** Resolves when every save asked for so far has finished (or failed; the failure went to its caller). */
+  idle(): Promise<void> { return this.#queue.then(() => undefined); }
   /** Remember (durably) that this entry must be told to the relay. Call BEFORE the entry is written to the log. */
   enqueue(id: string): Promise<void> {
     if (!this.#s.pending.includes(id)) this.#s.pending = [...this.#s.pending, id];

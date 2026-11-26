@@ -120,6 +120,9 @@ async function expectPrefixState(s: ChatStore, minLines: number): Promise<number
   return head.lines;
 }
 
+// WHY 300_000 (measured 2026-11-26): seconds alone, but this overran 120 s when the whole suite ran at load 75 on 32 threads. These are
+// pure disk-and-CPU loops with no waiting on anything, so the limit only has to catch a hang.
+const HANG_ONLY_TIMEOUT_MS = 300_000;
 describe('kill at every disk operation', () => {
   it('registering a version and appending batches (with chunk roll-over)', async () => {
     const r = await sweep({
@@ -143,7 +146,7 @@ describe('kill at every disk operation', () => {
         await s.close();
       },
     });
-  }, 120_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('parked appends and the gap filling', async () => {
     const r = await sweep({
@@ -164,7 +167,7 @@ describe('kill at every disk operation', () => {
         await s.close();
       },
     });
-  }, 120_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('forkVersion: the child is absent or complete, the parent is never touched, whichever step is cut', async () => {
     const FROM = 9;
@@ -189,7 +192,7 @@ describe('kill at every disk operation', () => {
       },
     });
     expect(r.runs).toBeGreaterThan(0);
-  }, 120_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('setAsideDamaged: every byte is either still in the version or in aside/, never gone; the id ends retired', async () => {
     let origIndex = Buffer.alloc(0);
@@ -217,7 +220,7 @@ describe('kill at every disk operation', () => {
       },
     });
     expect(r.runs).toBeGreaterThan(0);
-  }, 120_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('evictBody and restoreBody: chain values are never lost; a cut eviction is finished or undone', async () => {
     const THROUGH = 12;
@@ -263,7 +266,7 @@ describe('kill at every disk operation', () => {
         await s.close();
       },
     });
-  }, 240_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('control log appends and parked entries', async () => {
     const id = (n: number) => createHash('sha256').update('opaque' + n).digest('hex'); // an entry id is the SHA-256 of its body
@@ -286,7 +289,7 @@ describe('kill at every disk operation', () => {
         await s.close();
       },
     });
-  }, 120_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('putExtra: absent or complete, never half', async () => {
     const bytes = Buffer.from('synthetic extra body');
@@ -304,7 +307,7 @@ describe('kill at every disk operation', () => {
         await s.close();
       },
     });
-  }, 60_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 });
 
 // ------------------------------------------------------------------------------------------------ second-round sweeps
@@ -349,7 +352,7 @@ describe('kill at every operation: the new recovery paths', () => {
         await s.close();
       },
     });
-  }, 240_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('rebuild after a classifier change with an evicted prefix: the version stays served, flagged, and recovers when the bodies return', async () => {
     const accept: StoreOptions = { proofVerifier: () => true };
@@ -375,7 +378,7 @@ describe('kill at every operation: the new recovery paths', () => {
         await s.close();
       },
     });
-  }, 240_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 
   it('a rebuild nothing can vouch for (index gone, body rotted) quarantines intact at every kill point', async () => {
     const rot = lineStart(R100, 10) + 3;
@@ -397,7 +400,7 @@ describe('kill at every operation: the new recovery paths', () => {
         await s.close();
       },
     });
-  }, 240_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 });
 
 // ------------------------------------------------------------------------------------------------ full disk (N5)
@@ -468,5 +471,5 @@ describe('a full disk at every space-allocating operation (N5)', () => {
       }
     }
     expect(runs).toBe(2 * total);
-  }, 240_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 });

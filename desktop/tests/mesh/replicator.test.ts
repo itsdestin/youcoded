@@ -14,6 +14,9 @@ const sameBytes = async (world: World, v: Buffer, names: string[]): Promise<void
   for (const a of all) expect(a).toEqual(all[0]);
 };
 
+// WHY 300_000 (measured 2026-11-26): seconds alone, but this overran 120 s when the whole suite ran at load 75 on 32 threads. These are
+// pure disk-and-CPU loops with no waiting on anything, so the limit only has to catch a hang.
+const HANG_ONLY_TIMEOUT_MS = 300_000;
 describe('devices that are online', () => {
   it('two devices: lines the writer appends reach the other, byte for byte, with equal heads and verify() ok', async () => {
     w = await repWorld(['A', 'B']);
@@ -56,7 +59,7 @@ describe('devices that are online', () => {
     await w.settle();
     expect(await w.readAll('B', V)).toEqual(lines);
     expect(w.devs.B.rep.counters()['part-over-budget'] ?? 0).toBe(0);
-  }, 120_000);
+  }, HANG_ONLY_TIMEOUT_MS);
 });
 
 describe('a device that was away', () => {

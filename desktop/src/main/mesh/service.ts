@@ -188,6 +188,13 @@ export class MeshService {
     this.#relay?.stop();
     this.closeHostMeeting();
     this.#joinMeeting?.close();
+    // WHY wait: a save already in flight must finish before stop() returns, so nothing writes into this folder after the caller moves on (a restart on the same folder, or a test removing it).
+    await this.#afterChain;
+    await this.#sync.idle();
+  }
+  /** WHY: a background step that fails (a full disk during a save) is reported, never left as an unhandled rejection, which Node can treat as a crash. Nothing is lost: each such step runs again by itself. */
+  private bg(what: string, p: Promise<unknown>): void {
+    void p.catch((cause) => reportFailure({ what, cause, where: 'mesh.service' }));
   }
 
   inSet(): boolean {
@@ -218,7 +225,7 @@ export class MeshService {
       // The relay is reachable (again): the queue of roster changes it still owes is worked off, and devices seen online confirm pairings.
       // WHY `presence()` and not the `devices` list in the sign-in answer: that list is the whole roster, online or not, so it proves nothing about a
       // pairing; the presence answer is who is connected right now.
-      this.#relay.on('ready', () => { this.#rep?.hello(); this.#retryAttempt = 0; void this.drainRelay(); void this.confirmOnline(); void this.afterChange(true); });
+      this.#relay.on('ready', () => { this.#rep?.hello(); this.#retryAttempt = 0; this.bg('tell the relay about a device-list change (it is tried again at the next change or reconnect)', this.drainRelay()); void this.confirmOnline(); this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(true)); });
       this.#relay.on('presence-change', (p: { device: string; state: string }) => { if (p.state === 'on') this.confirmJoin(p.device); });
     }
     // The device-layer decisions (parked entries, which secret is current, who makes the next one) live in DeviceCore; see device-core.ts.
@@ -243,9 +250,9 @@ export class MeshService {
       counter: { get: () => this.#k.receiverSaves, set: async (n) => { this.#k = await this.keys.update((k) => { k.receiverSaves = Math.max(k.receiverSaves, n); }); } },
       onFrame: (f) => this.onFrame(f),
       onEvent: (e, info) => {
-        if (e === 'gap' && info.group === GROUP_ROSTER) { this.#rosterGaps++; void this.afterChange(true); }
+        if (e === 'gap' && info.group === GROUP_ROSTER) { this.#rosterGaps++; this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(true)); }
         // a device that is behind announces its heads at once (at most every 5 s), so the others answer with the proof of what it missed
-        if (e === 'waiting' && info.group === GROUP_ROSTER && this.now() - this.#lastWaitingHeads >= 5_000) { this.#lastWaitingHeads = this.now(); void this.afterChange(true); }
+        if (e === 'waiting' && info.group === GROUP_ROSTER && this.now() - this.#lastWaitingHeads >= 5_000) { this.#lastWaitingHeads = this.now(); this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(true)); }
       },
       log: this.o.log,
     });
@@ -253,11 +260,11 @@ export class MeshService {
     if (this.o.testMode && this.o.replicator) await this.startReplicator(setId, this.#link);
     if (!this.#offline) this.#relay?.start();
     // Heads are repeated now and then so that a frame the relay dropped, or an entry that never left its author, still reaches everyone.
-    this.#headsTimer = setInterval(() => { void this.afterChange(true); }, this.o.headsEveryMs ?? 30_000);
+    this.#headsTimer = setInterval(() => { this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(true)); }, this.o.headsEveryMs ?? 30_000);
     this.#headsTimer.unref?.();
     // Whatever a previous run left half done is finished now (a killed backend between the steps of a pairing).
     void this.resume().catch(() => this.o.log('resume-failed'));
-    void this.afterChange(false);
+    this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(false));
   }
 
   /** Everything that follows a change to the roster or the secrets, one at a time: save new secrets, wake waiting frames, and send what
@@ -275,7 +282,7 @@ export class MeshService {
       this.emit(r.out);
       if (this.#planTimer) { clearTimeout(this.#planTimer); this.#planTimer = null; }
       if (r.nextAt !== null) {
-        this.#planTimer = setTimeout(() => { this.#planTimer = null; void this.afterChange(false); }, Math.max(10, r.nextAt - this.now()));
+        this.#planTimer = setTimeout(() => { this.#planTimer = null; this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(false)); }, Math.max(10, r.nextAt - this.now()));
         this.#planTimer.unref?.();
       }
       this.#link?.retryPending();
@@ -356,7 +363,7 @@ export class MeshService {
     this.emit(r.out);
     if (r.wait) throw new FrameWait('roster-entry');
     if (r.reject) throw new FrameReject(r.reject);
-    if (r.changed) void this.afterChange(false);
+    if (r.changed) this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(false));
   }
   private mirrorCounts(): void {
     if (!this.#core) return;
@@ -447,6 +454,8 @@ export class MeshService {
         if (!entry) { await this.#sync.settle(id, false); this.settled(id, 'refused'); continue; } // never reached the log: nothing to tell
         let r: string;
         try { r = await this.putAtRelay(entry); } catch { r = 'network'; }
+        // WHY: nothing is saved after stop(). If the relay took the entry just now, the next start offers it again and the relay answers 'duplicate', which counts as accepted.
+        if (this.#stopped) break;
         if (r === 'ok' || (entry.kind === 'add' && ADD_PATIENCE.has(r)) || (entry.kind === 'remove' && r === 'not-found')) {
           // 'not-found' on a removal: the relay already has that device as gone: the outcome we wanted.
           await this.#sync.settle(id, true);
@@ -462,13 +471,13 @@ export class MeshService {
       }
     } finally {
       this.#draining = false;
-      if (this.#drainAgain) { this.#drainAgain = false; void this.drainRelay(); }
+      if (this.#drainAgain) { this.#drainAgain = false; this.bg('tell the relay about a device-list change (it is tried again at the next change or reconnect)', this.drainRelay()); }
     }
   }
   private scheduleRelayRetry(): void {
     if (this.#retryTimer || this.#stopped) return;
     const delay = Math.min(30_000, (this.o.relayRetryMs ?? 2000) * 2 ** Math.min(this.#retryAttempt++, 5));
-    this.#retryTimer = setTimeout(() => { this.#retryTimer = null; void this.drainRelay(); }, delay);
+    this.#retryTimer = setTimeout(() => { this.#retryTimer = null; this.bg('tell the relay about a device-list change (it is tried again at the next change or reconnect)', this.drainRelay()); }, delay);
     this.#retryTimer.unref?.();
   }
   private settled(id: string, r: 'ok' | 'refused'): void {
@@ -507,7 +516,7 @@ export class MeshService {
   /** The new device was seen on the relay (or sent a verified frame): the pairing really happened. */
   private confirmJoin(dev: string): void {
     if (!this.#sync.joins.some((j) => j.dev === dev)) return;
-    void this.#sync.removeJoin(dev);
+    this.bg('save that a new device finished joining (it is confirmed again at the next reconnect)', this.#sync.removeJoin(dev));
   }
 
   /** After a start: finish what a previous run left half done (a pairing the relay accepted whose add may not have reached the log). */
@@ -522,7 +531,7 @@ export class MeshService {
         if (this.roster.confirmedIds().has(j.dev)) await this.#sync.removeJoin(j.dev);
       } catch { await this.#sync.removeJoin(j.dev); }
     }
-    void this.drainRelay();
+    this.bg('tell the relay about a device-list change (it is tried again at the next change or reconnect)', this.drainRelay());
   }
 
   /** Host, DIRECT test carrier: start a typed-code invite. The code is returned to be SHOWN; it is not logged. */
@@ -708,7 +717,7 @@ export class MeshService {
     await this.#sync.enqueue(id);
     await this.roster.append(entry);
     this.#settled.delete(id);
-    void this.drainRelay();
+    this.bg('tell the relay about a device-list change (it is tried again at the next change or reconnect)', this.drainRelay());
     // The new shared secret is made by whoever's turn it is (device-core.ts), not necessarily this device: nothing here waits on a bundle
     // being sent, so a removal can no longer block later operations (review N12).
     void this.publishRoster([entry]).catch((cause) => reportFailure({ what: 'send the updated device list to the other devices (it is offered again with the next change)', cause, where: 'mesh.roster' }));
@@ -727,9 +736,9 @@ export class MeshService {
       const entry = makeRenameEntry(this.id, name, seenForNextEntry(this.roster.entries, this.id.deviceId), this.now());
       await this.#sync.enqueue(toHex(entry.id));
       await this.roster.append(entry);
-      void this.drainRelay();
+      this.bg('tell the relay about a device-list change (it is tried again at the next change or reconnect)', this.drainRelay());
       void this.publishRoster([entry]).catch((cause) => reportFailure({ what: 'send the updated device list to the other devices (it is offered again with the next change)', cause, where: 'mesh.roster' }));
-      void this.afterChange(true);
+      this.bg('work through a device-set change (it runs again at the next change or timer tick)', this.afterChange(true));
     });
   }
 
