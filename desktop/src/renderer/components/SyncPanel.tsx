@@ -11,7 +11,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTheme } from '../state/theme-context';
-import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
+import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, Pill, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -1609,14 +1609,20 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               {isPending && !actionFeedback[b.id] && !copying && (
                                 <span className="text-4xs font-medium text-fg-muted">Changes pending upload</span>
                               )}
-                              {(actionFeedback[b.id] || copying) && (
-                                <span className="text-4xs font-medium text-fg-muted">
-                                  {actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' : 'Uploading...'}
-                                </span>
-                              )}
                             </div>
-                            {/* Status light (state at a glance) — controls moved into the cog menu. */}
-                            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${unsupported ? 'bg-fg-muted/40' : lightClass}`} />
+                            {/* WHY a status pill at the top right instead of bare text under the name (Destin, backup-fixes
+                                deck U-1: "this should be a standard status indicator ... at the top right of the google drive
+                                box"): the shared Pill (dot + word, tint carries the colour) is the same one Subagents rows and
+                                the friends panel use. It REPLACES the status light while a copy runs or has just finished, so
+                                the row never shows two statuses at once; the light returns afterwards. Wording unchanged. */}
+                            {(actionFeedback[b.id] || copying) ? (
+                              <Pill tone={actionFeedback[b.id] === 'uploaded' ? 'ok' : 'info'} dot>
+                                {actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' : 'Uploading...'}
+                              </Pill>
+                            ) : (
+                              /* Status light (state at a glance) — controls moved into the cog menu. */
+                              <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${unsupported ? 'bg-fg-muted/40' : lightClass}`} />
+                            )}
                             {/* Cog menu (replaces the old ⋯ kebab + per-row on/off toggle). Not on an
                                 unsupported GitHub backup: Upload now and the rest would do nothing;
                                 its Remove sits in its notice below. */}
@@ -1762,6 +1768,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       <Callout
                         key={detailsKey}
                         tone={isSyncAlarm(w) ? 'danger' : w.level === 'danger' ? 'info' : 'warning'} // never set up: calm, not red (isSyncAlarm)
+                        // WHY 'below' only for the four backup-settings notices (Destin, backup-fixes deck U-3..U-6: "put dismiss /
+                        // button at bottom right"): the words run full width and the button sits at the bottom right. Every other
+                        // warning keeps the side-by-side default. Callout already offered this option; nothing shared changed.
+                        actionsPlacement={w.code.startsWith('CONFIG_') ? 'below' : 'right'}
                         title={w.title}
                         actions={actions}
                       >

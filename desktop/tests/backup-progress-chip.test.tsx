@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The optional status-bar "Backing up…" chip (backup fixes 2026-11-18, B-1). Whether it ships is Destin's pick after
-// comparing pictures; these tests pin that it is OFF by default, and that when switched on it appears only while a
+// The optional status-bar "Backing up…" chip (backup fixes 2026-11-18, B-1). Destin chose to ship it
+// (deck U-2); these tests pin that it is ON by default, and that when switched on it appears only while a
 // copy is really running and rides the existing sync switch.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render as rtlRender, screen, cleanup } from '@testing-library/react';
@@ -48,9 +48,9 @@ describe('the "Backing up…" chip (switched on)', () => {
 });
 
 describe('what ships', () => {
-  it('the chip is OFF by default until Destin picks it (flip BACKUP_PROGRESS_CHIP_ENABLED to ship it)', async () => {
+  it('the chip is ON by default (Destin chose it on deck U-2, 2026-11-25)', async () => {
     const real = await vi.importActual<typeof import('../src/renderer/state/backup-progress')>('../src/renderer/state/backup-progress');
-    expect(real.BACKUP_PROGRESS_CHIP_ENABLED).toBe(false);
+    expect(real.BACKUP_PROGRESS_CHIP_ENABLED).toBe(true);
   });
   it('is drawn only when enabled AND something is copying', () => {
     expect(showBackupProgressChip(['a'], false)).toBe(false);

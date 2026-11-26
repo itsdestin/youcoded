@@ -253,7 +253,14 @@ describe('the first upload after adding a backup runs in the background', () => 
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull()); // closed, not waiting
     expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
-    expect(await screen.findByText('Uploading...')).toBeInTheDocument();
+    const pill = await screen.findByText('Uploading...');
+    expect(pill).toBeInTheDocument();
+    // A standard status pill (the shared Pill: rounded, tinted, with a dot), a direct child of the row's top line
+    // beside the Manage cog, not bare text under the name.
+    expect(pill.className).toContain('rounded-full');
+    expect(pill.querySelector('span[aria-hidden="true"]')).not.toBeNull();
+    expect(pill.parentElement!.className).toContain('items-center');
+    expect(pill.parentElement!.querySelector('button')).not.toBeNull();
     finish({ success: true, error: '' });
     expect(await screen.findByText('Uploaded!')).toBeInTheDocument();
   });
@@ -302,6 +309,38 @@ describe('the saved-settings notices', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Start fresh' }));
     await waitFor(() => expect(startFresh).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(api.getStatus.mock.calls.length).toBeGreaterThan(1));
+  });
+  // Destin (backup-fixes deck U-3..U-6): the words run full width and the notice's button sits on its own line at the
+  // bottom right. In the shared Callout that is the 'below' layout, where the button row is a direct child of the box
+  // (the default layout nests it beside the words, inside a flex-wrap row).
+  const buttonsAtBottomRight = (name: string) => {
+    const row = screen.getByRole('button', { name }).closest('[data-parts-agree]') as HTMLElement;
+    expect(row.className).toContain('justify-end');
+    expect(row.parentElement!.className).toContain('rounded-lg'); // the notice box itself, not a side-by-side row
+    expect(row.previousElementSibling).not.toBeNull(); // after the words
+  };
+  it('the four settings notices put their button at the bottom right', async () => {
+    const mk = (code: string, title: string, extra: object) => ({ code, level: 'warn', title, body: 'b', dismissible: false, createdEpoch: 0, ...extra });
+    stub({}, [
+      mk('CONFIG_RESTORED', 'Backup settings restored', { dismissible: true }),
+      mk('CONFIG_SALVAGED', 'Please check your backups', { dismissible: true, level: 'warn' }),
+      DAMAGED,
+      mk('CONFIG_WRITE_FAILED', "Backup settings couldn't be saved", { level: 'danger', fixAction: { label: 'Try again', kind: 'recheck-settings' } }),
+    ]);
+    render(<SyncSection autoOpen />);
+    await screen.findByRole('button', { name: 'Start fresh' });
+    buttonsAtBottomRight('Start fresh');
+    buttonsAtBottomRight('Try again');
+    for (const d of screen.getAllByRole('button', { name: 'Dismiss' })) {
+      expect(d.closest('[data-parts-agree]')!.parentElement!.className).toContain('rounded-lg');
+    }
+    expect(screen.getAllByRole('button', { name: 'Dismiss' })).toHaveLength(2);
+  });
+  it('another warning keeps its button beside the words', async () => {
+    stub({}, [{ code: 'SOMETHING_ELSE', level: 'warn', title: 'Other', body: 'b', dismissible: true, createdEpoch: 0 }]);
+    render(<SyncSection autoOpen />);
+    const row = (await screen.findByRole('button', { name: 'Dismiss' })).closest('[data-parts-agree]') as HTMLElement;
+    expect(row.parentElement!.className).toContain('flex-wrap'); // inside the side-by-side row
   });
   it('a failed "Start fresh" says so and offers Try again', async () => {
     stub({ startFresh: vi.fn(async () => { throw new Error('EACCES: permission denied'); }) }, [DAMAGED]);
