@@ -12,7 +12,7 @@ import { MemoryCarrier, MemoryHub } from '../../src/main/mesh/carrier-memory';
 import { Link } from '../../src/main/mesh/link';
 import { RosterStore } from '../../src/main/mesh/roster-store';
 import { ChatStore, type StoreOptions } from '../../src/main/mesh/store';
-import type { Fs } from '../../src/main/mesh/store/fsio';
+import { realFs, type Fs } from '../../src/main/mesh/store/fsio';
 import { Replicator } from '../../src/main/mesh/replicator';
 import type { Clock } from '../../src/main/mesh/replicator';
 import { tmp } from './helpers';
@@ -62,13 +62,14 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
   const devs: Record<string, WDev> = {};
   const saves = Object.fromEntries(names.map((n) => [n, { n: 0 }]));
 
-  async function make(n: string, storeFs?: Fs): Promise<WDev> {
+  async function make(n: string, storeFs?: Fs, start = true): Promise<WDev> {
     const roster = new RosterStore(dirs[n]);
     await roster.load();
     if (roster.size === 0) for (const e of entries) await roster.append(e);
     const carrier = hub.members.get(n) ?? hub.carrier(n);
     carrier.deviceHex = ids[n].deviceId.toString('hex');
-    const store = await ChatStore.open(path.join(dirs[n], 'store'), { ...o.storeOpts, ...(storeFs ?? o.fsFor?.(n) ? { fs: (storeFs ?? o.fsFor?.(n)) as Fs } : {}), proofVerifier: () => true });
+    const fsx = storeFs ?? o.fsFor?.(n);
+    const store = await ChatStore.open(path.join(dirs[n], 'store'), { ...o.storeOpts, ...(fsx ? { fs: fsx } : {}), proofVerifier: () => true });
     let rep: Replicator | null = null;
     const link = new Link({
       identity: ids[n], setId, carrier, meshDir: dirs[n], secrets: () => new Map([[1, secret]]), signKeyFor: (d) => roster.signKeyFor(d), isRemoved: (d) => roster.isRemoved(d),
@@ -77,7 +78,7 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
     });
     await link.start([]);
     rep = await Replicator.create({
-      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, discoveryMs: o.discoveryMs, stallMs: o.stallMs,
+      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs,
       crypto: {
         self: ids[n].deviceId, sign: (m) => signWith(ids[n], m), knows: (d) => roster.signKeyFor(d) !== undefined && !roster.isRemoved(d),
         verify: (d, m, s) => { const k = roster.signKeyFor(d); return !!k && verifySig(k, m, s); },
@@ -85,7 +86,7 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
       devices: () => names.filter((x) => x !== n).map((x) => ids[x].deviceId),
     });
     carrier.onConnected(() => rep?.hello());
-    if (o.autoStart !== false) await rep.start();
+    if (o.autoStart !== false && start) await rep.start();
     return { name: n, id: ids[n], dir: dirs[n], carrier, link, store, rep, roster };
   }
   for (const n of names) devs[n] = await make(n);
@@ -102,20 +103,20 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
   const world = {
     hub, clock, devs, ids, setId, dirs, names, secret,
     /** Wait until nothing changes any more (all queues empty, no frame in flight): the "settle" for the negative. Time is real but only gates the check; progress is judged on state. */
-    async settle(maxMs = 20_000): Promise<void> {
+    async settle(maxMs = 20_000, pollMs = 15, rounds = 4): Promise<void> {
       const t0 = Date.now(); let last = ''; let same = 0;
       while (Date.now() - t0 < maxMs) {
         for (const n of names) await devs[n].rep.idle();
-        await new Promise((r) => setTimeout(r, 15));
+        await new Promise((r) => setTimeout(r, pollMs));
         const now = await snapshot();
         same = now === last ? same + 1 : 0; last = now;
-        if (same >= 4) return;
+        if (same >= rounds) return;
       }
       throw new Error(`world did not settle in ${maxMs} ms: ${last}`);
     },
     /** Advance the virtual clock in steps, settling in between (so timers and frames interleave the way they would). */
-    async elapse(ms: number, step = 5_000): Promise<void> {
-      for (let t = 0; t < ms; t += step) { await clock.advance(Math.min(step, ms - t)); await world.settle(); }
+    async elapse(ms: number, step = 5_000, fast = false): Promise<void> {
+      for (let t = 0; t < ms; t += step) { await clock.advance(Math.min(step, ms - t)); await (fast ? world.settle(20_000, 4, 3) : world.settle()); }
     },
     async create(n: string, version: Buffer, over: Partial<{ chatId: string; runtime: 'claude-code' | 'native' }> = {}): Promise<void> {
       await devs[n].rep.createVersion({ version, chatId: over.chatId ?? CHAT, runtime: over.runtime ?? 'claude-code', parent: null, forkLine: null, forkHash: null, token: null });
@@ -144,15 +145,17 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
       return r === 'evicted' ? [] : r;
     },
     /** Take a device down and bring it up again over the same folder (its store reopened with the real file system). */
-    async restart(n: string, opts: { graceful?: boolean } = {}): Promise<WDev> {
+    async restart(n: string, opts: { graceful?: boolean; start?: boolean } = {}): Promise<WDev> {
       const d = devs[n];
       d.rep.stop(); d.link.stop();
       if (opts.graceful !== false) await d.store.close();
       else { const lp = path.join(dirs[n], 'store', 'LOCK'); if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' })); }
-      const fresh = await make(n, undefined);
+      const fresh = await make(n, realFs, opts.start !== false);
       devs[n] = fresh;
       return fresh;
     },
+    /** Remove every device folder now (the fuzz runs thousands of worlds in one test; the helper only cleans after the test). */
+    cleanup(): void { for (const d of Object.values(dirs)) fs.rmSync(d, { recursive: true, force: true }); },
     async stopAll(): Promise<void> { for (const n of names) { devs[n].rep.stop(); devs[n].link.stop(); try { await devs[n].store.close(); } catch { /* benign (test teardown): the store may already be closed by a restart */ } } },
   };
   return world;

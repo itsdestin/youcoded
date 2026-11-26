@@ -169,6 +169,8 @@ export class Replicator {
     for (const r of this.#ctx.runs.values()) { r.rewanted.clear(); r.skip.clear(); r.lastSigned.clear(); }
     dropReassembly(this.#ctx);
     this.#introAsked.clear();
+    // WHY here: damage the store finds on its own (a scrub, a read) is otherwise noticed only at the next append; every hello looks again
+    for (const wire of this.#directory.list()) void this.queue(wire, () => checkRepair(this.#ctx, wire)).catch((e: unknown) => reportFailure({ what: 'look over a chat copy for damage', cause: e, where: 'mesh.replicator' }));
     void this.sendSum().catch((e: unknown) => reportFailure({ what: 'announce what this device holds', cause: e, where: 'mesh.replicator' }));
     this.#discovery?.cancel();
     this.#discovery = this.#ctx.clock.setTimeout(() => this.hello(), this.#o.discoveryMs ?? DEFAULT_DISCOVERY_MS);
@@ -335,6 +337,8 @@ export class Replicator {
         // ask the WRITER (or the divergent peer) from line 0 once: signed batches decide what is true, never a count
         if (!run.rewanted.has(diverged.hex)) { run.rewanted.add(diverged.hex); await this.want(wire, diverged, { haveLines: 0 }); }
       } else if (!pulls.length && allSync && anySeen) { run.diverged = null; run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
+      // WHY separate: nobody claims more than I hold, so nothing is being pulled, even if some peer's (older) claim is still shorter than mine
+      if (!pulls.length && !diverged && run.pull) { run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
       if (pulls.length) {
         let cand = pulls.filter((p) => !run.skip.has(p.hex));
         if (!cand.length) { run.skip.clear(); cand = pulls; }
@@ -411,7 +415,8 @@ export class Replicator {
     const wk = wire.toString('hex');
     const known = [...ctx.peers.values()].filter((p) => p.heads.has(wk));
     if (known.length === 0) return mk('comparing');
-    return known.every((p) => { const h = p.heads.get(wk); return h && h.lines === lines && h.state === 'ok'; }) ? mk('in-sync') : mk('comparing');
+    // in sync = I hold everything any peer has claimed (a peer that claims fewer is behind me, which is its status to name, not mine)
+    return known.every((p) => { const h = p.heads.get(wk); return h && h.lines <= lines; }) ? mk('in-sync') : mk('comparing');
   }
 
   /** Signed statements by other devices that they hold the first `lines` lines of `wire`, in the shape of an eviction proof's acks. Peers that are repairing are left out. */
