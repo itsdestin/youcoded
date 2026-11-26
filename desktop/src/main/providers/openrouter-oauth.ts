@@ -19,6 +19,7 @@ import http from 'node:http';
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { generatePkce, type RandomBytesFn } from './chatgpt-oauth';
 import type { OpenRouterSignInStatus } from '../../shared/provider-types';
+import { backendDeviceNoun } from '../device-noun'; // WHY: the phone runs this backend too, so "this computer" must say "phone" there
 
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 const OPENROUTER_EXCHANGE_URL = 'https://openrouter.ai/api/v1/auth/keys';
@@ -140,7 +141,7 @@ export class OpenRouterSignIn {
     try {
       listener = await this.listen((req, res) => { void this.onCallback(req, res); });
     } catch (e) {
-      throw new Error(`YouCoded couldn't start listening for the sign-in on this computer (${e instanceof Error ? e.message : String(e)}). Try again, or use an API key instead.`);
+      throw new Error(`YouCoded couldn't start listening for the sign-in on this ${backendDeviceNoun()} (${e instanceof Error ? e.message : String(e)}). Try again, or use an API key instead.`);
     }
     const round: Round = { verifier, path, listener, timer: null, handled: false, waiters: [] };
     this.round = round;

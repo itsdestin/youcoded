@@ -57,7 +57,7 @@ const NOTICE_COPY: Record<VoiceNotice, { title: string; body: string }> = {
   },
 };
 import { ErrorState, FoldRow, Tooltip } from './ui';
-import { getCapabilities } from '../platform';
+import { getCapabilities, deviceNoun } from '../platform';
 import { featureWorks } from '../feature-gate';
 import { useScreenOpen } from '../shoot-mode';
 import VocabularyPanel from './voice/VoiceVocabulary';
@@ -294,7 +294,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
         <p className="text-xs font-semibold text-fg mb-1.5">Speak your messages</p>
         <p className="text-2xs text-fg-2 leading-snug">
           Tap the mic, talk, and your words appear here with punctuation, ready to fix or send.
-          Your voice is turned into text on this computer and never leaves it.
+          Your voice is turned into text on this {deviceNoun()} and never leaves it.
         </p>
         {/* The limit, said BEFORE half a gigabyte is fetched rather than after
             (reopen deck V-11): someone who speaks a language it cannot hear
@@ -348,7 +348,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, notice = 
         {/* WHY the reason's first line only, the rest under Details: an unknown failure appends
             the browser's own words on a second line (useVoiceInput captureFailureReadiness) —
             machine words never in the sentence (guide "Status and notices"). */}
-        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? firstLine(readiness.reason) : 'Still checking whether this computer can listen.'}</p>
+        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? firstLine(readiness.reason) : `Still checking whether this ${deviceNoun()} can listen.`}</p>
         {readiness?.state === 'unavailable' && <ErrorDetails text={restLines(readiness.reason)} className="mt-2" />}
         <div className="flex justify-end gap-2 mt-3">
           {/* WHY secondary (decisions "Secondary buttons"; guide Buttons — nothing bare-text reads

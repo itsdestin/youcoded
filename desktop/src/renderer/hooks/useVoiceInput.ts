@@ -20,6 +20,7 @@ import { MIC_REFUSED_SENTENCE } from '../../shared/voice-types';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 import { isWorkbenchDocument } from '../workbench-mode';
 import { meterLevel, open as openCapture, probe as probeMic, type CaptureHandle } from '../voice-capture';
+import { deviceNoun } from '../platform';
 
 export type VoicePhase = 'idle' | 'listening' | 'finishing';
 
@@ -64,7 +65,8 @@ interface Options {
 // Imported, not retyped: main throws this exact sentence when macOS's own prompt is
 // declined, and the code below compares against it to pick the right card.
 const REASON_REFUSED = MIC_REFUSED_SENTENCE;
-const REASON_NO_DEVICE = 'No microphone was found on this computer.';
+// WHY a function: a phone running its own backend says "phone" (deviceNoun reads the device at call time).
+const reasonNoDevice = () => `No microphone was found on this ${deviceNoun()}.`;
 const REASON_GENERAL = 'Voice could not open a microphone.';
 // What we observed when the microphone stops by itself mid-dictation — no guess
 // at why (unplugged, switched off, a sound-system hiccup all look the same).
@@ -111,7 +113,7 @@ function describe(err: unknown): string {
 function captureFailureReadiness(err: unknown): VoiceReadiness {
   const name = err instanceof Error ? err.name : '';
   if (name === 'NotAllowedError') return { state: 'unavailable', reason: REASON_REFUSED };
-  if (name === 'NotFoundError') return { state: 'unavailable', reason: REASON_NO_DEVICE };
+  if (name === 'NotFoundError') return { state: 'unavailable', reason: reasonNoDevice() };
   // Everything else: say the general thing, and put the machine's OWN words
   // underneath it rather than guessing at a cause. A Linux box with no sound
   // daemon lands here, and the real error is the only clue anyone will get.
@@ -315,7 +317,7 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
     if (!canCapture || !bridge?.micAccess) return null;
     const { hasAudioInput, access } = await probeMic(bridge.micAccess);
     if (access === 'denied') return { state: 'unavailable', reason: REASON_REFUSED };
-    if (!hasAudioInput) return { state: 'unavailable', reason: REASON_NO_DEVICE };
+    if (!hasAudioInput) return { state: 'unavailable', reason: reasonNoDevice() };
     return null;
   }, [bridge, canCapture]);
 
