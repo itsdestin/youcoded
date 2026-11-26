@@ -295,6 +295,12 @@ export class RelayClient extends EventEmitter {
     if (r.header.op !== 'meet-opened') throw new Error(`meeting refused: ${String(r.header.reason ?? r.header.op)}`);
     return { ticket: String(r.header.ticket), ttlMs: Number(r.header.ttlMs) };
   }
+  /** Live pass-through (design 5.2): the relay forwards the sealed bytes to `to` ('all' or a device id) if connected and stores nothing. No reply
+   *  comes back except an error, so this is fire and forget: false means it could not even be written to the socket. */
+  pass(group: string, to: string, frame: Uint8Array): boolean {
+    if (this.#state !== 'ready') return false;
+    try { this.send({ op: 'pass', g: group, to }, frame); return true; } catch { /* benign: the socket closed under us; the caller treats false as "not sent" and asks again later */ return false; }
+  }
   async presence(): Promise<string[]> {
     const r = await this.request({ op: 'presence' });
     return (r.header.devices as string[]) ?? [];

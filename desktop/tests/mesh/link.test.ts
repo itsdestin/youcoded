@@ -313,6 +313,8 @@ describe('link: a lying relay cannot set the read position', () => {
       ring: (g) => inner.ring(g),
       onRing: (cb) => inner.onRing(cb),
       onConnected: (cb) => inner.onConnected(cb),
+      pass: (g, to, f) => inner.pass(g, to, f),
+      onPass: (cb) => inner.onPass(cb),
       async fetchAfter(g, seq) {
         if (mode.v === 'gap-huge') return { frames: [{ seq: 9_000_000_000_000_000 + 1, bytes: Buffer.from('junk') }], more: false, gap: { through: 9_000_000_000_000_000 } };
         if (mode.v === 'seq-huge') return { frames: [{ seq: seq + 5_000_000, bytes: Buffer.from('junk') }], more: false };
@@ -396,5 +398,96 @@ describe('link: a lying relay cannot set the read position', () => {
     await lb.resetReadPosition();
     await settle();
     expect(s.got).toEqual(['x']);
+  });
+});
+
+describe('link: the live lane', () => {
+  const live = (d: Dev, text: string, to?: Buffer) => d.link.sendLive({ group: 'g', kind: 'note', body: noteBody(text), ...(to ? { to } : {}) });
+  it('a live frame reaches every connected device once, is never stored, and is never redelivered by a sync', async () => {
+    const { devs, hub } = await world(['A', 'B', 'C']);
+    expect(live(devs.A, 'now')).toBe(true);
+    await vi.waitFor(() => expect(devs.B.got).toEqual(['now']));
+    await vi.waitFor(() => expect(devs.C.got).toEqual(['now']));
+    await devs.B.link.syncAll();
+    expect(devs.B.got).toEqual(['now']);
+    expect(hub.stored.length).toBe(0);
+    expect(devs.A.got).toEqual([]);
+  });
+  it('a live frame addressed to one device is not handed to the others', async () => {
+    const { devs } = await world(['A', 'B', 'C']);
+    for (const n of ['A', 'B', 'C']) devs[n].carrier.deviceHex = devs[n].id.deviceId.toString('hex');
+    expect(live(devs.A, 'for B', devs.B.id.deviceId)).toBe(true);
+    await vi.waitFor(() => expect(devs.B.got).toEqual(['for B']));
+    await settle(); // settle: the negative
+    expect(devs.C.got).toEqual([]);
+  });
+  it('offline: the frame is not queued, sendLive says false, and nothing arrives later', async () => {
+    const { devs } = await world(['A', 'B']);
+    devs.A.carrier.setOnline(false);
+    expect(live(devs.A, 'lost')).toBe(false);
+    devs.A.carrier.setOnline(true);
+    await settle();
+    expect(devs.B.got).toEqual([]);
+  });
+  it('a replayed live frame is refused as a repeat; a forged one is rejected and counted, never delivered', async () => {
+    const { devs } = await world(['A', 'B']);
+    const seen: Buffer[] = [];
+    devs.A.carrier.passFilter = (_g, _t, f) => { seen.push(f); return 'deliver'; };
+    live(devs.A, 'once');
+    await vi.waitFor(() => expect(devs.B.got).toEqual(['once']));
+    // replay the captured bytes straight into B's carrier, and a bit-flipped copy
+    const replay = (f: Buffer): void => { devs.A.carrier.passFilter = null; devs.A.carrier.pass('g', 'all', f); };
+    replay(seen[0]);
+    const flipped = Buffer.from(seen[0]); flipped[flipped.length - 3] ^= 1;
+    replay(flipped);
+    await vi.waitFor(() => expect(Object.values(devs.B.link.rejections().counts).reduce((x, y) => x + y, 0)).toBeGreaterThanOrEqual(1));
+    expect(devs.B.got).toEqual(['once']);
+  });
+  it('a live frame relabelled to another group is rejected (the relay names groups in clear)', async () => {
+    const { devs } = await world(['A', 'B']);
+    const seen: Buffer[] = [];
+    devs.A.carrier.passFilter = (_g, _t, f) => { seen.push(f); return 'drop'; };
+    live(devs.A, 'x');
+    devs.A.carrier.passFilter = null;
+    devs.A.carrier.pass('other', 'all', seen[0]);
+    await vi.waitFor(() => expect(devs.B.link.rejections().counts['live-group-mismatch'] ?? 0).toBe(1));
+    expect(devs.B.got).toEqual([]);
+  });
+  it('a handler that throws on a live frame costs only that frame', async () => {
+    const { devs } = await world(['A', 'B']);
+    devs.B.failHandler.on = true;
+    live(devs.A, 'boom');
+    await vi.waitFor(() => expect(devs.B.link.rejections().counts['live-handler-failed']).toBe(1));
+    devs.B.failHandler.on = false;
+    live(devs.A, 'fine');
+    await vi.waitFor(() => expect(devs.B.got).toEqual(['fine']));
+  });
+  it('a live frame from an unknown signer is dropped and counted, never parked', async () => {
+    const w = await world(['A', 'B']);
+    const stranger = generateIdentity();
+    const carrier = w.hub.carrier('S');
+    const link = new Link({ identity: stranger, setId: w.setId, carrier, meshDir: tmp('link-S-'), secrets: () => new Map([[1, secret]]), signKeyFor: () => undefined, counter: { get: () => 0, set: async () => {} }, onFrame: () => {} });
+    await link.start(['g']);
+    expect(link.sendLive({ group: 'g', kind: 'note', body: noteBody('hi') })).toBe(true);
+    await vi.waitFor(() => expect(w.devs.B.link.rejections().counts['live-unjudgeable'] ?? 0).toBeGreaterThanOrEqual(1));
+    expect(w.devs.B.link.waitingCount).toBe(0);
+    expect(w.devs.B.got).toEqual([]);
+  });
+});
+
+describe('link: unfollow', () => {
+  it('a group that is let go is no longer read, and following it again does not redeliver', async () => {
+    const { devs } = await world(['A', 'B']);
+    await send(devs.A, 'one');
+    await vi.waitFor(() => expect(devs.B.got).toEqual(['one']));
+    expect(devs.B.link.isFollowing('g')).toBe(true);
+    await devs.B.link.unfollow('g');
+    expect(devs.B.link.isFollowing('g')).toBe(false);
+    await send(devs.A, 'two');
+    await settle(); // settle: the negative
+    expect(devs.B.got).toEqual(['one']);
+    devs.B.link.follow('g');
+    await devs.B.link.sync('g');
+    expect(devs.B.got).toEqual(['one', 'two']);
   });
 });

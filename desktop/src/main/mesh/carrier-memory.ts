@@ -19,6 +19,11 @@ export class MemoryCarrier implements Carrier {
   online = true;
   #ring: Array<(g: string) => void> = [];
   #conn: Array<() => void> = [];
+  #pass: Array<(g: string, from: string, frame: Buffer) => void> = [];
+  /** Test hook for the live lane (the world in tests/mesh/replicator-world.ts): decide what happens to each passed frame. Default: deliver now. */
+  passFilter: ((g: string, to: string, frame: Buffer) => 'deliver' | 'drop') | null = null;
+  /** Live frames this carrier handed over, for tests that count traffic. */
+  passed = 0;
   readonly receivedThrough = new Map<string, number>();
   constructor(private readonly hub: MemoryHub, readonly dev: string) {}
   get connected(): boolean {
@@ -51,6 +56,25 @@ export class MemoryCarrier implements Carrier {
   }
   onRing(cb: (g: string) => void): void {
     this.#ring.push(cb);
+  }
+  /** Like the relay's `pass`: to one connected device or to all of them; never stored; offline devices simply miss it. */
+  pass(group: string, to: string, frame: Uint8Array): boolean {
+    if (!this.online) return false;
+    const copy = Buffer.from(frame);
+    if (this.passFilter && this.passFilter(group, to, copy) === 'drop') return true; // WHY true: the relay does not tell the sender about a lost pass either
+    this.passed++;
+    for (const [dev, c] of this.hub.members) {
+      if (dev === this.dev || !c.online) continue;
+      if (to !== 'all' && c.deviceHex !== to) continue;
+      // WHY a macrotask: a real pass arrives on another socket, never inside the sender's own call stack.
+      setTimeout(() => c.#pass.forEach((cb) => cb(group, this.deviceHex ?? this.dev, Buffer.from(copy))), 0);
+    }
+    return true;
+  }
+  /** The 32-hex device id the relay would stamp; tests that address one device by id set it. Falls back to the hub name. */
+  deviceHex: string | null = null;
+  onPass(cb: (g: string, from: string, frame: Buffer) => void): void {
+    this.#pass.push(cb);
   }
   onConnected(cb: () => void): void {
     this.#conn.push(cb);

@@ -36,6 +36,13 @@
 // poison the saved number. A frame further than MAX_POSITION_JUMP ahead is still read (an honest relay can have released a long run, N9) but neither it nor a gap that far can move the SAVED position, and junk that far ahead cannot move even the session position. Reconnecting forgets
 // the soft position. resetReadPosition() is the operator's way back to the start (replay protection keeps duplicates out).
 //
+// LIVE LANE (sendLive, the replicator's heads / want / ack / nak). Sealed exactly like a durable frame (same keys, same signature, same replay
+// table) but handed to the carrier's `pass`: never stored, never queued, never retried, no read position. WHY: heads and wants are only
+// useful NOW, and non-line groups have a small per-writer quota at the relay, so they must never ride `hold`. A live frame that cannot be sent
+// (offline, no usable secret) is dropped and sendLive says false; the caller re-asks on its next timer. A live frame that cannot be judged
+// (unknown signer, unknown generation) is dropped and counted, never parked: waiting frames are for durable data. The receiving handler
+// must be idempotent: the replay table is saved on a short delay, so a crash can let one recent live frame be accepted twice.
+//
 // LOGGING: event names, group names, close codes, counts. Never frame bytes, keys or bodies.
 import path from 'path';
 import { asArray, asBytes, asMap, asText, asUint, decode, encode, onlyKeys, type CborValue } from './crypto/cbor';
@@ -59,6 +66,10 @@ export interface Carrier {
   ring(group: string): void;
   onRing(cb: (group: string) => void): void;
   onConnected(cb: () => void): void;
+  /** LIVE lane (never stored, never numbered, no acknowledgement): hand a sealed frame to the other devices that are connected right now.
+   *  `to` is 'all' or one device's 32-hex id. Returns false when it could not be handed over (offline): the caller must never treat a pass as delivered. */
+  pass(group: string, to: string, frame: Uint8Array): boolean;
+  onPass(cb: (group: string, fromDevice: string, frame: Buffer) => void): void;
 }
 
 /** Where the receiver save number lives (see the header). keys.bin implements it today. */
@@ -173,18 +184,34 @@ export class Link {
     await this.loadState();
     for (const g of groups) if (!this.#cursors.has(g)) this.#cursors.set(g, 0);
     this.#o.carrier.onRing((g) => { if (this.#cursors.has(g)) void this.sync(g); });
+    this.#o.carrier.onPass((g, _from, wire) => { void this.handleLive(g, wire); });
     // WHY the soft position is forgotten on every (re)connect: a lying relay must not leave a position behind that an honest one then inherits.
     this.#o.carrier.onConnected(() => { this.#soft.clear(); void this.flush(); void this.syncAll(); });
     if (this.#o.carrier.connected) { void this.flush(); void this.syncAll(); }
   }
   stop(): void {
     this.#stopped = true;
+    if (this.#liveSave) { clearTimeout(this.#liveSave); this.#liveSave = null; }
     for (const o of this.#outbox) o.reject(new Error('stopped'));
     this.#outbox = [];
   }
   follow(group: string): void {
     if (!this.#cursors.has(group)) this.#cursors.set(group, 0);
   }
+  /** Stop reading `group`: its read position, session position, waiting frames and half-handled frames are forgotten and the change is saved.
+   *  WHY: the replicator follows one group per chat and must be able to let go (a retired or evicted chat); without this the list only grows.
+   *  Replay protection stays (it is per sender, not per group), so following again later never re-applies a frame. */
+  async unfollow(group: string): Promise<void> {
+    const had = this.#cursors.delete(group);
+    this.#soft.delete(group);
+    this.#again.delete(group);
+    const before = this.#waiting.length;
+    this.#waiting = this.#waiting.filter((w) => w.group !== group);
+    for (const k of [...this.#failedOpen.keys()]) if (k.startsWith(`${group}:`)) this.#failedOpen.delete(k);
+    if (had || before !== this.#waiting.length) { this.#dirty = true; if (this.#failedOpen.size === 0 && !this.#stopped) await this.persist(); }
+  }
+  /** Is `group` followed (read after its cursor)? */
+  isFollowing(group: string): boolean { return this.#cursors.has(group); }
 
   // ---------------------------------------------------------------- sending
   sendDurable(a: { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean; wide?: boolean; optional?: boolean }): Promise<{ counter: number }> {
@@ -192,6 +219,48 @@ export class Link {
       this.#outbox.push({ ...a, resolve, reject });
       void this.flush();
     });
+  }
+  /** Seal and hand ONE frame to the live lane. Resolves true when the carrier took it, false when it could not (offline, no usable secret,
+   *  sealing refused): nothing is queued and nothing is retried, so a caller that needs the message to arrive asks again later. */
+  sendLive(a: { group: string; kind: string; body: CborValue; to?: Buffer; wide?: boolean }): boolean {
+    if (this.#stopped || !this.#o.carrier.connected) return false;
+    try {
+      const gen = this.currentGen({ group: a.group, kind: a.kind, body: a.body, wide: a.wide, resolve: () => {}, reject: () => {} });
+      const secret = this.#o.secrets().get(gen) as Buffer;
+      const wire = this.#sender.seal({ secret, gen, group: a.group, kind: a.kind, body: a.body, to: a.to ?? null });
+      return this.#o.carrier.pass(a.group, a.to ? a.to.toString('hex') : 'all', wire);
+    } catch (e) {
+      // not retryable and not worth a crash: no usable secret yet, or the body could not be sealed. Said by name, never with the body.
+      this.log('send-live-dropped', { reason: e instanceof MeshCryptoError ? e.code : e instanceof NoSecretYet ? 'no-secret' : 'error' });
+      return false;
+    }
+  }
+  /** A live frame arrived. Opened like any frame; anything that cannot be judged right now is dropped and counted (see the header). */
+  private async handleLive(group: string, wire: Buffer): Promise<void> {
+    if (this.#stopped) return;
+    const out = this.tryOpen(group, 0, wire);
+    if (out === 'rejected' || out === 'quiet') return;
+    if (out === 'waiting') { this.bump('live-unjudgeable'); return; }
+    const o = out.opened;
+    if (o.header.from.equals(this.#o.identity.deviceId)) return;
+    // WHY the group of the frame is checked against the group it travelled in: the relay names the group in clear and a hostile one could re-label it.
+    if (o.header.group !== group) { this.reject(group, 0, o.header.from.toString('hex').slice(0, 8), 'live-group-mismatch'); return; }
+    try {
+      await this.#o.onFrame({ group, seq: 0, header: { kind: o.header.kind, from: o.header.from, counter: o.header.counter }, body: o.body as CborValue });
+    } catch (e) {
+      this.bump(e instanceof FrameReject ? e.why : e instanceof FrameWait ? 'live-wait-dropped' : 'live-handler-failed');
+    }
+    this.scheduleLiveSave();
+  }
+  #liveSave: ReturnType<typeof setTimeout> | null = null;
+  /** The replay table changed (opening a frame records it) but no durable batch is going to save it: save it soon, once for many frames. */
+  private scheduleLiveSave(): void {
+    if (this.#liveSave || this.#stopped) return;
+    this.#liveSave = setTimeout(() => {
+      this.#liveSave = null;
+      if (this.#failedOpen.size === 0 && !this.#stopped) this.persist().catch((cause) => reportFailure({ what: 'save the link state after live frames (the next durable batch saves it)', cause, where: 'mesh.link' }));
+    }, 1000);
+    this.#liveSave.unref?.();
   }
   /** Call when a generation arrived or the roster changed: frames that were waiting for a usable secret are sealed and sent. */
   kick(): void {

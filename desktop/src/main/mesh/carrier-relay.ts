@@ -7,6 +7,9 @@ import type { RelayClient } from './relay-client';
 export function relayCarrier(client: RelayClient): Carrier {
   const ringCbs: Array<(g: string) => void> = [];
   const connCbs: Array<() => void> = [];
+  const passCbs: Array<(g: string, from: string, frame: Buffer) => void> = [];
+  // WHY: the relay's live pass-through (shared/mesh-protocol.ts `pass`) carries the replicator's heads, wants and acks. The relay stamps `from`.
+  client.on('pass', (m: { from: string; group: string; payload: Buffer }) => passCbs.forEach((cb) => cb(m.group, m.from, m.payload)));
   // WHY the doorbell, not `pass`: the relay itself rings every other connected member when it STORES a frame (numbered, no body),
   // which replaced the one-byte `pass` this carrier used to send after each hold.
   client.on('doorbell', (m: { group: string }) => ringCbs.forEach((cb) => cb(m.group)));
@@ -24,6 +27,8 @@ export function relayCarrier(client: RelayClient): Carrier {
     // Nothing to send: the relay rings the other devices when it stores the frame (see above).
     ring: () => {},
     onRing: (cb) => { ringCbs.push(cb); },
+    pass: (group, to, frame) => client.pass(group, to, frame),
+    onPass: (cb) => { passCbs.push(cb); },
     onConnected: (cb) => { connCbs.push(cb); },
   };
 }
