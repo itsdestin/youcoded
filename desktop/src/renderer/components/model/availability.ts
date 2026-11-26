@@ -106,7 +106,7 @@ export function unavailableReason(choice: ModelChoice | null | undefined, d: Ava
 function normalize(raw: unknown): ClaudeAccountStatus {
   const state = (raw as { state?: unknown } | null)?.state;
   if (state === 'signed-in') return raw as ClaudeAccountStatus;
-  if (state === 'signed-out' || state === 'not-installed') return { state };
+  if (state === 'signed-out' || state === 'not-installed' || state === 'not-possible') return { state };
   return { state: 'unknown' };
 }
 

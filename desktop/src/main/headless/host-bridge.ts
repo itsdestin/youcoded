@@ -39,13 +39,15 @@ function tcpPort(target: string): number | null {
 const HOST_TOKEN = process.env.YOUCODED_HOST_TOKEN ?? '';
 delete process.env.YOUCODED_HOST_TOKEN;
 
-/** Which phone system the app that started this backend runs on. WHY a function, not process.platform: on Android
+/** Which phone system the app that started this backend runs on, or null on a computer. WHY a function, not process.platform: on Android
  *  the bundled Node reports "linux"; on the iPhone nodejs-mobile reports "ios". The app may also say so itself
  *  (YOUCODED_HOST_OS), which is how a laptop test run imitates either phone. */
-export function hostOs(): 'android' | 'ios' {
+export function hostOs(): 'android' | 'ios' | null {
   const said = process.env.YOUCODED_HOST_OS;
   if (said === 'ios' || said === 'android') return said;
-  return (process.platform as string) === 'ios' ? 'ios' : 'android';
+  if ((process.platform as string) === 'ios') return 'ios';
+  // No app on the other end and nothing said: a computer (or a laptop test run of the headless backend).
+  return hasHost() || process.env.YOUCODED_HEADLESS_PORT ? 'android' : null;
 }
 
 /** Can this device start other programs at all (Claude Code, a terminal, git, a shell command)?

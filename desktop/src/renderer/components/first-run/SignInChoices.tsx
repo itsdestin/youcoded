@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, ErrorState } from '../ui';
 import { ProviderIcon } from '../ProviderIcon';
-import { deviceNoun } from '../../platform';
+import { deviceNoun, getCapabilities } from '../../platform';
 
 /**
  * The sign-in step, explained (first-run deck L-3, Destin 2026-10-04: "walk the users
@@ -24,24 +24,30 @@ interface Group {
   summary: string;
   facts: { kind: FactKind; text: string }[];
   ways: { id: WayIn; label: string }[];
+  /** A plain sentence under the buttons, for something this device cannot offer. */
+  note?: string;
 }
 
 // WHY these words: every fact is something the user can check for themselves, and none
 // claims what a company does with their messages beyond "it goes to them" — the
 // error-message rule's "never invent a cause" applied to promises.
-function groups(chatGpt: boolean): Group[] {
+// WHY `claude` (2026-11-25, iPhone app, card #89): a Claude plan is used through Claude Code, a program, and an iPhone
+// cannot run programs (capabilities.programs). Offering "Log in with Claude" there would end in an install that can
+// never succeed, so the button is left out and one sentence says where a Claude plan does work.
+function groups(chatGpt: boolean, claude: boolean): Group[] {
   return [
     {
       id: 'plan',
       title: 'A plan you already pay for',
       badge: 'No extra cost',
-      summary: 'Use your Claude or ChatGPT subscription.',
+      summary: claude ? 'Use your Claude or ChatGPT subscription.' : 'Use your ChatGPT subscription.',
       facts: [
         { kind: 'cost', text: 'Included in your plan. Its usage limits apply.' },
-        { kind: 'privacy', text: 'Messages go to Anthropic or OpenAI, as in their own apps.' },
+        { kind: 'privacy', text: claude ? 'Messages go to Anthropic or OpenAI, as in their own apps.' : 'Messages go to OpenAI, as in its own app.' },
         { kind: 'good', text: 'The strongest models.' },
       ],
-      ways: [{ id: 'claude', label: 'Log in with Claude' }, ...(chatGpt ? [{ id: 'chatgpt' as const, label: 'Log in with ChatGPT' }] : [])],
+      ways: [...(claude ? [{ id: 'claude' as const, label: 'Log in with Claude' }] : []), ...(chatGpt ? [{ id: 'chatgpt' as const, label: 'Log in with ChatGPT' }] : [])],
+      ...(claude ? {} : { note: 'A Claude plan works through Claude Code, which runs on a computer. To use yours here, connect this iPhone to YouCoded on your computer after setup.' }),
     },
     {
       id: 'payg',
@@ -156,6 +162,7 @@ function Guided({ list, onPick, initial, offline, lastWay }: { list: Group[]; on
         <Head g={g} big />
         <Facts facts={g.facts} />
         <Ways ways={g.ways} onPick={onPick} offline={offline} lastWay={lastWay} />
+        {g.note && <p className="text-sm text-fg-dim leading-snug">{g.note}</p>}
       </section>
     );
   }
@@ -186,6 +193,9 @@ export function SignInChoices({ chatGpt, onPick, offline, lastWay }: { chatGpt: 
   // `?signInPick=<kind>` is the workbench's photo switch for the second page; the real
   // app's address never carries it, so it always opens on the three rows.
   const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
-  const list = groups(chatGpt).filter((g) => !(g.id === 'local' && deviceNoun() === 'phone'));
+  // A group left with no way in (the plan row on an iPhone with ChatGPT sign-in switched off) is not shown at all.
+  const list = groups(chatGpt, getCapabilities().programs)
+    .filter((g) => !(g.id === 'local' && deviceNoun() === 'phone'))
+    .filter((g) => g.ways.length > 0);
   return <Guided list={list} onPick={onPick} initial={pick} offline={offline} lastWay={lastWay} />;
 }

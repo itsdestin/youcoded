@@ -247,6 +247,11 @@ export function ClaudeCodeBlock({
       : installError
         ? { text: installError, tone: 'bad' }
         : { text: 'Install it to use Claude models.' };
+  } else if (status?.state === 'not-possible') {
+    // An iPhone (2026-11-25): Claude Code is a program and this device cannot run one, so there is nothing to
+    // install or sign in to here. Say what is true and where a Claude plan does work.
+    line = 'Runs on a computer';
+    detail = { text: 'Claude Code can’t run on an iPhone. To use your Claude plan here, connect this iPhone to YouCoded on your computer.' };
   } else if (status?.state === 'unknown') {
     // The probe ran and could not answer. We do not know, so we do not claim —
     // and everything keeps working, because "unknown" never blocks a model.

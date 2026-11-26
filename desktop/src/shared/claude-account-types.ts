@@ -69,6 +69,10 @@ export type ClaudeAccountStatus =
   /** No `claude` binary on PATH. Different from signed-out, and it needs
    *  different words: signing in is not the fix. */
   | { state: 'not-installed' }
+  /** This device cannot run Claude Code at all, installed or not: an iPhone, where no app may start a program
+   *  (2026-11-25, card #89). Different words again, and NO Install or Sign in button: neither can fix it. The fix is
+   *  using Claude through a computer. */
+  | { state: 'not-possible' }
   /** The probe could not produce an answer (timed out, unparsable output).
    *  Treated as "assume it works" everywhere — see the type comment. */
   | { state: 'unknown' };
@@ -99,5 +103,6 @@ export function claudeCanRun(status: ClaudeAccountStatus | null | undefined): bo
  *  cannot disagree. */
 export function claudeUnavailableReason(status: ClaudeAccountStatus | null | undefined): string | null {
   if (claudeCanRun(status)) return null;
+  if (status?.state === 'not-possible') return 'Needs a computer';
   return status?.state === 'not-installed' ? 'Claude Code not installed' : 'Sign in to use';
 }

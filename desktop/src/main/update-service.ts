@@ -6,6 +6,7 @@
 // reads getUpdateStatus(). One lazily-built service (it needs Electron's app paths, so it cannot be
 // built at import time) serves both. The code below is moved unchanged except where marked.
 import fs from 'fs';
+import { hostOs } from './headless/host-bridge';
 import os from 'os';
 import path from 'path';
 import https from 'https';
@@ -120,6 +121,10 @@ function createUpdateService() {
   }
 
   function getUpdateStatus() {
+    // WHY never an update on an iPhone (2026-11-25, card #89): an iPhone app can only be updated by Apple (the App
+    // Store or TestFlight), which tells the person itself. The GitHub release this check reads holds computer and
+    // Android installers; offering one of those on an iPhone is a button that can do nothing.
+    if (hostOs() === 'ios') return currentOnlyStatus();
     // Return cached value, kick off background refresh if stale
     if (Date.now() - lastReleaseCheck > RELEASE_CHECK_INTERVAL) {
       fetchLatestRelease().catch(() => {});

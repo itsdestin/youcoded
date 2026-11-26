@@ -55,7 +55,7 @@ import { initArcadeOps } from '../arcade-handlers';
 import { startDailyHeartbeat, setAndroidId } from '../analytics-service';
 import { safeStorage } from 'electron';
 import type { Platform } from '../platform';
-import { hasHost, hostNotify, onHostEvent, returnToApp } from './host-bridge';
+import { hasHost, hostNotify, hostOs, onHostEvent, returnToApp } from './host-bridge';
 import { startBackgroundStatus } from '../background-status';
 
 export interface HeadlessOptions {
@@ -136,7 +136,10 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   // read once and removed so programs this backend starts never inherit it.
   setAndroidId(process.env.YOUCODED_ANDROID_ID);
   delete process.env.YOUCODED_ANDROID_ID;
-  startDailyHeartbeat({ platform: 'android' });
+  // WHY no heartbeat from an iPhone yet (2026-11-25, card #89): the counting service accepts only "desktop" and
+  // "android" (wecoded-marketplace worker/src/app/routes.ts PLATFORMS). Checking in as "android" would count iPhones
+  // as Android phones; until the service learns "ios", an iPhone is simply not counted.
+  if (hostOs() === 'android') startDailyHeartbeat({ platform: 'android' });
   let firstRunManager: FirstRunManager | undefined;
   try {
     if (FirstRunManager.isFirstRun()) firstRunManager = new FirstRunManager();
@@ -303,7 +306,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     .catch((e) => log('ERROR', 'Headless', 'SyncSpaces start failed', { error: String(e) }));
   try {
     const pr = getManagedRoots()?.personalRoot;
-    if (pr && machineIdentity) void upsertSelf(pr, { id: machineIdentity.id, platform: 'android' /* WHY: process.platform is the bundled Linux's "linux"; this backend only runs on phones */ }).catch(() => {});
+    if (pr && machineIdentity) void upsertSelf(pr, { id: machineIdentity.id, platform: hostOs() ?? 'android' /* WHY: process.platform is the bundled Linux's "linux" on Android; this backend only runs on phones */ }).catch(() => {});
     if (pr) sweepLegacyLeaseDir(pr);
   } catch { /* sync not configured */ }
   void startConversationStore({ pauseSweeps: true })

@@ -70,19 +70,25 @@ jobs:
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -resultBundlePath "$RUNNER_TEMP/ios-result.xcresult" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -parallel-testing-enabled NO \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
             2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | grep -vE '^\s*(CompileC|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|CpResource|Copy|builtin-|cd |export |/Applications/Xcode|\s*$)' | tail -400
       - name: Collect the app's logs
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/ios-logs"
-          DATA="$(xcrun simctl get_app_container booted com.youcoded.app.dev data 2>/dev/null || true)"
-          if [ -n "$DATA" ]; then
-            cp "$DATA/Library/Application Support/userdata/"*.log "$RUNNER_TEMP/ios-logs/" 2>/dev/null || true
-            ls -la "$DATA/Documents" > "$RUNNER_TEMP/ios-logs/home-listing.txt" 2>/dev/null || true
-          fi
+          # WHY a search, not `simctl get_app_container booted`: xcodebuild may run the tests on a CLONE of the
+          # simulator, which is not the "booted" device by the time this step runs.
+          n=0
+          find "$HOME/Library/Developer/CoreSimulator/Devices" \( -name 'backend*.log' -o -name 'page.log' \) -path '*userdata*' 2>/dev/null | while read -r f; do
+            n=$((n+1)); cp "$f" "$RUNNER_TEMP/ios-logs/$n-$(basename "$f")"
+          done
+          # Crash reports, if the app ended unexpectedly.
+          find "$HOME/Library/Logs/DiagnosticReports" -name 'YouCoded*' -mmin -90 2>/dev/null | while read -r f; do cp "$f" "$RUNNER_TEMP/ios-logs/"; done
           tail -c 400000 "$RUNNER_TEMP/xcodebuild.log" > "$RUNNER_TEMP/ios-logs/xcodebuild-tail.log" 2>/dev/null || true
-          xcrun simctl spawn booted log show --last 15m --predicate 'subsystem == "com.youcoded.app"' --style compact > "$RUNNER_TEMP/ios-logs/unified.log" 2>/dev/null || true
+          for dev in $(xcrun simctl list devices | grep -E 'Booted' | grep -oE '[0-9A-F-]{36}'); do
+            xcrun simctl spawn "$dev" log show --last 20m --predicate 'process == "YouCoded"' --style compact 2>/dev/null | tail -c 600000 > "$RUNNER_TEMP/ios-logs/unified-$dev.log" || true
+          done
           ls -la "$RUNNER_TEMP/ios-logs" "$RUNNER_TEMP/ios-shots" || true
       - name: Upload screenshots and logs
         if: always()

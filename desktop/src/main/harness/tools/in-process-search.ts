@@ -10,8 +10,8 @@
 // It understands exactly the arguments grep.ts builds, nothing more. Differences from real ripgrep, on purpose:
 //  - patterns are JavaScript regular expressions (ripgrep's are Rust's). Everyday patterns are the same in both;
 //    a Rust-only construct is reported as a regex error, never silently mis-searched.
-//  - ignore rules: `.git` and `node_modules` are skipped and the search root's own `.gitignore` is honoured for
-//    simple patterns; nested `.gitignore` files are not read.
+//  - ignore rules: `.git` is skipped and the search root's own `.gitignore` is honoured for simple patterns;
+//    nested `.gitignore` files are not read.
 //  - binary files (a NUL byte in the first 8 KB) and files over 5 MB are skipped.
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
@@ -25,7 +25,7 @@ export interface SearchChild extends EventEmitter {
 }
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
-const ALWAYS_SKIPPED = new Set(['.git', 'node_modules']);
+const ALWAYS_SKIPPED = new Set(['.git']);
 
 /** ripgrep's `--type` names → the file globs they stand for (the common ones; `rg --type-list` has hundreds). */
 const TYPE_GLOBS: Record<string, string[]> = {
@@ -235,6 +235,7 @@ export function inProcessSearch(args: string[], cwd: string): SearchChild {
     /** How ripgrep would print this file: bare for a whole-folder search from cwd, else under the target as given. */
     const label = (rel: string): string => (p.target === null ? rel : `${p.target.replace(/\\/g, '/').replace(/\/+$/, '')}/${rel}`);
     let anyMatch = false;
+    let printedContent = false;
 
     const searchFile = async (abs: string, shown: string | null): Promise<void> => {
       let content: string;
@@ -247,7 +248,6 @@ export function inProcessSearch(args: string[], cwd: string): SearchChild {
       } catch { return; }
       const lines = content.split('\n');
       if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-      for (let i = 0; i < lines.length; i++) if (lines[i].endsWith('\r')) lines[i] = lines[i].slice(0, -1);
       let hits = matchingLines(content, lines, re, p.multiline);
       if (hits.length === 0) return;
       anyMatch = true;
@@ -256,7 +256,9 @@ export function inProcessSearch(args: string[], cwd: string): SearchChild {
       if (p.mode === 'count') { child.stdout.emit('data', shown === null ? `${hits.length}\n` : `${prefix}:${hits.length}\n`); return; }
       if (hits.length > p.maxCount) hits = hits.slice(0, p.maxCount);
       const hitSet = new Set(hits);
-      let out = '';
+      // With context lines, ripgrep also draws its `--` line between one file's output and the next.
+      let out = (p.before > 0 || p.after > 0) && printedContent ? '--\n' : '';
+      printedContent = true;
       let lastPrinted = -1;
       for (const h of hits) {
         const from = Math.max(0, h - p.before, lastPrinted + 1);

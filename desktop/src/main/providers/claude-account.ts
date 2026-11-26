@@ -1,3 +1,4 @@
+import { canRunPrograms } from '../headless/host-bridge';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { log } from '../logger';
@@ -186,6 +187,9 @@ export class ClaudeAccount {
   }
 
   private async probe(): Promise<ClaudeAccountStatus> {
+    // An iPhone cannot run Claude Code at all (headless/host-bridge.ts): say so, rather than "not installed", which
+    // would offer an install that can never work.
+    if (!canRunPrograms()) return { state: 'not-possible' };
     try {
       const { stdout } = await this.run();
       return statusFromOutput(stdout);
