@@ -48,7 +48,7 @@ describe('the "Backing up…" chip (switched on)', () => {
 });
 
 describe('what ships', () => {
-  it('the chip is ON by default (Destin chose it on deck U-2, 2026-11-25)', async () => {
+  it('the chip is on by default', async () => {
     const real = await vi.importActual<typeof import('../src/renderer/state/backup-progress')>('../src/renderer/state/backup-progress');
     expect(real.BACKUP_PROGRESS_CHIP_ENABLED).toBe(true);
   });
