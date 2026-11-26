@@ -76,6 +76,7 @@ import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
 import { markBootReady } from './boot-ready';
+import { decideFirstRun } from './state/first-run-launch';
 import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePresence } from './hooks/usePresence';
 import { usePartyGame } from './hooks/usePartyGame';
@@ -679,22 +680,14 @@ function AppInner() {
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
-  // Check first-run state with a 3-second safety timeout — never hang the app
+  // Setup screen or app? WHY decideFirstRun (2026-11-25): the old 3-second guess opened a slow phone's app with no
+  // account — setup skipped, first message failed. It now waits longer, re-asks, and lets a late "setup needed" win.
   useEffect(() => {
-    let resolved = false;
-    const resolve = (value: boolean) => {
-      if (!resolved) { resolved = true; setIsFirstRun(value); markBootReady(); } // markBootReady: the Android app's loading screen gives way (boot-ready.ts)
-    };
-    const timeout = setTimeout(() => resolve(false), 3000);
-
-    (window as any).claude?.firstRun?.getState?.()
-      .then((state: any) => {
-        clearTimeout(timeout);
-        resolve(!!(state && state.currentStep !== 'COMPLETE'));
-      })
-      .catch(() => { clearTimeout(timeout); resolve(false); });
-
-    return () => clearTimeout(timeout);
+    const fr = (window as any).claude?.firstRun;
+    return decideFirstRun(fr?.getState ? () => fr.getState() : undefined, (needsSetup) => {
+      setIsFirstRun(needsSetup);
+      markBootReady(); // the Android app's loading screen gives way (boot-ready.ts); a second call is harmless
+    });
   }, []);
 
   // The saved new-session defaults. Re-read around Settings, after a remote reconnect, and
