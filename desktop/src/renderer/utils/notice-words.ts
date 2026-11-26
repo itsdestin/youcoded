@@ -57,6 +57,13 @@ export const notRunning = (nothingTo: string): string => `This session isn't run
 export const NOTHING_TO_COMPACT = 'Nothing to compact yet — there needs to be at least a couple of exchanges before there’s anything to summarize.';
 export const NOT_AN_INSTALLED_SKILL = "That isn't an installed skill, and it isn't a command YouCoded-runtime sessions support yet. Browse the marketplace to install skills.";
 
+// ---- /compact or /clear failed after it ran (the card in the chat) ----
+/** The words on the in-chat card. A reason we recognise gets its own sentence; otherwise the plain line, and the computer's reason (if any) sits under Details. */
+const COMPACT_SUMMARY_FAILED = 'The model couldn’t write a usable summary, so the conversation was left intact. Try again later.';
+const COMPACT_INTERRUPTED = 'Compaction stopped. The conversation was left as it was.';
+export const controlFailureWords = (op: 'compact' | 'clear', why?: 'summary-failed' | 'interrupted'): string =>
+  why === 'summary-failed' ? COMPACT_SUMMARY_FAILED : why === 'interrupted' ? COMPACT_INTERRUPTED : `Couldn't ${op} this conversation.`;
+
 // ---- A skill that could not run ----
 export const SKILL_UNREADABLE = "That skill is installed, but its instructions couldn't be read. Reinstalling it from the marketplace usually fixes this.";
 export const skillFailed = (skill: string): string => `Couldn't run /${skill}.`;

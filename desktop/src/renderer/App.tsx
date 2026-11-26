@@ -845,8 +845,6 @@ function AppInner() {
           sessionId: sid,
           dispatch,
           compactionOperationId: chatStateMapRef.current.get(sid)?.compactionPending?.id, // WHY: capture before awaiting IPC.
-          // Toast owns its own dismissal (only compact / clear failures still use it; the rest go to the chat's strip).
-          onToast: (msg: string) => setToast(msg),
           getSession: (id: string) => chatStateMapRef.current.get(id),
         });
         return true;

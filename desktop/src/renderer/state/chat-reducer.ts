@@ -1036,7 +1036,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const prev = next.get(action.sessionId);
       // Also kept: this screen's own sends the transcript has not echoed yet (pending bubbles). The echo, when the fill's recent past or a
       // later live event carries it, confirms the oldest matching pending (TRANSCRIPT_USER_MESSAGE) instead of appending a second copy.
-      const pending = prev ? prev.timeline.filter((e) => e.kind === 'user' && e.pending) : [];
+      // WHY the failure card too (waiting-notice T4): it is not in the page the fill brings, so a refresh would silently remove a
+      // "Couldn't compact" the person has not acted on yet.
+      const pending = prev ? prev.timeline.filter((e) => (e.kind === 'user' && e.pending) || e.kind === 'control-failure') : [];
       next.set(action.sessionId, { ...createSessionChatState(), ...(prev ? { queuedMessages: prev.queuedMessages, timeline: pending } : {}) });
       return next;
     }
@@ -3448,6 +3450,27 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         seenUuids: alreadyCounted ? session.seenUuids : markSeen(session, action.uuid),
         contextUsedOverride: override,
       });
+      return next;
+    }
+
+    // "Couldn't compact / clear" card (waiting-notice T4): on screen only, one per command, above any pending bubble.
+    case 'CONTROL_FAILURE_CARD': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const id = `control-failure-${action.op}`;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: appendAbovePending(session.timeline.filter((e) => e.kind !== 'control-failure' || e.id !== id),
+          { kind: 'control-failure', id, op: action.op, ...(action.why ? { why: action.why } : {}), ...(action.detail ? { detail: action.detail } : {}) }),
+      });
+      return next;
+    }
+
+    case 'CONTROL_FAILURE_CLEARED': {
+      const session = next.get(action.sessionId);
+      const id = `control-failure-${action.op}`;
+      if (!session || !session.timeline.some((e) => e.kind === 'control-failure' && e.id === id)) return state;
+      next.set(action.sessionId, { ...session, timeline: session.timeline.filter((e) => e.kind !== 'control-failure' || e.id !== id) });
       return next;
     }
 

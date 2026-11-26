@@ -15,17 +15,17 @@
 // through announce(), so it shares the one floating spot and never pushes out a notice that needs you.
 
 import { useEffect } from 'react';
-import { REMOTE_UNSUPPORTED_EVENT, type RemoteUnsupportedDetail } from '../remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, remoteFeatureIsPlural, type RemoteUnsupportedDetail } from '../remote-unsupported';
 import { announce } from '../utils/announce';
 
 /** How long to wait for the other features one screen touches at the same moment, so they become ONE sentence. */
 const GATHER_MS = 250;
 const VISIBLE_MS = 6000;
 
-/** "Theme browsing only works on the computer running YouCoded for now." (several: "A and B only work …"). */
+/** "Theme browsing only works on the computer running YouCoded for now." (several, or a plural name like "Skills": "only work …"). */
 function remoteOnlyOnComputerMessage(features: string[]): string {
   const list = features.length <= 1 ? features[0] ?? '' : `${features.slice(0, -1).join(', ')} and ${features[features.length - 1]}`;
-  return `${list} only ${features.length > 1 ? 'work' : 'works'} on the computer running YouCoded for now.`;
+  return `${list} only ${features.length > 1 || remoteFeatureIsPlural(features[0] ?? '') ? 'work' : 'works'} on the computer running YouCoded for now.`;
 }
 
 export default function RemoteUnsupportedNotice() {

@@ -287,7 +287,15 @@ export type TimelineEntry =
   // Spinner card while /compact (or resume-from-summary) is running
   | { kind: 'compacting'; id: string; startedAt: number }
   // /copy picker when the target turn has multiple copyable blocks
-  | { kind: 'copy-picker'; id: string; options: CopyPickerOption[] };
+  | { kind: 'copy-picker'; id: string; options: CopyPickerOption[] }
+  // "Couldn't compact / clear this conversation" card (waiting-notice T4). DATA ONLY: the words and the Try again button are drawn
+  // by the renderer from `op`, so the entry holds nothing that cannot be serialised. `detail` is the computer's own reason, shown only
+  // folded under "Details". On screen only: it is never written to the record and never copied between screens (serializeChatState).
+  | { kind: 'control-failure'; id: string; op: ControlFailureOp; why?: ControlFailureWhy; detail?: string };
+
+export type ControlFailureOp = 'compact' | 'clear';
+/** The two compact failures with their own approved sentence; anything else is the plain "Couldn't …" line. */
+export type ControlFailureWhy = 'summary-failed' | 'interrupted';
 
 export interface SessionChatState {
   timeline: TimelineEntry[];
@@ -568,6 +576,10 @@ export type ChatAction =
   | { type: 'CHAT_STATE_SEEDED'; sessions: SerializedChatState }
   /** A session is about to be filled from a fresh page (main/session-open.ts): start it over, keeping rows this screen queued. */
   | { type: 'SESSION_FILL_RESET'; sessionId: string }
+  /** /compact or /clear failed after it ran: draw the failure card in this chat (replaces an earlier card for the same op). */
+  | { type: 'CONTROL_FAILURE_CARD'; sessionId: string; op: ControlFailureOp; why?: ControlFailureWhy; detail?: string }
+  /** The card's job is over (Try again worked): take it out. */
+  | { type: 'CONTROL_FAILURE_CLEARED'; sessionId: string; op: ControlFailureOp }
   /** The computer's record says a turn is in flight and the page-filled copy does not show it. Only turns the indicator on. */
   | { type: 'SESSION_WORKING_SYNCED'; sessionId: string; working: boolean }
   | { type: 'SESSION_INIT'; sessionId: string }
@@ -1312,7 +1324,8 @@ export function serializeChatState(state: ChatState): SerializedChatState {
     sessions.push([
       sessionId,
       {
-        timeline: s.timeline,
+        // WHY filtered: the failure card is on-screen only (waiting-notice T4); a copy handed to another screen must not carry it.
+        timeline: s.timeline.some((e) => e.kind === 'control-failure') ? s.timeline.filter((e) => e.kind !== 'control-failure') : s.timeline,
         toolCalls: Array.from(s.toolCalls.entries()),
         toolGroups: Array.from(s.toolGroups.entries()),
         assistantTurns: Array.from(s.assistantTurns.entries()),

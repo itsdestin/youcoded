@@ -33,6 +33,8 @@ import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
 import CompactingCard from './CompactingCard';
 import CopyPicker from './CopyPicker';
+import ControlFailureCard from './ControlFailureCard';
+import { retryControlFailure } from '../state/control-failure-retry';
 import { TimelineEntryHint } from './TimelineEntryHint';
 import { archivedTooltip } from '../state/archive-boundary';
 import type { PromptAnswerResult } from '../state/prompt-input';
@@ -178,8 +180,27 @@ function renderContent(p: Props): React.ReactNode {
         />
       );
     }
-    default:
+    // "Couldn't compact / clear" — on screen only; Try again is wired here from the entry's `op`.
+    case 'control-failure': {
+      const op = entry.op;
+      return (
+        <ControlFailureCard
+          op={op}
+          why={entry.why}
+          detail={entry.detail}
+          onTryAgain={() => {
+            const act = p.actionsRef.current;
+            return act ? retryControlFailure(sessionId, op, act.dispatch) : Promise.resolve(false);
+          }}
+        />
+      );
+    }
+    default: {
+      // WHY: a new timeline kind must be drawn (or deliberately skipped) above; the compiler fails here until it is.
+      const unhandled: never = entry;
+      void unhandled;
       return null;
+    }
   }
 }
 

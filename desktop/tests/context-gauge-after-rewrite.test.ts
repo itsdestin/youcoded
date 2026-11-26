@@ -196,13 +196,13 @@ describe('the compaction marker can finally say what it freed', () => {
   it('a Stop during native /compact cancels the card instead of "Compaction may have failed"', async () => {
     const { runNativeSlashAction } = await import('../src/renderer/state/native-slash-actions');
     const dispatch = vi.fn();
-    const onToast = vi.fn();
     (globalThis as any).window = { claude: { native: { compact: async () => ({ ok: false, reason: 'interrupted' }) } } };
     try {
-      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: SESSION, dispatch, onToast })).toBe(false);
+      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: SESSION, dispatch })).toBe(false);
     } finally { delete (globalThis as any).window; }
     expect(dispatch).toHaveBeenCalledWith({ type: 'COMPACTION_CANCELLED', sessionId: SESSION });
-    expect(onToast).toHaveBeenCalledWith('Compaction stopped. The conversation was left as it was.');
+    // The stop shows as a red card in the chat (it carries the approved sentence by its reason), not a floating notice.
+    expect(dispatch).toHaveBeenCalledWith({ type: 'CONTROL_FAILURE_CARD', sessionId: SESSION, op: 'compact', why: 'interrupted' });
   });
 
   it('manual compaction success leaves logical turn completion to the actual completion event', () => {

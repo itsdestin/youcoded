@@ -1933,3 +1933,39 @@ describe('a sent message the computer may not have received', () => {
     expect(dispatch(busy, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id9', note: 'not-sent' }).get(SESSION)!.isThinking).toBe(true);
   });
 });
+
+describe('the "Couldn\'t compact" failure card', () => {
+  const kinds = (st: ChatState) => st.get(SESSION)!.timeline.map((e) => e.kind);
+  const failed = (st: ChatState) => dispatch(st, { type: 'CONTROL_FAILURE_CARD', sessionId: SESSION, op: 'compact', detail: 'model unavailable' });
+
+  it('sits above a pending message bubble, not under it', () => {
+    let st = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'hi', timestamp: 1 } as ChatAction);
+    st = failed(st);
+    expect(kinds(st)).toEqual(['control-failure', 'user']);
+  });
+
+  it('is replaced, not doubled, when the same command fails again', () => {
+    const st = failed(failed(initState()));
+    expect(kinds(st)).toEqual(['control-failure']);
+  });
+
+  it('leaves when Try again works', () => {
+    const st = dispatch(failed(initState()), { type: 'CONTROL_FAILURE_CLEARED', sessionId: SESSION, op: 'compact' });
+    expect(kinds(st)).toEqual([]);
+  });
+
+  it('leaves when the chat\'s next turn starts', () => {
+    const st = dispatch(failed(initState()), { type: 'USER_PROMPT', sessionId: SESSION, content: 'next', timestamp: 2 } as ChatAction);
+    expect(kinds(st)).toEqual(['user']);
+  });
+
+  it('survives a fill reset, because the fill brings no copy of it', () => {
+    const st = dispatch(failed(initState()), { type: 'SESSION_FILL_RESET', sessionId: SESSION });
+    expect(kinds(st)).toEqual(['control-failure']);
+  });
+
+  it('is not part of a serialised copy of the chat', () => {
+    const copy = serializeChatState(failed(initState())).sessions[0][1];
+    expect(copy.timeline).toEqual([]);
+  });
+});

@@ -258,5 +258,17 @@ export function buildHydratePayload(): SerializedChatState {
   }
 
   cached = serializeChatState(state);
+  // `?controlFailure=compact|compact-summary|compact-interrupted|compact-detail|clear|clear-detail` (waiting-notice T4): the red "Couldn't
+  // compact / clear" card in the practice native chat. WHY added AFTER serialising: the card is on-screen only and serializeChatState
+  // deliberately leaves it out, so the one place a picture can put it there is the finished copy handed to the screen.
+  const cf = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('controlFailure');
+  const CARDS: Record<string, { op: 'compact' | 'clear'; why?: 'summary-failed' | 'interrupted'; detail?: string }> = {
+    compact: { op: 'compact' }, 'compact-summary': { op: 'compact', why: 'summary-failed' }, 'compact-interrupted': { op: 'compact', why: 'interrupted' },
+    'compact-detail': { op: 'compact', detail: 'model unavailable' }, clear: { op: 'clear' }, 'clear-detail': { op: 'clear', detail: 'write failed' },
+  };
+  if (cf && CARDS[cf]) {
+    const { op, ...rest } = CARDS[cf];
+    cached = { sessions: cached.sessions.map(([id, ser]) => id !== 'wb-2' ? [id, ser] : [id, { ...ser, timeline: [...ser.timeline, { kind: 'control-failure' as const, id: `control-failure-${op}`, op, ...rest }] }]) };
+  }
   return cached;
 }

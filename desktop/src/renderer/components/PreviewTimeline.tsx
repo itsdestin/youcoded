@@ -81,8 +81,8 @@ export default function PreviewTimeline({ state, sessionId, provider, folding }:
                 skillPath={entry.skillPath} sessionId={sessionId} />
             );
             break;
-          // Live-only entries: an answerable prompt, the /compact spinner and the
-          // /copy picker belong to a running session. A page read off disk never
+          // Live-only entries: an answerable prompt, the /compact spinner, the
+          // /copy picker and the failure card belong to a running session. A page read off disk never
           // produces them, and a button here would act on nothing.
           default:
             return null;

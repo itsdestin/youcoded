@@ -55,6 +55,14 @@ const FEATURE_NAMES: Array<[string, string]> = [
   ['office:', 'Office'],
 ];
 
+// WHY (waiting-notice T4 follow-up): the "<Thing> only works on the computer running YouCoded for now." sentence read wrong for
+// names that are plural ("Skills only works"). These names take "work"; every other name, and an unknown raw channel, takes "works".
+const PLURAL_NAMES = new Set([
+  'Friends and challenges', 'Integrations', 'Project files', 'Project details', 'File pickers', 'Skills', 'Developer tools', 'Older messages',
+]);
+/** Whether the verb after this feature name is "work" (a plural name) rather than "works". */
+export function remoteFeatureIsPlural(name: string): boolean { return PLURAL_NAMES.has(name); }
+
 // Features whose own screen says the refusal where the person is looking (Office's editor
 // shows "Office isn't available ... yet." in its pane, with nothing to retry). The one-time
 // toast would repeat that same sentence, so for these the shim only logs it.

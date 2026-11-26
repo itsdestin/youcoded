@@ -35,7 +35,9 @@ export function timelineEntryKey(entry: TimelineEntry): string | null {
     case 'skill-invocation':
     case 'compacting':
     case 'copy-picker':
+    case 'control-failure':
       return entry.id;
+    default: { const unhandled: never = entry; return unhandled; } // WHY: a new entry kind must say here whether it is drawn
   }
 }
 

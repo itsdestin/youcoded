@@ -23,16 +23,10 @@ import { busyWith, notRunning, NOTHING_TO_COMPACT, NOT_AN_INSTALLED_SKILL, SKILL
 /** User-facing copy per refusal reason. Specific and accurate — never a guessed
  *  cause (docs/error-message-standards.md). Keys mirror NativeSessionHost.compact
  *  and HarnessSession.compactNow. */
-// WHY only the failures are left here (waiting-notice T2): "busy", "nothing to compact" and "not running" are can't-do-now
-// notices and now go to the chat's own strip (below). These three are failures AFTER the command ran; the deck puts those in
-// the chat itself (T4), so until that card exists they keep their floating notice, unchanged.
-const COMPACT_REFUSAL: Record<string, string> = {
-  // WHY: failed summaries no longer rewrite or prune accepted history; do not
-  // promise space was freed when the model's context remains unchanged.
-  'summary-failed':
-    'The model couldn’t write a usable summary, so the conversation was left intact. Try again later.',
-  'interrupted': 'Compaction stopped. The conversation was left as it was.',
-};
+// WHY the failures are not here any more (waiting-notice T2/T4): "busy", "nothing to compact" and "not running" are can't-do-now
+// notices on the chat's strip; compact / clear failing AFTER they ran is a red card in the chat itself (CONTROL_FAILURE_CARD),
+// worded by controlFailureWords. Only the two reasons with their own sentence are recognised.
+const COMPACT_KNOWN_WHY = { 'summary-failed': true, 'interrupted': true } as const;
 
 /** Stop for a built-in assistant chat (the Stop button on a "still working" notice). */
 const stopTurn = (sessionId: string): void => { window.claude.native.interrupt(sessionId); };
@@ -40,8 +34,6 @@ const stopTurn = (sessionId: string): void => { window.claude.native.interrupt(s
 export interface NativeActionDeps {
   sessionId: string;
   dispatch: React.Dispatch<ChatAction>;
-  /** Floating notice, for the failures that wait for their in-chat card (compact / clear failing after they ran). */
-  onToast?: (message: string) => void;
   /** Reads a chat's state, so a "still working" notice knows when the reply ends. */
   getSession?: (sessionId: string) => SessionChatState | undefined;
   /** Legacy hosts only: capture the screen's pending card before awaiting IPC. */
@@ -57,10 +49,10 @@ export interface NativeActionDeps {
  */
 export async function runNativeSlashAction(
   action: NativeSlashAction,
-  { sessionId, dispatch, onToast, getSession, compactionOperationId }: NativeActionDeps,
+  { sessionId, dispatch, getSession, compactionOperationId }: NativeActionDeps,
 ): Promise<boolean> {
-  if (action.kind === 'clear') return runNativeClear({ sessionId, onToast, getSession });
-  if (action.kind === 'invoke-skill') return runNativeSkill(action.skill, action.args, { sessionId, onToast, getSession });
+  if (action.kind === 'clear') return runNativeClear({ sessionId, dispatch, getSession });
+  if (action.kind === 'invoke-skill') return runNativeSkill(action.skill, action.args, { sessionId, getSession });
   if (action.kind !== 'compact') return false;
 
   const hostOwned = getCapabilities().sessionRecord;
@@ -99,13 +91,10 @@ export async function runNativeSlashAction(
   if (result.reason === 'turn-in-flight') { raiseBusy(sessionId, 'compact-busy', busyWith('compact'), { getSession, stop: () => stopTurn(sessionId) }); return false; }
   if (result.reason === 'nothing-to-compact') { raiseCant(sessionId, 'compact-nothing', NOTHING_TO_COMPACT); return false; }
   if (result.reason === 'not-live') { raiseNotRunning(sessionId, 'compact-not-live', notRunning('compact'), getSession); return false; }
-  const known = COMPACT_REFUSAL[result.reason];
-  onToast?.(
-    known ??
-      // Unknown reason: pass the real detail through when we have one, and stay
-      // non-committal when we don't, rather than asserting a cause.
-      (result.detail ? `Couldn't compact: ${result.detail}` : "Couldn't compact this conversation."),
-  );
+  // WHY a card in the chat (deck L-sort-failed): the command is already in the chat, so its failure belongs where the summary would
+  // have gone, and stays until Try again works or the next message is sent. The computer's own reason is kept for Details only.
+  const why = (COMPACT_KNOWN_WHY as Record<string, true>)[result.reason] ? (result.reason as 'summary-failed' | 'interrupted') : undefined;
+  dispatch({ type: 'CONTROL_FAILURE_CARD', sessionId, op: 'compact', ...(why ? { why } : {}), ...(!why && result.detail ? { detail: result.detail } : {}) });
   return false;
 }
 
@@ -126,7 +115,7 @@ export async function runNativeSlashAction(
  * when the durable `context-clear` event comes back, which means a refused clear
  * leaves the conversation exactly as it was.
  */
-async function runNativeClear({ sessionId, onToast, getSession }: Omit<NativeActionDeps, 'dispatch'>): Promise<boolean> {
+async function runNativeClear({ sessionId, dispatch, getSession }: Omit<NativeActionDeps, 'compactionOperationId'>): Promise<boolean> {
   let result: { ok: true } | { ok: false; reason: string; detail?: string };
   try {
     result = await window.claude.native.clear(sessionId);
@@ -138,7 +127,7 @@ async function runNativeClear({ sessionId, onToast, getSession }: Omit<NativeAct
 
   if (result.reason === 'turn-in-flight') { raiseBusy(sessionId, 'clear-busy', busyWith('clear'), { getSession, stop: () => stopTurn(sessionId) }); return false; }
   if (result.reason === 'not-live') { raiseNotRunning(sessionId, 'clear-not-live', notRunning('clear'), getSession); return false; }
-  onToast?.(result.detail ? `Couldn't clear: ${result.detail}` : "Couldn't clear this conversation.");
+  dispatch({ type: 'CONTROL_FAILURE_CARD', sessionId, op: 'clear', ...(result.detail ? { detail: result.detail } : {}) });
   return false;
 }
 
@@ -150,7 +139,7 @@ async function runNativeClear({ sessionId, onToast, getSession }: Omit<NativeAct
 async function runNativeSkill(
   skill: string,
   args: string | undefined,
-  { sessionId, getSession }: Omit<NativeActionDeps, 'dispatch'>,
+  { sessionId, getSession }: Omit<NativeActionDeps, 'dispatch' | 'compactionOperationId'>,
 ): Promise<boolean> {
   let result: { ok: true } | { ok: false; reason: string; detail?: string };
   try {

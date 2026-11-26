@@ -56,6 +56,12 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#signin-expired-openrouter', 'view'), session: 'wb-2', params: { seed: 'bubbles-openrouter-rejected' } },
   { ...chat('chat#offline-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-offline-cc', online: '0' } },
   { ...chat('chat#offline-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-offline', online: '0' } },
+  // Waiting-notice T4: the red card in the chat after /compact or /clear fails (native chat), wide and phone, with its Details open.
+  ...(['compact', 'compact-summary', 'compact-interrupted', 'compact-detail', 'clear', 'clear-detail'] as const).map((k) => ({
+    ...chat(`chat#control-failure-${k}`, 'view'), session: 'wb-2', params: { controlFailure: k },
+    ...(k.endsWith('detail') ? { open: ['Details'] } : {}), newIn: 'after' as const,
+  })),
+  { ...chat('chat#control-failure-phone', 'view', 'narrow'), session: 'wb-2', viewport: { width: 390, height: 844 }, params: { controlFailure: 'compact-detail', platform: 'android' }, open: ['Details'], newIn: 'after' as const },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),

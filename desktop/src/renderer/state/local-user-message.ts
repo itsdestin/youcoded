@@ -20,9 +20,12 @@ export function localUserMessage(session: SessionChatState, action: LocalUserAct
   if (action.sendId && session.timeline.some(e => e.kind === 'user' && e.sendId === action.sendId && !e.sendRefused)) return session;
   // WHY no content dedup: two identical explicit submissions are two messages.
   // Recorded echoes confirm submitted pending bubbles; directly refused retained text cannot be confirmed by older identical history.
+  // WHY the failure card goes here (waiting-notice T4, deck R-card "leaves once it works"): a new message starts the chat's next turn,
+  // and a "Couldn't compact" above it would describe something no longer the latest thing that happened.
+  const base = session.timeline.some((e) => e.kind === 'control-failure') ? session.timeline.filter((e) => e.kind !== 'control-failure') : session.timeline;
   return {
     ...session,
-    timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}),
+    timeline: [...base, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}),
       ...(action.sendTransport ? { sendTransport: action.sendTransport } : {}), sentAfterTurn: lastTurnId(session.timeline) }],
     // WHY: preserve upstream addressed-Stop fencing; a new send is not the old recorded turn.
     transcriptTurnUuid: undefined,

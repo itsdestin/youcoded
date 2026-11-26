@@ -13,6 +13,9 @@ import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
 import { compactionSourceDigest } from '../src/main/harness/compaction-record';
 import { dispatchSlashCommand } from '../src/renderer/state/slash-command-dispatcher';
+import { controlFailureWords } from '../src/renderer/utils/notice-words';
+import { chatReducer } from '../src/renderer/state/chat-reducer';
+import { retryControlFailure } from '../src/renderer/state/control-failure-retry';
 import { runNativeSlashAction } from '../src/renderer/state/native-slash-actions';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
 import { HarnessSession } from '../src/main/harness/harness-session';
@@ -414,11 +417,10 @@ describe('native /compact focus propagation', () => {
     const previous = (globalThis as any).window;
     (globalThis as any).window = { claude: { capabilities: { sessionRecord: true }, native: { compact: vi.fn(async () => ({ ok: false, reason: 'turn-in-flight' })) } } };
     try {
-      const dispatch = vi.fn(), onToast = vi.fn();
-      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch, onToast })).toBe(false);
+      const dispatch = vi.fn();
+      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch })).toBe(false);
+      // "still working" is a can't-do-now notice: it is in that chat's strip, and draws no failure card (waiting-notice T2).
       expect(dispatch).not.toHaveBeenCalled();
-      // "still working" is a can't-do-now notice: it is in that chat's strip, not a floating toast (waiting-notice T2).
-      expect(onToast).not.toHaveBeenCalled();
       expect(getChatNotice('s')?.text).toContain('still working');
       clearChatNotice('s');
     } finally { (globalThis as any).window = previous; }
@@ -438,10 +440,28 @@ describe('native /compact focus propagation', () => {
     const previous = (globalThis as any).window;
     (globalThis as any).window = { claude: { native: { compact: vi.fn(async () => ({ ok: false, reason: 'summary-failed' })) } } };
     try {
-      const onToast = vi.fn();
-      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch: vi.fn(), onToast })).toBe(false);
-      expect(onToast).toHaveBeenCalledWith(expect.stringContaining('left intact'));
-      expect(onToast.mock.calls[0][0]).not.toMatch(/trimmed|freed space/i);
+      const dispatch = vi.fn();
+      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch })).toBe(false);
+      expect(dispatch).toHaveBeenCalledWith({ type: 'CONTROL_FAILURE_CARD', sessionId: 's', op: 'compact', why: 'summary-failed' });
+      // The words on that card claim nothing was trimmed.
+      expect(controlFailureWords('compact', 'summary-failed')).toContain('left intact');
+      expect(controlFailureWords('compact', 'summary-failed')).not.toMatch(/trimmed|freed space/i);
+    } finally { (globalThis as any).window = previous; }
+  });
+
+  it('Try again on the card removes it once the command works, and keeps it while it still fails', async () => {
+    const previous = (globalThis as any).window;
+    const compact = vi.fn(async () => ({ ok: false, reason: 'error', detail: 'model unavailable' }) as any);
+    (globalThis as any).window = { claude: { capabilities: { sessionRecord: true }, native: { compact } } };
+    try {
+      let state = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: 's' });
+      const dispatch = (a: any) => { state = chatReducer(state, a); };
+      dispatch({ type: 'CONTROL_FAILURE_CARD', sessionId: 's', op: 'compact', detail: 'model unavailable' });
+      expect(await retryControlFailure('s', 'compact', dispatch)).toBe(false);
+      expect(state.get('s')!.timeline.map(e => e.kind)).toEqual(['control-failure']);
+      compact.mockResolvedValueOnce({ ok: true } as any);
+      expect(await retryControlFailure('s', 'compact', dispatch)).toBe(true);
+      expect(state.get('s')!.timeline).toEqual([]);
     } finally { (globalThis as any).window = previous; }
   });
 

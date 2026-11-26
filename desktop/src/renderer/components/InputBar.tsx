@@ -851,7 +851,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const route = routeSlashResult(provider, dispatchResult);
       if (route.via === 'native') {
         const compactionOperationId = getSessionState?.(sessionId)?.compactionPending?.id; // WHY: capture before awaiting IPC.
-        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast, getSession: getSessionState, compactionOperationId });
+        void runNativeSlashAction(route.action, { sessionId, dispatch, getSession: getSessionState, compactionOperationId });
         return true;
       }
       if (route.via === 'pty') {

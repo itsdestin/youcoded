@@ -87,7 +87,17 @@ describe('RemoteUnsupportedNotice', () => {
   it('says the feature only works on the computer running YouCoded', () => {
     mount();
     announce('social:list-friends'); settle();
-    expect(screen.getByRole('status').textContent).toContain('Friends and challenges only works on the computer running YouCoded for now.');
+    expect(screen.getByRole('status').textContent).toContain('Friends and challenges only work on the computer running YouCoded for now.');
+  });
+
+  it('the verb agrees with the name: "Skills only work", "Theme editing only works"', () => {
+    mount();
+    announce('skills:list'); settle();
+    expect(screen.getByRole('status').textContent).toContain('Skills only work on the computer');
+    cleanup(); resetFloatingNotices();
+    mount();
+    announce('theme:list'); settle();
+    expect(screen.getByRole('status').textContent).toContain('Theme editing only works on the computer');
   });
 
   it('several features at once become one sentence', () => {
