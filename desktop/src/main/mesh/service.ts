@@ -47,7 +47,7 @@ import { adoptPairing, MEETING_PART_LENGTH, newTypedCode, PairingHost, PairingJo
 import { RelayClient } from './relay-client';
 import { RosterStore } from './roster-store';
 import { ensureDir, readFileIfExists, writeFileDurable } from './fs-durable';
-import { generateIdentity } from './crypto/identity';
+import { generateIdentity, signWith, verifySig } from './crypto/identity';
 import { GROUP_ROSTER, GROUP_TEST_NOTE, KIND_NOTE, KIND_ROSTER, noteBody, parseNoteBody, rosterBody } from './wire';
 import { reportFailure } from '../report-failure';
 
@@ -74,6 +74,8 @@ export interface MeshServiceOptions {
   removeWaitMs?: number;
   /** First retry delay for the relay queue (doubles up to 30 s; default 2 s). */
   relayRetryMs?: number;
+  /** Start the chat replicator (and so create `<mesh>/store` and `<mesh>/replicator`). TEST MODE ONLY and OFF by default: until adapters exist nothing in a real run may create those folders (plan section 9). */
+  replicator?: boolean;
 }
 export type RemovalOutcome = 'done' | 'pending';
 
@@ -156,6 +158,9 @@ export class MeshService {
   #doorbells = 0;
   #removed = false;
   #stopped = false;
+  /** The replicator and its store: both are created only by `startReplicator`, only in test mode with its own flag. */
+  #rep: import('./replicator').Replicator | null = null;
+  #repStore: import('./store').ChatStore | null = null;
   constructor(readonly o: MeshServiceOptions) {
     this.dir = path.join(o.userData, 'mesh');
     this.keys = new MeshKeyStore(this.dir, o.sealer);
@@ -177,6 +182,8 @@ export class MeshService {
     if (this.#retryTimer) clearTimeout(this.#retryTimer);
     if (this.#planTimer) clearTimeout(this.#planTimer);
     if (this.#headsTimer) clearInterval(this.#headsTimer);
+    this.#rep?.stop();
+    await this.#repStore?.close().catch((cause) => reportFailure({ what: 'close the chat store when the mesh stops', cause, where: 'mesh.service' }));
     this.#link?.stop();
     this.#relay?.stop();
     this.closeHostMeeting();
@@ -211,7 +218,7 @@ export class MeshService {
       // The relay is reachable (again): the queue of roster changes it still owes is worked off, and devices seen online confirm pairings.
       // WHY `presence()` and not the `devices` list in the sign-in answer: that list is the whole roster, online or not, so it proves nothing about a
       // pairing; the presence answer is who is connected right now.
-      this.#relay.on('ready', () => { this.#retryAttempt = 0; void this.drainRelay(); void this.confirmOnline(); void this.afterChange(true); });
+      this.#relay.on('ready', () => { this.#rep?.hello(); this.#retryAttempt = 0; void this.drainRelay(); void this.confirmOnline(); void this.afterChange(true); });
       this.#relay.on('presence-change', (p: { device: string; state: string }) => { if (p.state === 'on') this.confirmJoin(p.device); });
     }
     // The device-layer decisions (parked entries, which secret is current, who makes the next one) live in DeviceCore; see device-core.ts.
@@ -243,6 +250,7 @@ export class MeshService {
       log: this.o.log,
     });
     await this.#link.start(this.o.testMode ? [GROUP_ROSTER, GROUP_TEST_NOTE] : [GROUP_ROSTER]);
+    if (this.o.testMode && this.o.replicator) await this.startReplicator(setId, this.#link);
     if (!this.#offline) this.#relay?.start();
     // Heads are repeated now and then so that a frame the relay dropped, or an entry that never left its author, still reaches everyone.
     this.#headsTimer = setInterval(() => { void this.afterChange(true); }, this.o.headsEveryMs ?? 30_000);
@@ -294,8 +302,42 @@ export class MeshService {
     });
   }
 
+  /** Open the chat store and start the replicator. Loaded lazily so a process without the flag never even imports them. */
+  private async startReplicator(setId: Buffer, link: Link): Promise<void> {
+    const [{ ChatStore }, { Replicator }] = await Promise.all([import('./store'), import('./replicator')]);
+    const store = await ChatStore.open(path.join(this.dir, 'store'));
+    this.#repStore = store;
+    const id = this.id;
+    this.#rep = await Replicator.create({
+      store, link, dir: path.join(this.dir, 'replicator'), setId,
+      crypto: { self: id.deviceId, sign: (m) => signWith(id, m), knows: (d) => this.roster.signKeyFor(d) !== undefined, verify: (d, m, sig) => { const k = this.roster.signKeyFor(d); return !!k && verifySig(k, m, sig); } },
+      devices: () => [],
+      discoveryMs: this.o.headsEveryMs,
+    });
+    await this.#rep.start();
+  }
+  /** TEST CONTROL (rig): the replicator's surface, so a real process can be driven the way an adapter will drive it later. */
+  private get rep(): import('./replicator').Replicator { if (!this.#rep || !this.#repStore) throw new Error('the replicator is not running (needs test mode, the replicator flag and a set)'); return this.#rep; }
+  async repCreate(version: Buffer, chatId: string): Promise<void> { await this.rep.createVersion({ version, chatId, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null }); }
+  async repAppend(version: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string }> { return this.rep.appendLocal(version, lines); }
+  async repHeads(): Promise<Array<{ version: string; lines: number; hash: string; conversationHash: string; state: string; status: string }>> {
+    const rep = this.rep; const out = [];
+    for (const e of await rep.advertised()) out.push({ version: e.version.toString('hex'), lines: e.lines, hash: e.hash.toString('hex'), conversationHash: e.conversationHash.toString('hex'), state: e.state, status: (await rep.status(e.version)).state });
+    return out;
+  }
+  async repRead(version: Buffer, from: number, to: number): Promise<Buffer[]> {
+    const rep = this.rep; const store = this.#repStore as import('./store').ChatStore;
+    const local = await rep.localId(version);
+    const r = await store.read(local, 0, from, to);
+    if (r === 'evicted') throw new Error('evicted');
+    return r;
+  }
+  async repVerify(version: Buffer): Promise<boolean> { return (await (this.#repStore as import('./store').ChatStore).verify(await this.rep.localId(version))).ok; }
+
   // ---------------------------------------------------------------- incoming frames
   private async onFrame(f: LinkFrame): Promise<void> {
+    // the replicator's own kinds (all start with `rep.`) belong to it; with no replicator running they are ignored like any unknown kind
+    if (f.header.kind.startsWith('rep.')) { if (!this.roster.signKeyFor(f.header.from)) throw new FrameReject('signer-removed'); return this.#rep?.onFrame(f); }
     // A verified frame from a device proves it exists and holds the set secret: a pairing it came out of is complete.
     this.confirmJoin(toHex(f.header.from));
     const core = this.#core;

@@ -6,9 +6,12 @@ import cp from 'child_process';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startMeshIfEnabled } from '../../src/main/mesh/boot-hook';
+import { insecureTestSealer } from '../../src/main/mesh/keystore';
+import { MeshService } from '../../src/main/mesh/service';
+import { FakeRelay } from './fake-relay';
 import { fakeSafeStorage, listFiles, tmp } from './helpers';
 
-afterEach(() => { vi.restoreAllMocks(); delete process.env.YOUCODED_MESH; delete process.env.YOUCODED_MESH_TEST; delete process.env.YOUCODED_MESH_TOKEN; });
+afterEach(() => { vi.restoreAllMocks(); delete process.env.YOUCODED_MESH; delete process.env.YOUCODED_MESH_TEST; delete process.env.YOUCODED_MESH_TOKEN; delete process.env.YOUCODED_MESH_REPLICATOR; });
 
 /** Everything that could create a file, a folder, a socket or a timer. */
 function spyEverything() {
@@ -85,5 +88,42 @@ describe('mesh ON with a real secret store', () => {
     expect(h).not.toBeNull();
     expect(listFiles(d)).toEqual(['mesh/keys.bin']);
     await h!.stop();
+  });
+});
+
+describe('the chat store and the replicator create their folders only on request', () => {
+  const noChatFolders = (d: string): void => {
+    expect(fs.existsSync(path.join(d, 'mesh', 'store'))).toBe(false);
+    expect(fs.existsSync(path.join(d, 'mesh', 'replicator'))).toBe(false);
+    expect(listFiles(d).filter((f) => /(^|\/)(store|replicator)\//.test(f))).toEqual([]);
+  };
+  it('with the feature off, and with the switch on but no relay, no store or replicator folder appears (even with the replicator variable set)', async () => {
+    const off = tmp('profile-');
+    expect(await startMeshIfEnabled({ userData: off, safeStorage: fakeSafeStorage('gnome_libsecret'), packaged: false })).toBeNull();
+    noChatFolders(off);
+    process.env.YOUCODED_MESH = '1'; process.env.YOUCODED_MESH_REPLICATOR = '1'; // the replicator variable alone, outside test mode, does nothing
+    const on = tmp('profile-');
+    const h = await startMeshIfEnabled({ userData: on, safeStorage: fakeSafeStorage('gnome_libsecret'), packaged: false });
+    expect(h).not.toBeNull();
+    noChatFolders(on);
+    await h!.stop();
+  });
+  it('a live set in test mode WITHOUT the replicator flag never creates them; with the flag they appear (the control that proves this test can fail)', async () => {
+    const relay = await new FakeRelay().ready();
+    const made: MeshService[] = [];
+    try {
+      const mk = async (extra: { replicator?: boolean }): Promise<{ s: MeshService; d: string }> => {
+        const d = tmp('profile-');
+        const s = new MeshService({ userData: d, sealer: insecureTestSealer({ testMode: true }), testMode: true, relayUrl: relay.url, deviceName: 'X', platform: 'linux', log: () => {}, relayBaseDelayMs: 20, ...extra });
+        await s.start(); made.push(s); await s.createSet();
+        const t0 = Date.now(); while (s.status().relay !== 'ready') { if (Date.now() - t0 > 8000) throw new Error('relay not ready'); await new Promise((r) => setTimeout(r, 15)); }
+        return { s, d };
+      };
+      const plain = await mk({});
+      noChatFolders(plain.d);
+      const flagged = await mk({ replicator: true });
+      expect(fs.existsSync(path.join(flagged.d, 'mesh', 'store'))).toBe(true);
+      // (the replicator's own folder appears on its first write, so the store folder is the signal)
+    } finally { for (const s of made) await s.stop(); await relay.close(); }
   });
 });

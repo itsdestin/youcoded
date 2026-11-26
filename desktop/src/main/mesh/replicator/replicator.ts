@@ -444,6 +444,8 @@ export class Replicator {
     const wk = wire.toString('hex');
     return [...this.#ctx.peers.values()].flatMap((p) => { const h = p.heads.get(wk); return h ? [{ peer: p.hex, lines: h.lines, hash: h.hash, state: h.state }] : []; });
   }
+  /** The store's id for the current incarnation of a version (for the rig's read and verify routes). */
+  async localId(wire: Buffer): Promise<Buffer> { const v = await this.localOf(wire); if (!v) throw new Error('unknown version'); return v.local; }
   /** Version ids (wire) this device knows. */
   versions(): Buffer[] { return this.#directory.list(); }
   /** For tests: the nak a peer would get (exposed so a hostile-peer test can drive the real path). */

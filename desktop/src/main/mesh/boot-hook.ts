@@ -52,6 +52,8 @@ export async function startMeshIfEnabled(i: MeshBootInput): Promise<MeshHandle |
       relayRetryMs: sw.testMode && process.env.YOUCODED_MESH_RELAY_RETRY_MS ? Number(process.env.YOUCODED_MESH_RELAY_RETRY_MS) : undefined,
       genTakeoverMs: sw.testMode && process.env.YOUCODED_MESH_GEN_TAKEOVER_MS ? Number(process.env.YOUCODED_MESH_GEN_TAKEOVER_MS) : undefined,
       headsEveryMs: sw.testMode && process.env.YOUCODED_MESH_HEADS_MS ? Number(process.env.YOUCODED_MESH_HEADS_MS) : undefined,
+      // The chat replicator (and so the chat store folder) exists only in test mode AND behind its own variable: no adapter feeds it yet, so a real run must never create its folders.
+      replicator: sw.testMode && process.env.YOUCODED_MESH_REPLICATOR === '1',
     });
     await svc.start();
     let control: { close(): Promise<void> } | null = null;
