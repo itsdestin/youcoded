@@ -458,6 +458,96 @@ describe('status reads and naks cannot change what the writer does', () => {
   }, 200_000);
 });
 
+/** Every version of the chat on one device, as text lines. */
+const allTexts = async (world: World, n: string): Promise<string[][]> => { const out: string[][] = []; for (const v of world.devs[n].rep.versions()) out.push(await textOf(world, n, v)); return out; };
+const tagged = (all: string[][], tag: string): number => all.flat().filter((l) => new RegExp(`${tag} \\d`).test(l)).length;
+const mixes = (all: string[][], a: string, b: string): boolean => all.some((t) => t.some((l) => new RegExp(`${a} \\d`).test(l)) && t.some((l) => new RegExp(`${b} \\d`).test(l)));
+
+describe('directed self-fork cases the random schedules reach only rarely', () => {
+  it('a second version moves ITSELF: chat on in V2, restore the writer to a profile from before, chat alone in V2, meet', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-v2self');
+    await world.create('A', V); await world.settle(); await splitHistories(world, V);
+    const v2 = world.devs.A.rep.selfForks()[0].movedTo;
+    await world.append('A', v2, lineSet(2, 'zz', 5)); await world.settle();
+    const bk = nodePath.join(world.dirs.A, '..', 'bk-r4-v2self'); snap(world, 'A', bk);
+    await world.append('A', v2, lineSet(2, 'ww', 7)); await world.settle(); await world.elapse(30_000, 10_000, true);
+    await down(world, 'A'); restore(world, 'A', bk); world.devs.B.carrier.setOnline(false);
+    await world.restart('A'); await world.elapse(8_000, 1_000, true);
+    expect((await world.append('A', v2, lineSet(2, 'vv', 7))).result).toBe('saved'); // the same positions as B's "ww"
+    world.devs.B.carrier.setOnline(true);
+    await world.elapse(300_000, 10_000, true);
+    for (const n of ['A', 'B']) { const all = await allTexts(world, n); expect(tagged(all, 'zz')).toBeGreaterThanOrEqual(2); expect(tagged(all, 'ww')).toBeGreaterThanOrEqual(2); expect(tagged(all, 'vv')).toBeGreaterThanOrEqual(2); expect(mixes(all, 'ww', 'vv')).toBe(false); }
+    expect(world.devs.A.rep.selfForks().some((f) => f.version.equals(v2))).toBe(true); // the move was OF the second version
+  }, 600_000);
+
+  it('a third rollback to the same backup, with other lines again, gets a third second-version of its own', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-third');
+    await world.create('A', V); await world.settle();
+    const bk = nodePath.join(world.dirs.A, '..', 'bk-r4-third'); snap(world, 'A', bk);
+    await splitHistories(world, V);
+    const ids = new Set<string>([world.devs.A.rep.selfForks()[0].movedTo.toString('hex')]);
+    for (const tag of ['zz', 'qq']) {
+      await down(world, 'A'); restore(world, 'A', bk); world.devs.B.carrier.setOnline(false);
+      await world.restart('A'); await world.elapse(8_000, 1_000, true);
+      await world.append('A', V, lineSet(5, tag)); world.devs.B.carrier.setOnline(true);
+      await world.elapse(300_000, 10_000, true);
+      for (const f of world.devs.A.rep.selfForks()) ids.add(f.movedTo.toString('hex'));
+    }
+    for (const n of ['A', 'B']) { const all = await allTexts(world, n); for (const t of ['xx', 'zz', 'qq']) expect(tagged(all, t), `${n} ${t}`).toBeGreaterThanOrEqual(5); expect(mixes(all, 'zz', 'qq') || mixes(all, 'xx', 'zz') || mixes(all, 'xx', 'qq')).toBe(false); }
+    expect(ids.size).toBeGreaterThanOrEqual(2); // a version of its own for each
+  }, 900_000);
+
+  it('a chat that already has child forks, made before and after the parting point, loses nothing when its writer moves its lines', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-kids');
+    await world.create('A', V); await world.settle();
+    const { SignedHeads } = await import('../../src/main/mesh/replicator/signed-heads'); const { realFs } = await import('../../src/main/mesh/store/fsio'); const { deriveForkId } = await import('../../src/main/mesh/store');
+    await down(world, 'B'); const dev = await world.restart('B', { graceful: false, start: false });
+    const common = lineSet(3, 'cc'); const ys = [...common, ...lineSet(2, 'yy', 3)]; const hy = ys.reduce((h, l) => chainStep(h, l), seed());
+    await dev.store.append((await world.localOf('B', V)) as Buffer, 0, 0, ys);
+    await new SignedHeads(realFs, nodePath.join(world.dirs.B, 'replicator')).add(V, { lines: 5, hash: hy, sig: signWith(world.ids.A, headMessage(V, 5, hy)), spanBytes: 100 });
+    world.devs.B.carrier.setOnline(false); await dev.rep.start(); await world.elapse(8_000, 1_000, true);
+    await world.append('A', V, [...common, ...lineSet(2, 'xx', 3)]);
+    const local = await world.local('A', V);
+    const kids: Buffer[] = [];
+    for (const [p, name] of [[2, 'before'], [5, 'after']] as const) {
+      const hp = (await world.devs.A.store.hashAt(local, 0, p)) as string; const token = `${world.ids.A.deviceId.toString('hex')}:takeover:${name}`; const kid = deriveForkId(V, p, hp, token);
+      await world.devs.A.rep.createVersion({ version: kid, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: p, forkHash: Buffer.from(hp, 'hex'), token });
+      await world.append('A', kid, lineSet(1, `kid-${name}`, p)); kids.push(kid);
+    }
+    const before = await Promise.all(kids.map((k) => textOf(world, 'A', k)));
+    world.devs.B.carrier.setOnline(true);
+    await world.elapse(300_000, 10_000, true);
+    expect(world.devs.A.rep.selfForks()).toHaveLength(1);
+    for (const [i, k] of kids.entries()) for (const n of ['A', 'B']) expect(await textOf(world, n, k), `${n} kid ${i}`).toEqual(before[i]); // the children keep their own lines, on both devices
+    for (const n of ['A', 'B']) { const all = await allTexts(world, n); expect(tagged(all, 'xx')).toBeGreaterThanOrEqual(2); expect(tagged(all, 'yy')).toBeGreaterThanOrEqual(2); }
+  }, 600_000);
+
+  it('a second rollback arriving while the first move is mid-way (killed, journal on disk) puts back the old profile: a clean new move, no splice', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000, stepLimitMs: 100 }); const world = w; const V = wireId('r4-midway');
+    await world.create('A', V); await world.settle();
+    const bk = nodePath.join(world.dirs.A, '..', 'bk-r4-midway'); snap(world, 'A', bk);
+    const { SignedHeads } = await import('../../src/main/mesh/replicator/signed-heads'); const { realFs } = await import('../../src/main/mesh/store/fsio');
+    await down(world, 'B'); const dev = await world.restart('B', { graceful: false, start: false });
+    const y = lineSet(5, 'yy'); const hy = y.reduce((h, l) => chainStep(h, l), seed());
+    await dev.store.append((await world.localOf('B', V)) as Buffer, 0, 0, y);
+    await new SignedHeads(realFs, nodePath.join(world.dirs.B, 'replicator')).add(V, { lines: 5, hash: hy, sig: signWith(world.ids.A, headMessage(V, 5, hy)), spanBytes: 100 });
+    world.devs.B.carrier.setOnline(false); await dev.rep.start(); await world.elapse(8_000, 1_000, true);
+    await world.append('A', V, lineSet(5, 'xx'));
+    const store = world.devs.A.store; const realRead = store.read.bind(store);
+    store.read = (async (...a: Parameters<typeof realRead>) => { await new Promise((r) => setTimeout(r, 300)); return realRead(...a); }) as typeof realRead;
+    world.devs.B.carrier.setOnline(true);
+    await vi.waitFor(async () => { await world.elapse(2_000, 1_000, true); expect(fs.existsSync(nodePath.join(world.dirs.A, 'replicator', 'selffork', V.toString('hex')))).toBe(true); }, { timeout: 60_000, interval: 25 });
+    // killed mid-move: the note is on disk, the move unfinished
+    world.devs.A.rep.stop(); world.devs.A.link.stop(); store.read = realRead; await store.close().catch(() => undefined /* benign (test): the slow read in flight may still hold it */);
+    restore(world, 'A', bk); world.devs.B.carrier.setOnline(false);        // the second rollback, to the same backup, before the move resumed
+    await world.restart('A'); await world.elapse(8_000, 1_000, true);
+    expect((await world.append('A', V, lineSet(5, 'zz'))).result).toBe('saved');
+    world.devs.B.carrier.setOnline(true);
+    await world.elapse(300_000, 10_000, true);
+    for (const n of ['A', 'B']) { const all = await allTexts(world, n); expect(tagged(all, 'yy'), `${n} yy`).toBeGreaterThanOrEqual(5); expect(tagged(all, 'zz'), `${n} zz`).toBeGreaterThanOrEqual(5); expect(mixes(all, 'xx', 'zz') || mixes(all, 'yy', 'zz') || mixes(all, 'xx', 'yy')).toBe(false); }
+  }, 600_000);
+});
+
 describe('F6: the same count of lines with different content is chased to where the lines part', () => {
   it('A and B both hold 15 lines that agree for 11 and then differ: the writer moves its four lines to a second version, and both end in sync (the ask goes on past the first shared signed point)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-f6');
