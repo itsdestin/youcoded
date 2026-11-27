@@ -28,7 +28,7 @@ iPhone app (one .app)
 
 | iOS rule | Answer |
 |---|---|
-| An app may not start any other program (no fork/exec at all) | Node runs as a library inside the app (`node_start` on its own thread, `BackendRunner.swift`). Everything that IS "start a program" does not exist on an iPhone: Claude Code, the terminal, git, shell commands, ripgrep, local models. One question answers it everywhere: `canRunPrograms()` (backend, `headless/host-bridge.ts`) and `capabilities.programs` (page, `shared/capabilities.ts`). |
+| An app may not start any other program (no fork/exec at all) | Node runs as a library inside the app (`node_start` on its own thread, `BackendRunner.swift`). Everything that IS "start a program" does not exist on an iPhone: Claude Code, the terminal, the real git, a computer's shell, ripgrep, local models. (The assistant's `Bash` tool still works: it runs a shell that is part of the app — see "The built-in command line".) One question answers it everywhere: `canRunPrograms()` (backend, `headless/host-bridge.ts`) and `capabilities.programs` (page, `shared/capabilities.ts`). |
 | No runtime code generation (no JIT) | nodejs-mobile is built with V8's JIT off. A JIT-less V8 has **no WebAssembly**, so Node 18's built-in `fetch` cannot work (its HTTP parser is WebAssembly): `headless/ios-fetch.ts` is `fetch` rebuilt on `http`/`https`. |
 | The only Node for iOS is nodejs-mobile's Node 18, built without ICU | `headless/ios-compat.ts` fills what the backend uses and Node 18 lacks (`globalThis.crypto`, `File`, `AbortSignal.any`, `toSorted`, `Object.groupBy`, …). No ICU means V8 rejects `\p{…}` in regular expressions, so the build bakes the needed Unicode tables in (below). |
 | Node 18 cannot `require()` an ES module; an app is a signed, read-only bundle | The backend ships as one esbuild bundle per entry (`ios/runtime/build-backend.mjs`), not Android's tree of ~17,000 files. |
@@ -55,16 +55,78 @@ the same list (`HostJsBridge.types`), pinned against the page and against Androi
   greys Claude models with "Needs a computer", the Claude card says where it does work, and setup leaves out
   "Log in with Claude". A Claude plan is used from the phone by connecting to a computer (remote access today,
   the Mesh later).
-- **The shell tools** (`Bash`, `BashOutput`, `KillShell`) are not offered to a model (`deviceTools()`), and the
-  prompt's environment block says the device cannot run commands.
+- **A computer's shell.** There is no `/bin/bash`, no installer, no Python or Node, no `sudo`. The `Bash`, `BashOutput`
+  and `KillShell` tools ARE offered, but they run the app's own built-in command line (next section); the prompt says so, and
+  that the person cannot run commands themselves either.
 - **Grep** works: where ripgrep cannot be started the same search runs in-process and prints ripgrep's own
   output format (`harness/tools/in-process-search.ts`), so there is one Grep tool.
 - **Marketplace installs** work without git: `plugin-installer.ts` → `runGit` is answered from GitHub's commit
   archives (`main/git-snapshot.ts`) where no program can run. It trusts GitHub over TLS to serve the commit asked
   for (and checks the commit id written in the archive) where git verifies every object itself.
-- **Git, the terminal view, the Files-tab content search, local models, the built-in Browser, Office, the buddy.**
-  Off through `IOS_LOCAL_CAPABILITIES`. GitHub-based sync does not run (no git); the Mesh is the phone's sync.
+- **The git panel, the terminal view, the Files-tab content search, local models, the built-in Browser, Office, the buddy.**
+  Off through `IOS_LOCAL_CAPABILITIES` (`git: false` is the real git program the panel and sync use; the assistant's own
+  `git` command is the built-in one). GitHub-based sync does not run; the Mesh is the phone's sync.
 - **App updates.** Only Apple updates an iPhone app; `getUpdateStatus()` never reports one there.
+
+## The built-in command line
+
+An iPhone app may not start any other program, but it may carry its own command interpreter (a-Shell is on the store).
+So the assistant's `Bash` tool, on an iPhone, runs **just-bash** (Apache-2.0; a bash written in JavaScript with ~80
+commands) with **just-git** (MIT) as its `git`. Design and the three rounds of testing behind it:
+`docs/active/specs/2026-11-26-iphone-in-app-command-line.md` (workspace).
+
+**Where it lives.** Everything that imports the two packages is in `ios/runtime/shell/`; they are `devDependencies` of
+`ios/runtime/package.json` only. Desktop and Android never see them (`desktop/package.json` is untouched).
+- `worker.ts` — runs ONE command on a worker thread (bundled to `dist/ios-shell/worker.js`).
+- `adapter.ts` — makes that thread look like a started program (`stdout`, `stderr`, `kill()`, `exitCode`, `'exit'` then
+  `'close'`, no pid), the way `tools/in-process-search.ts` does for Grep. No packages, so desktop tests can use it.
+- `register.ts` — plugs the adapter into `shell-registry.ts` through `setInAppSpawner`. **Mechanism:** the iPhone build
+  injects this one file in front of the backend bundle (`inject` in `build-backend.mjs`); desktop source never names it.
+- `deny-fs.ts`, `git-guard.ts`, `stubs.ts` — the credential layer, the git index guard, the "not available here" sentences.
+- `conformance.json` + `conformance-run.mjs` + `selftest.ts` — the proof (below).
+
+**Desktop-side hooks (the only desktop changes).** `spawnDetached` returns the plugged-in spawner's result when
+`!canRunPrograms()`; `killTree` calls `child.kill()` for a handle with no pid; `getShell()` answers `bash (built-in)`
+(so the working-folder tracking, time limit, background runs, `BashOutput`, `KillShell`, spill files and the permission
+cards all work unchanged); `deviceTools()` offers the tools; `persistent_env: true` is refused with a sentence; the Bash
+description and the prompt's environment block describe this shell, say "iPhone (iOS)" instead of "linux", and drop the
+git line. `github-client.ts` no longer tries to run `gh` where no program can run.
+
+**What a command can and cannot do.**
+- Sees only two folders: Documents (= HOME, what the Files app shows) and tmp, each mounted at its logical path AND its real
+  path (iOS reaches them through `/var` → `/private/var`). The app's key store (`userData`) is not mounted. Links inside a
+  folder work; links pointing out are refused. Files over 64 MB cannot be read; output is capped at 16 MB; the step limits
+  are 1,000,000 (just-bash's 100,000 stops a real loop) and a command cut short by one ends with exit 126 and a plain line
+  saying so (just-bash reports it itself).
+- Credential files (`isCredentialPath`, the same list Read/Grep use) look absent and cannot be read, written or copied, links
+  included. They show as "No such file or directory" because that is the only refusal just-bash turns into a normal
+  command failure (any other error aborts the whole script).
+- The environment is built fresh (HOME, USER, SHELL, TMPDIR, PATH, NO_COLOR, LANG); the backend's own never reaches it.
+- Network: `curl` and `git` use the app's own `iosFetch` through two small adapters — same reach as the other web tools,
+  and, like desktop's Bash, no private-address block. `git push` and private clones: the app's saved GitHub sign-in
+  (`github-client.ts`, the token the in-app Connect GitHub flow stores) is read WITHOUT starting a program and handed to the
+  worker as `{ 'github.com': token }`; it answers git's own password question and never enters the environment, command text
+  or output. No saved sign-in, no credentials.
+- git index guard: a repository whose index is not version 2, or is a split index, is refused (`git -C` included) — just-git
+  misreads those and wrote a silent bad commit in testing.
+- Absent: Python, Node, `npm`/`pip`, `sudo`, compilers, installers, `sqlite3` (needs WebAssembly), zip/unzip, output that
+  streams while running. Stubs are NOT registered, so `which`/`command -v`/`type` say "absent"; when a command ends with
+  "command not found" for one of the known names, that line is replaced by a sentence saying what to use instead.
+- Not yet: the git panel, sync, plugins that need to start a program.
+
+**Engines note.** just-bash declares Node >=20.19; it runs on 18 here behind our prelude (`ios-prelude.ts`), with
+`defenseInDepth` off (its optional JavaScript/Python runtimes, which that guards, are never enabled, and it crashes on 18).
+Its own ES build imports `undici`, so the bundle uses its CommonJS build (an alias in `build-backend.mjs`);
+`@mongodb-js/zstd`, `node-liblzma` (LGPL), `sql.js`, `typescript` and `guarded-fetch` are left out. The licence texts of
+everything in the shell's bundle are copied to `legal/` next to `dist/` in the app.
+
+**Proof.** `conformance.json` is ~45 command lines with exact expected output (everyday commands, honest gaps, credential
+hiding, git, the index guard, a loop past the old limit). It runs (1) on any machine: `NODE18_BIN=<node18> node
+ios/runtime/shell/conformance-run.mjs <built dir>` (adds `--jitless`, a symlinked HOME like iOS's); the desktop test
+`tests/ios-shell-conformance.test.ts` builds the bundle and does that when `ios/runtime` has its packages installed; (2) in
+CI under Node 18 (`ios-ci.yml`); (3) inside the real app in the simulator: with `YOUCODED_IOS_SHELL_SELFTEST=1` the build also
+bundles `selftest.ts`, which runs the list through the real `Bash` path at start-up and writes `SHELL_SELFTEST PASS n/n` (or
+`FAIL <command>: <why>`) to `backend.log`; the workflow fails without PASS. A release build never contains the list.
 
 ## Background
 
@@ -105,10 +167,12 @@ for anything long.
   phone such a literal is a syntax error for the whole file.
 - `node-pty`, `koffi`, `playwright-core` and `*.node` files are left out; they are reached only on paths a phone
   never runs.
+- The built-in command line adds a fifth bundle (`dist/ios-shell/worker.js`, from `ios/runtime/shell/`, outside
+  `desktop/src`) and one injected file in the backend bundle; see its section.
 
 ## Building
 
-A Mac is required for the app itself (Xcode). Everything else builds anywhere:
+A Mac is required for the app itself (Xcode). Everything else builds anywhere (`ios/runtime` installs its own packages: `npm ci --ignore-scripts`, not `--omit=optional`, which would remove esbuild's compiler):
 
 - `bash ios/build-resources.sh` — the page (`npm run build:web`), the backend bundle, Node for iOS
   (`runtime/fetch-node.sh`, checksum-pinned in `runtime/pins.env`), then `xcodegen generate` from

@@ -10,6 +10,9 @@ on:
     paths:
       - 'ios/**'
       - 'desktop/src/main/headless/**'
+      - 'desktop/src/main/harness/shell-registry.ts'
+      - 'desktop/src/main/harness/tools/bash.ts'
+      - 'desktop/src/main/github-client.ts'
       - 'desktop/src/shared/android-page-origin.ts'
       - 'desktop/src/shared/capabilities.ts'
       - 'desktop/src/renderer/android-page.ts'
@@ -48,8 +51,21 @@ jobs:
         run: |
           xcodebuild -version
           xcrun simctl list devices available | grep -E "iPhone" | head -20
+      # WHY the flag: it adds the built-in command line's self-test to THIS simulator build only. At start-up the app runs
+      # ios/runtime/shell/conformance.json through the real Bash path and writes `SHELL_SELFTEST PASS n/n` to backend.log —
+      # the first run of the shell on the phone's own engine (no JIT, no ICU). "Check the shell self-test" below reads it.
       - name: Build the page, the backend bundle and the Xcode project
+        env:
+          YOUCODED_IOS_SHELL_SELFTEST: '1'
         run: bash ios/build-resources.sh
+      # WHY Node 18 here: the phone runs Node 18, and the list is only worth running on the same one, with the JIT off
+      # (`--jitless` is added by the script). Done in its own step because setup-node changes `node` for the steps after it.
+      - name: Run the command-line conformance list on Node 18
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: 18
+      - name: Check the command line against the built bundle (Node 18, no JIT)
+        run: NODE18_BIN="$(command -v node)" node ios/runtime/shell/conformance-run.mjs ios/build/Resources/backend
       - name: Pick a simulator
         id: sim
         run: |
@@ -90,6 +106,15 @@ jobs:
             xcrun simctl spawn "$dev" log show --last 20m --predicate 'process == "YouCoded"' --style compact 2>/dev/null | tail -c 600000 > "$RUNNER_TEMP/ios-logs/unified-$dev.log" || true
           done
           ls -la "$RUNNER_TEMP/ios-logs" "$RUNNER_TEMP/ios-shots" || true
+      # WHY a check here and not in the Swift tests: the app writes the verdict to its own log; this reads it back. No
+      # PASS line means the self-test failed OR did not finish before the app was closed — both fail the job.
+      - name: Check the shell self-test
+        run: |
+          shopt -s nullglob
+          logs=("$RUNNER_TEMP"/ios-logs/*backend*.log)
+          [ ${#logs[@]} -gt 0 ] || { echo "no backend.log was collected"; exit 1; }
+          grep -h "SHELL_SELFTEST" "${logs[@]}" || true
+          grep -q "SHELL_SELFTEST PASS" "${logs[@]}" || { echo "the built-in shell self-test did not report PASS (see the lines above)"; exit 1; }
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
