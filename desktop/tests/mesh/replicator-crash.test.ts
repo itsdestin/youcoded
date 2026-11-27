@@ -18,7 +18,7 @@ let w: World | null = null;
 afterEach(async () => { await w?.stopAll(); w = null; });
 
 /** `diverges`: the device deliberately STARTS with lines the writer never signed (the retire scenario), so "a true prefix of the writer's history" is only promised once it has been repaired. */
-interface Scenario { /** devices left cut off after the kill until `after` has run */ keepOffline?: string[]; /** runs after the owner restarted and ran for a minute (the devices in `keepOffline` are still away) */ after?: (world: World) => Promise<void>; diverges?: boolean; name: string; names: string[]; owner: string; versions: Buffer[]; run: (world: World) => Promise<void> }
+interface Scenario { /** devices left cut off after the kill until `after` has run */ keepOffline?: string[]; /** runs after the owner restarted and ran for a minute (the devices in `keepOffline` are still away) */ after?: (world: World) => Promise<void>; diverges?: boolean; name: string; names: string[]; owner: string; versions: Buffer[]; /** the first file operation (counted from the end of setup) at which a kill is meaningful for this scenario; set by `run` through its second argument */ fromOp?: number; run: (world: World, startKills: () => void) => Promise<void> }
 
 /** `k` counts from the first operation AFTER the device was set up (`base`): a kill inside ChatStore.open is the store's own crash test's business. */
 async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{ ops: number; base: number }> {
@@ -31,7 +31,7 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
   // a killed process stops everything it was doing: the moment the simulated kill fires, the device's replicator and link stop too (nothing keeps running against a dead disk)
   const killWatch = setInterval(() => { if ((ffs as unknown as { crashed: boolean }).crashed) { clearInterval(killWatch); world.devs[sc.owner].rep.stop(); world.devs[sc.owner].link.stop(); } }, 1);
   const setupOps = ffs.ops;
-  await sc.run(world).catch(() => undefined /* benign (test): the owner dies mid-run by design; what matters is checked below */);
+  await sc.run(world, () => { sc.fromOp = ffs.ops - setupOps; }).catch(() => undefined /* benign (test): the owner dies mid-run by design; what matters is checked below */);
   const ops = ffs.ops - setupOps;
   // 1. restart the dead device over its folder with the real file system, WITHOUT starting it, and look at what it holds
   const dev = await world.restart(sc.owner, { graceful: false, start: false });
@@ -55,7 +55,12 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
   if (sc.after) { await sc.after(world); for (const n of sc.names) world.devs[n].carrier.setOnline(true); await world.elapse(60_000, 10_000); }
   for (const v of sc.versions) {
     // a writer killed before its own announcement or its copy was ever saved has nothing of that version to check (the chat was never told "saved")
-    if (sc.owner === 'A' && !(await world.localOf(sc.owner, v))) continue;
+    if (!(await world.localOf(sc.owner, v))) {
+      // the killed device has no copy of it: fine only if nobody has one (a version that was never made); a version that exists elsewhere but never reached the restarted device is a convergence failure
+      const others = await Promise.all(sc.names.filter((n) => n !== sc.owner).map((n) => world.localOf(n, v)));
+      if (others.every((x) => x === null)) continue;
+      throw new Error(`${sc.name} k=${k} tear=${tear}: version ${v.toString('hex').slice(0, 6)} exists on another device but the restarted device never got it`);
+    }
     await vi.waitFor(async () => { const hs = await Promise.all(sc.names.map((n) => world.heads(n, v))); for (const x of hs) expect(x, `${sc.name} k=${k} tear=${tear}`).toEqual(hs[0]); }, { timeout: 30_000 });
     const bytes = await Promise.all(sc.names.map((n) => world.readAll(n, v)));
     for (const b of bytes) expect(b).toEqual(bytes[0]);
@@ -71,7 +76,7 @@ async function sweep(sc: Scenario): Promise<void> {
   const clean = await once(sc, 0, false);
   expect(clean.ops).toBeGreaterThan(5);
   let runs = 0;
-  for (let k = 1 + (SAMPLE > 1 ? 3 : 0); k <= clean.ops; k += SAMPLE) for (const tear of [false, true]) { await once(sc, k, tear, clean.base); runs++; }
+  for (let k = Math.max(1, sc.fromOp ?? 1) + (SAMPLE > 1 ? 3 : 0); k <= clean.ops; k += SAMPLE) for (const tear of [false, true]) { await once(sc, k, tear, clean.base); runs++; }
   expect(runs).toBeGreaterThan(5);
 }
 
@@ -145,7 +150,7 @@ describe('a kill at any file operation', () => {
   }, 1_800_000);
   it('while the PEER resolves a self-fork (the peer is the killed device: the second version, then setting its own copy aside and refilling)', async () => {
     const versions: Buffer[] = [V];
-    await sweep({ diverges: true, name: 'selffork-peer', names: ['A', 'B'], owner: 'B', versions, run: async (world) => {
+    await sweep({ diverges: true, name: 'selffork-peer', names: ['A', 'B'], owner: 'B', versions, run: async (world, startKills) => {
       versions.splice(1);
       await world.create('A', V); await world.settle();
       const { selfForkToken } = await import('../../src/main/mesh/replicator/selffork');
@@ -157,6 +162,8 @@ describe('a kill at any file operation', () => {
       const y = lineSet(5, 'yy'); const ch = y.reduce((h, l) => chainStep(h, l), defaultChainSeeds({ chatId: CHAT, version: new Uint8Array(), segment: 0 }).raw);
       await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: y, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
       await world.settle();
+      // (kills start HERE: a kill while B is still taking in the history the writer signed earlier is a different fault, a lost copy of lines nobody else holds, and is outside what this sweep studies)
+      startKills();
       world.devs.B.carrier.setOnline(false);
       await world.restart('A'); await world.elapse(8_000, 1_000, true);
       await world.append('A', V, lineSet(5, 'xx'));
