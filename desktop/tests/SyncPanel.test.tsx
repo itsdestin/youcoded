@@ -342,6 +342,13 @@ describe('the saved-settings notices', () => {
     const row = (await screen.findByRole('button', { name: 'Dismiss' })).closest('[data-parts-agree]') as HTMLElement;
     expect(row.parentElement!.className).toContain('flex-wrap'); // inside the side-by-side row
   });
+  it('the backup tool config warning (CONFIG_MISSING) keeps its button beside the words', async () => {
+    // Shares the CONFIG_ prefix with the four settings notices but was never asked to change.
+    stub({}, [{ code: 'CONFIG_MISSING', level: 'warn', title: 'Other', body: 'b', dismissible: true, createdEpoch: 0 }]);
+    render(<SyncSection autoOpen />);
+    const row = (await screen.findByRole('button', { name: 'Dismiss' })).closest('[data-parts-agree]') as HTMLElement;
+    expect(row.parentElement!.className).toContain('flex-wrap');
+  });
   it('a failed "Start fresh" says so and offers Try again', async () => {
     stub({ startFresh: vi.fn(async () => { throw new Error('EACCES: permission denied'); }) }, [DAMAGED]);
     render(<SyncSection autoOpen />);

@@ -40,6 +40,12 @@ describe('the "Backing up…" chip (switched on)', () => {
     bar(base); // an older backend that never sends the field
     expect(screen.queryByText('Backing up…')).toBeNull();
   });
+  it('is hidden for someone who switched the sync warnings widget off', () => {
+    // WHY: the chip has no switch of its own; it rides 'sync-warnings', so turning that off must hide it too.
+    window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage']));
+    bar({ ...base, copyingBackendIds: ['drive-1'] });
+    expect(screen.queryByText('Backing up…')).toBeNull();
+  });
   it('sits beside, not instead of, a sync failure pill', () => {
     bar({ ...base, copyingBackendIds: ['drive-1'], syncWarnings: [{ code: 'X', level: 'danger', title: 't', body: 'b', dismissible: false, createdEpoch: 1 }] });
     expect(screen.getByText('Backing up…')).toBeTruthy();

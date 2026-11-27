@@ -1771,7 +1771,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         // WHY 'below' only for the four backup-settings notices (Destin, backup-fixes deck U-3..U-6: "put dismiss /
                         // button at bottom right"): the words run full width and the button sits at the bottom right. Every other
                         // warning keeps the side-by-side default. Callout already offered this option; nothing shared changed.
-                        actionsPlacement={w.code.startsWith('CONFIG_') ? 'below' : 'right'}
+                        // WHY an exact list, not "starts with CONFIG_": CONFIG_MISSING (the backup tool's own config warning) shares
+                        // the prefix and was never part of that request, so a prefix test quietly restyled it too.
+                        actionsPlacement={['CONFIG_RESTORED', 'CONFIG_SALVAGED', 'CONFIG_DAMAGED', 'CONFIG_WRITE_FAILED'].includes(w.code) ? 'below' : 'right'}
                         title={w.title}
                         actions={actions}
                       >
