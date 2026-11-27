@@ -247,7 +247,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       for (const n of NAMES) {
         const dev = world.devs[n]; const st = await dev.rep.status(v);
         const local = await world.localOf(n, v);
-        if (!local) { if (st.state === 'in-sync') fail(`${n} calls version ${v.toString('hex').slice(0, 6)} in-sync with nothing registered`); continue; }
+        // status and the store listing are two separate reads: a retire finishing between them (a background step) is not a wrong answer, so only two `in-sync` answers around the listing count
+        if (!local) { if (st.state === 'in-sync' && (await dev.rep.status(v)).state === 'in-sync') fail(`${n} calls version ${v.toString('hex').slice(0, 6)} in-sync with nothing registered`); continue; }
         const h = await dev.store.head(local);
         if (h.lines > O.length) fail(`${n} holds ${h.lines} lines of ${v.toString('hex').slice(0, 6)}; only ${O.length} were ever appended (P1)`);
         let readable = h.lines; const dmg = Math.min(h.damagedFromLine ?? Infinity, h.rolledBack?.from ?? Infinity, h.partial?.from ?? Infinity);

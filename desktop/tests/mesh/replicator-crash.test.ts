@@ -107,13 +107,16 @@ describe('a kill at any file operation', () => {
     sc.versions = [V, child];
     await sweep(sc);
   }, 900_000);
-  it('while RETIRING a copy that contradicts the writer and recopying it under a new id', async () => {
+  it('while RETIRING a damaged copy and recopying it under a new id', async () => {
+    // (review 2, finding 5: this used to append FOREIGN lines to B's store. Lines no writer signature covers are now kept under a named fault, never set aside on a guess, so the retire path is driven by what really
+    // happens: B holds the writer's lines, a byte rots, B finds it, sets the copy aside and recopies.)
     await sweep({ diverges: true, name: 'retire', names: ['A', 'B'], owner: 'B', versions: [V], run: async (world) => {
       await world.create('A', V);
+      await world.devs.A.rep.appendLocal(V, lineSet(5, 'real'));
       await world.settle();
-      await world.devs.B.store.append(incarnationId(V, 0), 0, 0, lineSet(5, 'other')).catch(() => undefined /* benign (test): the kill may land inside this very call; the writer's lines below must still be written */);
-      { const dir = nodePath.join(world.dirs.B, 'store', 'versions', incarnationId(V, 0).toString('hex')); const f = fs.existsSync(dir) ? fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x)) : undefined; if (f) { const pp = nodePath.join(dir, f); const raw = fs.readFileSync(pp); if (raw.length) { raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(pp, raw); } } } // WHY rot, not foreign lines: see replicator-repair.test.ts (review 2, finding 5)
-      await world.devs.A.rep.appendLocal(V, lineSet(7, 'real'));
+      { const dir = nodePath.join(world.dirs.B, 'store', 'versions', incarnationId(V, 0).toString('hex')); const f = fs.existsSync(dir) ? fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x)) : undefined; if (f) { const pp = nodePath.join(dir, f); const raw = fs.readFileSync(pp); if (raw.length) { raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(pp, raw); } } }
+      await world.devs.B.rep.reportCorrupt(V).catch(() => undefined /* benign (test): the kill may land inside this call */);
+      await world.devs.A.rep.appendLocal(V, lineSet(2, 'more', 5));
       await world.settle();
     } });
   }, 900_000);
