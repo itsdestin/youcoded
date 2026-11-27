@@ -62,7 +62,7 @@ export class RateLimiter {
 export const WANT_GAP_MS = 2_000;
 
 /** How long after start a writer that has heard from NO peer waits before it may write alone (named `writing-alone`; review 2, finding 1). */
-export const WRITER_ALONE_MS = 20_000;
+export const WRITER_ALONE_MS = 5_000;
 
 /** A peer's claim of MORE lines than the writer holds that has stayed the same, unbacked by any batch from that peer, for this long no longer blocks the writer's append (it is counted and named). */
 export const CLAIM_UNBACKED_MS = 10 * 60_000;

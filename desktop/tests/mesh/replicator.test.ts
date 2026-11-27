@@ -23,7 +23,7 @@ describe('devices that are online', () => {
     const V = wireId(1);
     await w.create('A', V);
     const lines = lineSet(5);
-    await w.devs.A.rep.appendLocal(V, lines);
+    await w.append('A', V, lines);
     await converge(w, V, ['A', 'B']);
     expect(await w.readAll('B', V)).toEqual(lines);
     expect((await w.devs.B.rep.status(V)).state).toBe('in-sync');
@@ -35,7 +35,7 @@ describe('devices that are online', () => {
     w = await repWorld(['A', 'B', 'C']);
     const V = wireId(2);
     await w.create('A', V);
-    for (let i = 0; i < 6; i++) await w.devs.A.rep.appendLocal(V, lineSet(3, 'k', i * 3));
+    for (let i = 0; i < 6; i++) await w.append('A', V, lineSet(3, 'k', i * 3));
     await converge(w, V, ['A', 'B', 'C']);
     await sameBytes(w, V, ['A', 'B', 'C']);
     expect((await w.heads('C', V)).lines).toBe(18);
@@ -45,7 +45,7 @@ describe('devices that are online', () => {
     const V = wireId(3);
     await w.create('A', V);
     await w.settle();
-    await expect(w.devs.B.rep.appendLocal(V, lineSet(1))).rejects.toThrow('not-the-writer');
+    await expect(w.append('B', V, lineSet(1))).rejects.toThrow('not-the-writer');
     expect((await w.heads('A', V)).lines).toBe(0);
   });
   it('a 5 MiB line crosses in parts and arrives byte for byte between normal lines', async () => {
@@ -54,7 +54,7 @@ describe('devices that are online', () => {
     await w.create('A', V);
     const big = Buffer.from(`${JSON.stringify({ type: 'user', message: { content: 'q'.repeat(5 * 1024 * 1024) } })}\n`);
     const lines = [line('before', 0), big, line('after', 1)];
-    await w.devs.A.rep.appendLocal(V, lines);
+    await w.append('A', V, lines);
     await vi.waitFor(async () => expect((await w!.heads('B', V)).lines).toBe(3), { timeout: 60_000 });
     await w.settle();
     expect(await w.readAll('B', V)).toEqual(lines);
@@ -67,10 +67,10 @@ describe('a device that was away', () => {
     w = await repWorld(['A', 'B']);
     const V = wireId(5);
     await w.create('A', V);
-    await w.devs.A.rep.appendLocal(V, lineSet(10));
+    await w.append('A', V, lineSet(10));
     await converge(w, V, ['A', 'B']);
     w.devs.B.carrier.setOnline(false);
-    for (let h = 0; h < 24; h++) { await w.devs.A.rep.appendLocal(V, lineSet(4, `h${h}`, 10 + h * 4)); await w.clock.advance(3_600_000); }
+    for (let h = 0; h < 24; h++) { await w.append('A', V, lineSet(4, `h${h}`, 10 + h * 4)); await w.clock.advance(3_600_000); }
     await w.settle();
     expect((await w.heads('B', V)).lines).toBe(10);
     w.devs.B.carrier.setOnline(true);
@@ -83,10 +83,10 @@ describe('a device that was away', () => {
     w = await repWorld(['A', 'B']);
     const V = wireId(6);
     await w.create('A', V);
-    await w.devs.A.rep.appendLocal(V, lineSet(10));
+    await w.append('A', V, lineSet(10));
     await converge(w, V, ['A', 'B']);
     w.devs.B.carrier.setOnline(false);
-    for (let i = 0; i < 12; i++) await w.devs.A.rep.appendLocal(V, lineSet(3, `g${i}`, 10 + i * 3));
+    for (let i = 0; i < 12; i++) await w.append('A', V, lineSet(3, `g${i}`, 10 + i * 3));
     await w.settle();
     const group = chatGroup(w.setId, CHAT);
     w.hub.releaseThrough(group, 1_000_000); // everything held for B is gone

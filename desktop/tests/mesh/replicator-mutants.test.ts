@@ -20,14 +20,14 @@ const claim = (world: World, V: Buffer, lines: number, hash: Buffer): void => { 
 describe('guards the reviewer\'s mutation run found nothing depending on', () => {
   it('want hold-back (alone): the same peer is not asked twice within the gap', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-want');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(3)); await world.settle();
     const before = world.devs.B.rep.counters()['want-held-back'] ?? 0;
     await world.devs.B.rep.askNow(V, world.ids.A.deviceId); await world.devs.B.rep.askNow(V, world.ids.A.deviceId);
     expect((world.devs.B.rep.counters()['want-held-back'] ?? 0) - before).toBeGreaterThanOrEqual(1);
   });
   it('a saved point that is not on my chain is skipped when I serve (pointsAfter off-chain skip)', async () => {
     w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-offchain');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(6)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(6)); await world.settle();
     await down(world, 'B');
     // B's saved points gain one that the writer signed for ANOTHER history at line 3 (a writer that forked itself leaves such points)
     const bogus = randomBytes(32); const heads = new SignedHeads(realFs, nodePath.join(world.dirs.B, 'replicator'));
@@ -39,38 +39,40 @@ describe('guards the reviewer\'s mutation run found nothing depending on', () =>
   });
   it('own record hash check: a store holding OTHER lines at the recorded count is refused by name', async () => {
     w = await repWorld(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-ownhash');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4, 'real'));
+    await world.create('A', V); await world.append('A', V, lineSet(4, 'real'));
     await down(world, 'A');
-    for (const d of [nodePath.join(world.dirs.A, 'replicator', 'own'), nodePath.join(world.dirs.A, 'witness')]) for (const f of fs.readdirSync(d)) { const p2 = nodePath.join(d, f); const r = fs.readFileSync(p2); r.fill(0xab, 8); fs.writeFileSync(p2, r); } // both records: 4 lines, ANOTHER chain value
+    // both records say: 4 lines, ANOTHER chain value (valid checksums)
+    const { OwnRecords } = await import('../../src/main/mesh/replicator/own-record');
+    await new OwnRecords(realFs, nodePath.join(world.dirs.A, 'replicator', 'own'), nodePath.join(world.dirs.A, 'witness')).save(V, { lines: 4, hash: 'ab'.repeat(32) });
     await world.restart('A');
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-diverged-from-own-signed-head/);
+    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-diverged-from-own-signed-head/);
   });
   it('peer same-count-other-hash: a fresh claim of my count with another chain value refuses the append by name', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-samecount');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(3)); await world.settle();
     world.devs.B.rep.stop(); claim(world, V, 3, randomBytes(32)); await world.settle();
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 3))).rejects.toThrow(/writer-diverged-from-peer/);
+    await expect(world.append('A', V, lineSet(1, 'n', 3))).rejects.toThrow(/writer-diverged-from-peer/);
   });
   it('a writer that signed two histories is faulted by name and refuses appendLocal (iAmWriter fault, appendLocal fault check)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-wfault');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
     const other = lineSet(5, 'FORK'); const seed = defaultChainSeeds({ chatId: CHAT, version: new Uint8Array(), segment: 0 }).raw; const ch = other.reduce((h, l) => chainStep(h, l), seed);
     await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
     await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('faulted(writer-signed-two-histories)'));
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-faulted-writer-signed-two-histories/);
+    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-faulted-writer-signed-two-histories/);
   });
   it('appendLocal refuses by name while the copy is being repaired (refilling check)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('m-refill');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(30)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(30)); await world.settle();
     const local = (await world.localOf('A', V)) as Buffer; await down(world, 'A');
     const dir = nodePath.join(world.dirs.A, 'store', 'versions', local.toString('hex')); const f = fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x))!; const raw = fs.readFileSync(nodePath.join(dir, f)); raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(nodePath.join(dir, f), raw);
     world.hub.holdFilter = () => 'drop'; world.devs.B.carrier.passFilter = () => 'drop';
     await world.restart('A'); await world.devs.A.rep.reportCorrupt(V);
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 30))).rejects.toThrow(/refilling/);
+    await expect(world.append('A', V, lineSet(1, 'n', 30))).rejects.toThrow(/refilling/);
   });
   it('onHeads ack delete: an ack that fell stays gone even when the same device later says it holds the lines again', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-ackdel');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(5)); await world.settle();
     const hex = world.ids.B.deviceId.toString('hex'); const real = (await world.devs.A.store.head(await world.local('A', V)));
     await world.devs.A.rep.solicitAcks(V); await world.settle();
     expect(world.devs.A.rep.peerAcks(V).some((a) => a.holder === hex)).toBe(true);
@@ -80,7 +82,7 @@ describe('guards the reviewer\'s mutation run found nothing depending on', () =>
   });
   it('an ack that names a solicit round I never sent is not credited (round check)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-round');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(3)); await world.settle();
     world.devs.B.rep.stop();
     const h = await world.devs.A.store.head(await world.local('A', V)); const raw = Buffer.from(h.hash, 'hex');
     world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 3, hash: raw, round: 77, sig: signWith(world.ids.B, ackMessage(world.ids.B.deviceId, V, 3, raw, 77)) }) });

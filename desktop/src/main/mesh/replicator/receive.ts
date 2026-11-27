@@ -145,7 +145,8 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     run.diverged = null; run.stuck = null; run.retiredRecopy = false; run.unavailable.clear(); run.unavailableRounds = 0;
     // the sender holds at least what the writer signed in this batch (a signed statement, not a bare claim), so its entry is at least that
     const sk = wire.toString('hex'); const prev = peer.heads.get(sk);
-    if (!prev || prev.lines <= b.head.lines) peer.heads.set(sk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now(), since: ctx.clock.now() });
+    if (!prev || prev.lines <= b.head.lines) peer.heads.set(sk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });
+    peer.claimSince.delete(sk); // a batch from this device is the one thing that backs (or ends) its claim
     await sendAck(ctx, peer, wire, v.local);
     if (run.pull) run.pull = { ...run.pull, at: ctx.clock.now() };
     await checkRepair(ctx, wire);

@@ -34,8 +34,8 @@ export interface VersionStatus { state: VState; reason: string | null; lines: nu
  *  `round` 0: the holder sent it after its own append. `round` n > 0: it answers MY solicit number n, so it was signed after the holder received that solicit. `receivedAt`: my clock when it arrived. */
 export interface PeerAck { holder: string; version: string; lines: number; hash: string; signature: string; round: number; receivedAt: number }
 
-interface PeerHead { lines: number; hash: string; state: AdvertisedState; at: number; /** when this exact claim (count and chain value) was first heard, kept across refreshes and restarted by any batch from the peer: a claim that stays unbacked is discounted at the append gate (review 2, finding 7) */ since?: number; /** came from an equal summary digest, which a hostile device can echo: never evidence for the writer's own gate (review 2, finding 1) */ echo?: boolean }
-export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number; round: number }>; /** when this peer last finished sending ALL its head pages in this process (null = not yet); the writer's start-up evidence (review 2, finding 1) */ headsComplete: number | null; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
+interface PeerHead { lines: number; hash: string; state: AdvertisedState; at: number; /** came from an equal summary digest, which a hostile device can echo: never evidence for the writer's own gate (review 2, finding 1) */ echo?: boolean }
+export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number; round: number }>; /** when this peer last finished sending ALL its head pages in this process (null = not yet); the writer's start-up evidence (review 2, finding 1) */ headsComplete: number | null; /** pages of the list being received (review 3) */ pages: { of: number; seen: Set<number> } | null; /** version hex -> when this peer's claim of more lines (or another chain value) was first heard; reset only by a batch from it (review 3, finding 6) */ claimSince: Map<string, number>; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
 
 /** The source of lines no peer holds (the writer's own chat file, via an adapter): `resupply(wire, from, to)` gives raw lines [from, to) or null. */
 export type SourceRefill = (wire: Buffer, from: number, to: number) => Promise<Buffer[] | null>;
@@ -76,8 +76,12 @@ export interface VRun {
   /** Peers that answered `unavailable` since this version last progressed (finding 3), and how many such answers. */
   unavailable: Set<string>;
   unavailableRounds: number;
-  /** My newest solicit round for this version (finding 6). */
-  solicitRound: number;
+  /** The last few solicit rounds I sent for this version (random 48-bit numbers); an ack naming any other non-zero round is not credited. */
+  rounds: number[];
+  /** Why the own records are not in use (the writer runs on the store head plus the peer gate), or null. */
+  ownNote: string | null;
+  /** The device whose unbacked claim the append gate is no longer holding, or null. */
+  discounted: string | null;
   /** The writer's last own-record save did not reach both places: retried at the next append and scrub tick. */
   ownPending: { lines: number; hash: string } | null;
   /** This process has seen evidence the writer is at its own latest head (review 2, finding 1). Set only by `Replicator.evidence`. */

@@ -42,7 +42,7 @@ async function route(svc: MeshService, path: string, q: Json): Promise<Json> {
     case '/offline': svc.setOffline(q.offline !== false); return { ok: true };
     case '/stress-append': return { done: await svc.stressAppend(Number(q.n) || 0) };
     // The replicator (only when the process was started with YOUCODED_MESH_REPLICATOR=1): lines travel as base64.
-    case '/rep/create': await svc.repCreate(Buffer.from(String(q.version), 'hex'), String(q.chat ?? 'rig:chat')); return { ok: true };
+    case '/rep/create': return { ok: true, version: (await svc.repCreate(Buffer.from(String(q.nonce), 'hex'), String(q.chat ?? 'rig:chat'))).toString('hex') };
     case '/rep/append': return { ...(await svc.repAppend(Buffer.from(String(q.version), 'hex'), (Array.isArray(q.lines) ? q.lines : []).map(unb64))) };
     case '/rep/heads': return { heads: await svc.repHeads() };
     case '/rep/read': return { lines: (await svc.repRead(Buffer.from(String(q.version), 'hex'), Number(q.from) || 0, Number(q.to) || 0)).map(b64), ok: await svc.repVerify(Buffer.from(String(q.version), 'hex')) };

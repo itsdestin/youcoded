@@ -180,7 +180,7 @@ export async function onAck(ctx: RepCtx, peer: PeerInfo, a: AckBody): Promise<vo
   const now = ctx.clock.now();
   // WHY the round is checked: an ack that names a solicit round I never sent is not credited as an answer to one (it cannot be older than that solicit; a number I did not send proves nothing)
   const run = ctx.runOf(a.version);
-  if (a.round > run.solicitRound) { ctx.bump('ack-round-unknown'); return; }
+  if (a.round !== 0 && !run.rounds.includes(a.round)) { ctx.bump('ack-round-unknown'); return; }
   peer.acks.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), sig: a.sig, at: now, round: a.round }); // set, never max(): it may be lower than before
   // (review 2, findings 2 and 6: an ack no longer refreshes the sender's heads. A repairing device acks only what it can vouch for, and a refresh made BY the ack made the ack its own proof.)
   const key = keyOf(peer.hex, a.version);

@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { LegacyDirectory } from './legacy-directory';
 import { repWorld, wireId, lineSet, line, CHAT, type World } from './replicator-world';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
 import { incarnationId } from '../../src/main/mesh/replicator/idmap';
@@ -34,18 +35,18 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
   it('a writer whose copy was set aside refuses appendLocal by name, takes its own signed lines back from a peer, and only then appends; no peer ever sets anything aside', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f1a');
     await world.create('A', V);
-    const six = lineSet(6); await world.devs.A.rep.appendLocal(V, six);
+    const six = lineSet(6); await world.append('A', V, six);
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(6)); await world.settle();
     const la = (await world.localOf('A', V)) as Buffer;
     world.devs.A.carrier.passFilter = () => 'drop'; // A cannot hear its peers yet
     await world.devs.A.store.setAsideDamaged(la);
     await world.devs.A.rep.reportCorrupt(V);
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-/); // a fresh incarnation that has not been refilled
+    await expect(world.append('A', V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-/); // a fresh incarnation that has not been refilled
     world.devs.A.carrier.passFilter = null;
     await world.elapse(120_000, 10_000);
     expect(await world.readAll('A', V)).toEqual(six); // its own signed lines came back
     expect(await st(world, 'A', V)).toBe('in-sync');
-    await world.devs.A.rep.appendLocal(V, lineSet(2, 'next', 6));
+    await world.append('A', V, lineSet(2, 'next', 6));
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(8));
     await world.settle();
     expect((await world.readAll('B', V)).slice(0, 6)).toEqual(six);
@@ -54,39 +55,39 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
   });
   it('a writer that restarted after its copy was set aside, with nobody to compare with yet, refuses appendLocal by name until a peer has confirmed it holds nothing more', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f1f');
-    await world.create('A', V); const six = lineSet(6); await world.devs.A.rep.appendLocal(V, six);
+    await world.create('A', V); const six = lineSet(6); await world.append('A', V, six);
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(6)); await world.settle();
     world.devs.B.carrier.setOnline(false);
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
     fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true }); // the writer's own record is gone too: only a level peer can say it is not behind
     await world.restart('A'); // a new process: it remembers no peer claim at all
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-recopy-not-confirmed/);
+    await expect(world.append('A', V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-recopy-not-confirmed/);
     world.devs.B.carrier.setOnline(true);
     await world.elapse(120_000, 10_000);
     expect(await world.readAll('A', V)).toEqual(six);
-    await world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6));
+    await world.append('A', V, lineSet(1, 'new', 6));
   });
   it('with its own record of what it signed, a writer whose copy was set aside refuses at once after a restart even when NO peer is reachable', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f1h');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(6)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(6)); await world.settle();
     world.devs.B.carrier.setOnline(false);
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
     await world.restart('A');
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-behind-own-signed-head/);
+    await expect(world.append('A', V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-behind-own-signed-head/);
   });
   it('a recopied writer is not "caught up" because the only peer it can hear is repairing and so vouches for nothing (fuzz seed 300584)', async () => {
     w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1g');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
     sendLive(world, KIND_HEADS, headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 2, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'refilling' }] }), 'A');
     await vi.waitFor(() => expect(world.devs.A.rep.peerView(V).some((p) => p.state === 'refilling')).toBe(true));
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
-    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true }); world.devs.A.rep.forgetOwnHeadForTests(V);
+    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true });
     await world.devs.A.rep.reportCorrupt(V); await world.settle();
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 4))).rejects.toThrow(/writer-recopy-not-confirmed/);
+    await expect(world.append('A', V, lineSet(1, 'new', 4))).rejects.toThrow(/writer-recopy-not-confirmed/);
   });
   it('a writer that holds fewer lines than its own record says it signed is never in-sync, even when every peer it can hear claims nothing (fuzz seed 505206)', async () => {
     w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1i');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
     await world.devs.A.rep.reportCorrupt(V);
     const seedHash = Buffer.from((await headOf(world, 'A', V)).hash, 'hex');
@@ -99,18 +100,18 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
   it('a writer whose whole store folder was put back refuses appendLocal while a peer holds more of its chain, recovers its lines, and then appends', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000, stallMs: 10_000 }); const world = w; const V = wireId('f1b');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    await world.append('A', V, lineSet(3)); await world.settle();
     await world.devs.A.rep.idle(); world.devs.A.rep.stop(); world.devs.A.link.stop(); await world.devs.A.store.close();
     const snap = nodePath.join(world.dirs.A, 'snap'); fs.cpSync(nodePath.join(world.dirs.A, 'store'), snap, { recursive: true });
     await world.restart('A'); await world.settle(); // the first append after a start waits for a peer to be heard (review 2, finding 1)
-    await world.devs.A.rep.appendLocal(V, lineSet(3, 't', 3)); await world.settle();
+    await world.append('A', V, lineSet(3, 't', 3)); await world.settle();
     const six = await world.readAll('A', V);
     await world.devs.A.rep.idle(); world.devs.A.rep.stop(); world.devs.A.link.stop(); await world.devs.A.store.close();
     fs.rmSync(nodePath.join(world.dirs.A, 'store'), { recursive: true, force: true }); fs.cpSync(snap, nodePath.join(world.dirs.A, 'store'), { recursive: true });
     await world.restart('A');
     await world.elapse(60_000, 10_000); // peers have spoken: A now KNOWS it is behind
     expect(await world.readAll('A', V)).toEqual(six);
-    await world.devs.A.rep.appendLocal(V, lineSet(2, 'after', 6));
+    await world.append('A', V, lineSet(2, 'after', 6));
     await world.elapse(60_000, 10_000);
     expect((await world.readAll('B', V)).slice(0, 6)).toEqual(six);
     expect((await headOf(world, 'B', V)).lines).toBe(8);
@@ -118,15 +119,15 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
   });
   it('appendLocal refuses by name while any fresh peer claim names more lines of my version than I hold (without any store report)', async () => {
     w = await withHostile(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1c');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
     sendLive(world, KIND_HEADS, headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 9, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }), 'A');
     await vi.waitFor(() => expect(world.devs.A.rep.peerView(V).some((p) => p.lines === 9)).toBe(true));
-    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4))).rejects.toThrow(/writer-behind/);
+    await expect(world.append('A', V, lineSet(1, 'x', 4))).rejects.toThrow(/writer-behind/);
   });
   it('a writer-signed batch that contradicts lines a peer holds under an EARLIER writer signature is a writer fault: the peer keeps its copy, names the state, offers it, and the state survives later appends and a restart', async () => {
     w = await withHostile(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f1d');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(6));
+    await world.append('A', V, lineSet(6));
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(6)); await world.settle();
     const keep = await world.readAll('B', V);
     // the writer's key signs ANOTHER history for the same version id (a fork of itself); M carries it
@@ -135,7 +136,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await vi.waitFor(async () => expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'));
     expect(await world.readAll('B', V)).toEqual(keep);
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
-    await world.devs.A.rep.appendLocal(V, lineSet(2, 'more', 6)); await world.elapse(30_000, 10_000);
+    await world.append('A', V, lineSet(2, 'more', 6)); await world.elapse(30_000, 10_000);
     expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'); // not cleared by the next append
     expect(await world.readAll('B', V)).toEqual(keep);
     await world.restart('B'); await world.settle();
@@ -146,7 +147,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await world.create('A', V); await world.settle();
     const lb = (await world.localOf('B', V)) as Buffer;
     await world.devs.B.store.append(lb, 0, 0, lineSet(4, 'unsigned'));
-    const good = lineSet(6, 'real'); await world.devs.A.rep.appendLocal(V, good);
+    const good = lineSet(6, 'real'); await world.append('A', V, good);
     await vi.waitFor(async () => expect(await st(world, 'B', V)).toBe('faulted(unsigned-lines-contradicted)'));
     expect((await headOf(world, 'B', V)).lines).toBe(4);
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
@@ -157,7 +158,7 @@ describe('F2 an ack is a statement about a copy that still exists', () => {
   const ackOf = (world: World, holder: string, v: Buffer) => world.devs.A.rep.peerAcks(v).find((a) => a.holder === world.ids[holder].deviceId.toString('hex'));
   it('when the holder retires its copy and tells its peers at once, the ack disappears at once (not at the next hello)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f2a');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5));
+    await world.create('A', V); await world.append('A', V, lineSet(5));
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(5)); await world.settle();
     world.hub.holdFilter = () => 'drop'; // B cannot refill, so only B SAYING what it holds can retract the ack
     await world.devs.B.store.setAsideDamaged((await world.localOf('B', V)) as Buffer);
@@ -166,7 +167,7 @@ describe('F2 an ack is a statement about a copy that still exists', () => {
   });
   it('a hello does not wipe acks: a quiet in-sync system still lists them, and after a restart they can be asked for again', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f2b');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5));
+    await world.create('A', V); await world.append('A', V, lineSet(5));
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(5));
     await world.elapse(100_000, 10_000);
     expect(ackOf(world, 'B', V)?.lines).toBe(5);
@@ -177,10 +178,10 @@ describe('F2 an ack is a statement about a copy that still exists', () => {
   });
   it('a holder whose folder was put back loses its ack as soon as it says what it now holds', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 20_000 }); const world = w; const V = wireId('f2c');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(3)); await world.settle();
     await world.devs.B.rep.idle(); world.devs.B.rep.stop(); world.devs.B.link.stop(); await world.devs.B.store.close();
     const snap = nodePath.join(world.dirs.B, 'snap'); fs.cpSync(nodePath.join(world.dirs.B, 'store'), snap, { recursive: true });
-    await world.restart('B'); await world.devs.A.rep.appendLocal(V, lineSet(3, 'x', 3));
+    await world.restart('B'); await world.append('A', V, lineSet(3, 'x', 3));
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(6)); await world.settle();
     world.devs.A.carrier.setOnline(false);
     await world.devs.B.rep.idle(); world.devs.B.rep.stop(); world.devs.B.link.stop(); await world.devs.B.store.close();
@@ -199,7 +200,7 @@ describe('F2 listing rules', () => {
   const ackOf = (world: World, holder: string, v: Buffer) => world.devs.A.rep.peerAcks(v).find((a) => a.holder === world.ids[holder].deviceId.toString('hex'));
   it('an ack is not listed when the holder\'s own heads show another chain value at the same count, nor when its heads are stale', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f2d');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5));
+    await world.create('A', V); await world.append('A', V, lineSet(5));
     await vi.waitFor(() => expect(ackOf(world, 'B', V)?.lines).toBe(5)); await world.settle();
     world.devs.B.rep.stop(); // B's replicator goes quiet (its link still speaks), so nothing re-confirms the ack behind this test's back
     world.devs.B.link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 5, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'ok' }] }) });
@@ -224,7 +225,7 @@ describe('F3 wire ids and store ids are different spaces', () => {
   });
   it('a hostile device that announces a version whose id is the victim\'s NEXT incarnation id gets nothing written into the victim\'s copy', async () => {
     w = await withHostile(['A', 'B'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const W1 = wireId('f3c');
-    await world.create('A', W1); await world.devs.A.rep.appendLocal(W1, lineSet(5));
+    await world.create('A', W1); await world.append('A', W1, lineSet(5));
     await vi.waitFor(async () => expect((await headOf(world, 'B', W1)).lines).toBe(5)); await world.settle();
     const W2 = incarnationId(W1, 1);
     sendLive(world, KIND_INTRO, intro(world, 'M', W2, 'c-m'), 'B'); await world.settle();
@@ -243,13 +244,13 @@ describe('F3 wire ids and store ids are different spaces', () => {
     await world.devs.A.rep.start(); await world.create('A', V, { chatId: 'real-chat' });
     await world.devs.B.store.registerVersion(incarnationId(V, 0), { chatId: 'some-other-chat', runtime: 'claude-code' }); // squatter
     await world.devs.B.rep.start();
-    await world.devs.A.rep.appendLocal(V, lineSet(2));
+    await world.append('A', V, lineSet(2));
     await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^stuck\(folder-belongs-to-another-version\)/));
     expect((await world.devs.B.store.head(incarnationId(V, 0))).lines).toBe(0);
   });
   it('forged lines, forged naks and a flood of intros from a paired non-writer never retire anybody\'s copy', async () => {
     w = await withHostile(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f3e');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4));
+    await world.create('A', V); await world.append('A', V, lineSet(4));
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(4)); await world.settle();
     for (let i = 0; i < 40; i++) sendLive(world, KIND_NAK, nakBodyOf({ version: V, at: 2, why: 'not-a-prefix', hashAtYourCount: randomBytes(32) }), 'B');
     const fl = lineSet(2, 'forged'); const ch = chainOver(CHAT, fl);
@@ -263,7 +264,7 @@ describe('F3 wire ids and store ids are different spaces', () => {
 describe('F4 the interim directory decides first-wins at once and remembers a conflict', () => {
   it('two announcements handled in the same turn: the first one wins, the second is a conflict, whatever the timing', async () => {
     const A = (await repWorld(['A', 'B'], { autoStart: false })); w = A;
-    const dirB = new InterimDirectory(realFs, tmp('dir-'), { self: A.ids.B.deviceId, sign: (m) => signWith(A.ids.B, m), knows: () => true, verify: () => true });
+    const dirB = new LegacyDirectory(realFs, tmp('dir-'), { self: A.ids.B.deviceId, sign: (m) => signWith(A.ids.B, m), knows: () => true, verify: () => true }, { setId: Buffer.alloc(32) });
     const V = wireId('f4a');
     const mk = (who: string) => { const b = { version: V, chatId: 'c', runtime: 'claude-code' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: A.ids[who].deviceId }; return { ...b, sig: signWith(A.ids[who], introMessage(b)) }; };
     const results = await Promise.all([dirB.accept(mk('A')), dirB.accept(mk('B'))]);
@@ -275,7 +276,7 @@ describe('F4 the interim directory decides first-wins at once and remembers a co
     await world.create('A', V); await world.settle();
     sendLive(world, KIND_INTRO, intro(world, 'M', V, CHAT), 'B');
     await vi.waitFor(async () => expect(await st(world, 'B', V)).toBe('faulted(directory-conflict)'));
-    await world.devs.A.rep.appendLocal(V, lineSet(3));
+    await world.append('A', V, lineSet(3));
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(3));
     expect(await st(world, 'B', V)).toBe('faulted(directory-conflict)');
     await world.restart('B'); await world.settle();
@@ -297,15 +298,15 @@ describe('F5 lines over the old read budget', () => {
     w = await repWorld(['A', 'B']); const world = w; const V = wireId('f5a');
     await world.create('A', V);
     const huge = Buffer.concat([Buffer.from('{"type":"user","message":{"content":"'), Buffer.alloc(65 * 1024 * 1024, 0x61), Buffer.from('"}}\n')]);
-    await expect(world.devs.A.rep.appendLocal(V, [huge])).rejects.toThrow(/line-too-large/);
+    await expect(world.append('A', V, [huge])).rejects.toThrow(/line-too-large/);
     expect((await headOf(world, 'A', V)).lines).toBe(0);
   }, 120_000);
   it('a 17 MiB line catches up through want (the device was away, the relay forgot), and the stall has a name while it works', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 30_000, stallMs: 10_000 }); const world = w; const V = wireId('f5b');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(2)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(2)); await world.settle();
     world.devs.B.carrier.setOnline(false);
     const big = Buffer.concat([Buffer.from('{"type":"user","message":{"content":"'), Buffer.alloc(17 * 1024 * 1024, 0x63), Buffer.from('"}}\n')]);
-    await world.devs.A.rep.appendLocal(V, [big, ...lineSet(1, 'tail', 3)]); await world.settle(60_000);
+    await world.append('A', V, [big, ...lineSet(1, 'tail', 3)]); await world.settle(60_000);
     world.hub.releaseThrough(chatGroup(world.setId, CHAT), 1_000_000);
     world.devs.B.carrier.setOnline(true);
     await vi.waitFor(async () => { await world.clock.advance(5_000); expect((await headOf(world, 'B', V)).lines).toBe(4); }, { timeout: 280_000, interval: 500 });
@@ -350,13 +351,13 @@ describe('F6 a paired hostile device cannot make a device do unbounded work', ()
   });
   it('one peer pinning a huge declared line cannot block a real large line, and an abandoned reassembly is released by a timer', async () => {
     w = await withHostile(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f6d');
-    await world.create('A', V); const ls = lineSet(3); await world.devs.A.rep.appendLocal(V, ls); await world.settle();
+    await world.create('A', V); const ls = lineSet(3); await world.append('A', V, ls); await world.settle();
     const hash = Buffer.from((await headOf(world, 'A', V)).hash, 'hex');
     const head = { lines: 3, hash, sig: signWith(world.ids.A, headMessage(V, 3, hash)) }; // a genuine, replayed head
     const of = 128; const total = of * PART_BYTES - 10;
     await world.devs.M.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 2, lines: [Buffer.alloc(PART_BYTES, 1)], head, part: { index: 0, of, totalBytes: total } }) }); await world.settle();
     const big = Buffer.concat([Buffer.from('{"type":"user","message":{"content":"'), Buffer.alloc(3 * 1024 * 1024, 0x61), Buffer.from('"}}\n')]);
-    await world.devs.A.rep.appendLocal(V, [big]);
+    await world.append('A', V, [big]);
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(4), { timeout: 60_000 });
     await world.clock.advance(120_000); await world.settle();
     expect(world.devs.B.rep.stateSizes().reassemblyBytes).toBe(0);
@@ -366,7 +367,7 @@ describe('F6 a paired hostile device cannot make a device do unbounded work', ()
 describe('F6 parts out of order', () => {
   it('parts that arrive out of order never complete a line and never flip the version to diverged (the ordering check is the only defence here)', async () => {
     w = await withHostile(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f6p');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(3)); await world.settle();
     const hash = Buffer.from((await headOf(world, 'A', V)).hash, 'hex');
     const head = { lines: 3, hash, sig: signWith(world.ids.A, headMessage(V, 3, hash)) };
     const total = 2 * PART_BYTES + 10; const sizes = [PART_BYTES, PART_BYTES, 10];
@@ -381,10 +382,10 @@ describe('F6 parts out of order', () => {
 describe('F6/F8 a child waiting for its parent is not adopted again for every message', () => {
   it('two hundred naks about the parent cause a bounded number of adoptions of the waiting child (the unbounded backlog behind review seed 3040)', async () => {
     w = await withHostile(['A', 'B'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('f6e');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
     // B knows the version but holds none of it (the relay drops what A sends), so a child forked at line 4 has to wait for its parent
     world.hub.holdFilter = () => 'drop';
-    await world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4)); await world.settle();
+    await world.append('A', V, lineSet(1, 'x', 4)); await world.settle();
     const hash = (await headOf(world, 'A', V)); void hash;
     const forkHash = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 5)) as string, 'hex');
     const token = 'wait'; const child = (await import('../../src/main/mesh/store')).deriveForkId(V, 5, forkHash.toString('hex'), token);
@@ -403,9 +404,9 @@ describe('F6/F8 a child waiting for its parent is not adopted again for every me
 describe('F6/F8 a peer that cannot serve is not asked again in a hot loop (found by fuzz seed 815612; review T13/T14)', () => {
   it('when the only peer that is online answers "unavailable" every time and no time passes, the asker sends a bounded number of frames', async () => {
     w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('f6h');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(6)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(6)); await world.settle();
     world.devs.B.carrier.setOnline(false);
-    await world.devs.A.rep.appendLocal(V, lineSet(2, 'more', 6)); await world.settle();
+    await world.append('A', V, lineSet(2, 'more', 6)); await world.settle();
     await vi.waitFor(async () => expect((await headOf(world, 'C', V)).lines).toBe(8));
     fs.rmSync(nodePath.join(world.dirs.C, 'replicator', 'heads'), { recursive: true, force: true });
     await world.restart('C'); // C keeps the lines but has lost its saved signed points: it can only say unavailable
@@ -421,9 +422,9 @@ describe('F6/F8 a peer that cannot serve is not asked again in a hot loop (found
   }, 60_000);
   it('a child waiting for a parent that nobody can serve does not make the devices ping-pong either', async () => {
     w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('f6i');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
     world.hub.holdFilter = () => 'drop'; // B and C get nothing more from the relay
-    await world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4)); await world.settle();
+    await world.append('A', V, lineSet(1, 'x', 4)); await world.settle();
     const forkHash = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 5)) as string, 'hex');
     const child = (await import('../../src/main/mesh/store')).deriveForkId(V, 5, forkHash.toString('hex'), 'pp');
     await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 5, forkHash, token: 'pp' });
@@ -439,7 +440,7 @@ describe('F6/F8 a peer that cannot serve is not asked again in a hot loop (found
 describe('F7 status never says in-sync when it cannot know', () => {
   it('a peer that says it is repairing, and a peer whose claims are too old, each get their own named state', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f7');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4));
+    await world.create('A', V); await world.append('A', V, lineSet(4));
     await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('in-sync')); await world.settle();
     const bHash = Buffer.from((await headOf(world, 'B', V)).hash, 'hex');
     world.devs.B.link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 2, hash: bHash, conversationHash: Buffer.alloc(32), stamp: 3, state: 'refilling' }] }) });
@@ -459,13 +460,13 @@ describe('F8 a store call that never answers ends in a named state', () => {
     const lv = (await world.localOf('A', V)) as Buffer;
     const orig = world.devs.A.store.head.bind(world.devs.A.store);
     (world.devs.A.store as unknown as { head: unknown }).head = (id: Buffer, ...r: unknown[]) => (id.equals(lv) ? new Promise(() => undefined) : (orig as (...x: unknown[]) => Promise<unknown>)(id, ...r));
-    void world.devs.A.rep.appendLocal(V, lineSet(1)).catch(() => undefined);
+    void world.append('A', V, lineSet(1)).catch(() => undefined);
     await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('stuck(store-call-blocked)'));
-    await world.devs.A.rep.appendLocal(U, lineSet(2)); // another version is not held up
+    await world.append('A', U, lineSet(2)); // another version is not held up
     expect((await headOf(world, 'A', U)).lines).toBe(2);
     // and the SAME version's queue moved on: once the store answers again, the next step on it runs (it would wait behind the hung one forever without the ceiling)
     (world.devs.A.store as unknown as { head: unknown }).head = orig;
-    await world.devs.A.rep.appendLocal(V, lineSet(1, 'again'));
+    await world.append('A', V, lineSet(1, 'again'));
     expect((await headOf(world, 'A', V)).lines).toBeGreaterThanOrEqual(1);
   });
 });
@@ -473,7 +474,7 @@ describe('F8 a store call that never answers ends in a named state', () => {
 describe('F9 rot at rest is found by the replicator itself', () => {
   it('a rotted line nobody reads is found by the background scrub and healed from a peer', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000, scrubEveryMs: 30_000 } as never); const world = w; const V = wireId('f9');
-    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(8));
+    await world.create('A', V); await world.append('A', V, lineSet(8));
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(8)); await world.settle();
     await world.restart('B'); await world.elapse(60_000, 30_000); // the store's own scrub-on-open has now passed over everything
     // the file rots WHILE the store is open and nobody reads it: the store's scrub mark is already past it

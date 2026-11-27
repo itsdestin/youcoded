@@ -28,7 +28,7 @@ const p95 = (xs: number[]): number => [...xs].sort((a, b) => a - b)[Math.max(0, 
 
 describe.skipIf(!enabled || !avail.ok)('replicator rig: two jailed backends and the real relay', () => {
   let root = ''; let relay: Relay; const devs: Record<string, Device> = {}; const opts: Record<string, DeviceOptions> = {};
-  const V = randomBytes(32).toString('hex');
+  let V = randomBytes(32).toString('hex'); // replaced by the DERIVED id the create call returns
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-rep-rig-'));
     const buildDir = process.env.MESH_RIG_BUILD || path.join(root, 'build');
@@ -55,7 +55,7 @@ describe.skipIf(!enabled || !avail.ok)('replicator rig: two jailed backends and 
   }, 60_000);
 
   it('a 50-line reply written on A is readable on B in under 2 seconds (p95), line by line', async () => {
-    await devs.A.control!.post('/rep/create', { version: V, chat: 'rig:chat-1' });
+    V = (await devs.A.control!.post<{ version: string }>('/rep/create', { nonce: V, chat: 'rig:chat-1' })).version;
     await until(async () => !!(await headOf(devs.B, V)), 'B learns the version', 30_000);
     const sentAt: number[] = []; const seenAt: number[] = [];
     const watcher = (async () => { for (;;) { const h = await headOf(devs.B, V); const n = h?.lines ?? 0; const t = Date.now(); while (seenAt.length < n) seenAt.push(t); if (n >= 50) return; await sleep(15); } })();

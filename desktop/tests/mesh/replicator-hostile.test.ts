@@ -21,7 +21,7 @@ async function trio(): Promise<{ world: World; V: Buffer }> {
   w = world;
   const V = wireId('h');
   await world.create('A', V);
-  await world.devs.A.rep.appendLocal(V, lineSet(10));
+  await world.append('A', V, lineSet(10));
   await vi.waitFor(async () => { for (const n of ['B', 'C']) expect((await world.heads(n, V)).lines).toBe(10); });
   await world.settle();
   return { world, V };
@@ -63,14 +63,14 @@ describe('a paired device that is not the writer cannot put lines into my chat',
     w = await repWorld(['A', 'B']);
     const world = w; const V = wireId('p');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(5));
+    await world.append('A', V, lineSet(5));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(5));
     let drop = true;
     world.hub.holdFilter = (_d, g) => (drop && g === chatGroup(world.setId, CHAT) ? 'drop' : 'store');
-    await world.devs.A.rep.appendLocal(V, lineSet(3, 'lost', 5));
+    await world.append('A', V, lineSet(3, 'lost', 5));
     await world.settle();
     drop = false;
-    await world.devs.A.rep.appendLocal(V, lineSet(3, 'late', 8));
+    await world.append('A', V, lineSet(3, 'late', 8));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(11));
     await world.settle();
     expect(world.devs.B.rep.counters()['lines-ahead-dropped']).toBeGreaterThanOrEqual(1);
@@ -137,7 +137,7 @@ describe('acknowledgements', () => {
     await world.create('A', V);
     await world.settle();
     world.devs.B.carrier.setOnline(false);
-    await world.devs.A.rep.appendLocal(V, lineSet(4));
+    await world.append('A', V, lineSet(4));
     await world.settle();
     expect(world.hub.stored.length).toBeGreaterThan(0);
     expect(world.devs.A.rep.peerAcks(V)).toEqual([]);
@@ -151,7 +151,7 @@ describe('a copy that cannot vouch for what it holds', () => {
     await world.create('A', V);
     await world.settle();
     world.devs.B.carrier.setOnline(false);
-    await world.devs.A.rep.appendLocal(V, lineSet(8));
+    await world.append('A', V, lineSet(8));
     await vi.waitFor(async () => expect((await world.heads('C', V)).lines).toBe(8));
     await world.settle();
     // C keeps the lines but loses its record of the writer's signed heads; A goes away; B returns and can only ask C

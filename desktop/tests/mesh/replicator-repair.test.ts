@@ -25,13 +25,13 @@ describe('a copy that was rolled back or damaged', () => {
     w = await repWorld(['A', 'B']);
     const world = w; const V = wireId('rb');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(12));
+    await world.append('A', V, lineSet(12));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(12));
     await world.settle();
     await world.devs.B.store.close(); world.devs.B.rep.stop(); world.devs.B.link.stop();
     const snap = nodePath.join(world.dirs.B, 'snap'); fs.cpSync(vdir(world, 'B', V), snap, { recursive: true });
     await world.restart('B');
-    await world.devs.A.rep.appendLocal(V, lineSet(18, 'later', 12));
+    await world.append('A', V, lineSet(18, 'later', 12));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(30));
     await world.settle();
     world.devs.B.rep.stop(); world.devs.B.link.stop(); await world.devs.B.store.close();
@@ -41,6 +41,7 @@ describe('a copy that was rolled back or damaged', () => {
     expect((await b.store.head(await world.local('B', V))).rolledBack).toEqual({ from: 12, had: 30 });
     expect((await b.rep.status(V)).state).toBe('refilling');
     world.devs.A.carrier.setOnline(true);
+    await world.elapse(30_000, 2_000); // the rate limits and hold-backs between asks run on virtual time
     await vi.waitFor(async () => expect((await b.store.head(await world.local('B', V))).lines).toBe(30), { timeout: 30_000 });
     await world.settle();
     const h = await b.store.head(await world.local('B', V));
@@ -52,7 +53,7 @@ describe('a copy that was rolled back or damaged', () => {
     w = await repWorld(['A', 'B']);
     const world = w; const V = wireId('rot');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(20));
+    await world.append('A', V, lineSet(20));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(20));
     await world.settle();
     world.devs.B.rep.stop(); world.devs.B.link.stop(); await world.devs.B.store.close();
@@ -77,7 +78,7 @@ describe('two rotted lines', () => {
     w = await repWorld(['A', 'B']);
     const world = w; const V = wireId('rot2');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(10));
+    await world.append('A', V, lineSet(10));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(10));
     await world.settle();
     world.devs.A.carrier.setOnline(false);
@@ -109,7 +110,7 @@ describe('a copy that differs from the writer\'s', () => {
     await world.devs.B.store.append(await world.local('B', V), 0, 0, lineSet(6, 'other'));
     { const dir = nodePath.join(world.dirs.B, 'store', 'versions', incarnationId(V, 0).toString('hex')); const f = fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x)); if (f) { const p = nodePath.join(dir, f); const raw = fs.readFileSync(p); raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(p, raw); } } // WHY rotted bytes: lines nobody ever signed now go to a named fault (review 2, finding 5); a copy that is damaged is still set aside and recopied
     const good = lineSet(8, 'real');
-    await world.devs.A.rep.appendLocal(V, good);
+    await world.append('A', V, good);
     await vi.waitFor(async () => expect(world.devs.B.rep.counters()['retired-recopy']).toBe(1));
     await vi.waitFor(async () => expect(await world.readAll('B', V)).toEqual(good));
     await world.settle();
@@ -133,12 +134,12 @@ describe('a full disk', () => {
     w = await repWorld(['A', 'B'], { fsFor: (n) => (n === 'B' ? ffs : undefined) });
     const world = w; const V = wireId('df');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(4));
+    await world.append('A', V, lineSet(4));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(4));
     await world.settle();
     (ffs as unknown as { opts: { enospcFrom: number } }).opts.enospcFrom = ffs.allocs + 1; // the disk fills now
     const before = world.devs.A.rep.peerAcks(V).find((a) => a.holder === world.ids.B.deviceId.toString('hex'));
-    await world.devs.A.rep.appendLocal(V, lineSet(5, 'full', 4));
+    await world.append('A', V, lineSet(5, 'full', 4));
     await vi.waitFor(async () => expect((await world.devs.B.rep.status(V)).reason).toBe('disk-full'));
     await world.settle();
     expect((await world.devs.B.rep.status(V)).state).toBe('stuck');
@@ -164,12 +165,12 @@ describe('takeovers: forked versions', () => {
     w = await repWorld(['A', 'B', 'C']);
     const world = w; const V = wireId('fk');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(10));
+    await world.append('A', V, lineSet(10));
     await vi.waitFor(async () => { for (const n of ['B', 'C']) expect((await world.heads(n, V)).lines).toBe(10); });
     await world.settle();
     const sentBefore = world.hub.stored.length;
     const child = await takeover(world, V, 10, 'entry-1', 'B');
-    await world.devs.B.rep.appendLocal(child, lineSet(5, 'b', 10));
+    await world.append('B', child, lineSet(5, 'b', 10));
     await vi.waitFor(async () => { for (const n of ['A', 'C']) expect((await world.heads(n, child)).lines).toBe(15); });
     await world.settle();
     await allSame(world, child, ['A', 'B', 'C']);
@@ -178,20 +179,20 @@ describe('takeovers: forked versions', () => {
     expect(world.devs.C.rep.counters()['fork-local']).toBe(1);
     expect(world.hub.stored.length - sentBefore).toBeLessThan(6); // only the new lines (and little else) crossed the relay, not the 10 shared ones again
     expect((await world.heads('A', V)).lines).toBe(10); // the parent is untouched
-    await expect(world.devs.A.rep.appendLocal(child, lineSet(1))).rejects.toThrow('not-the-writer'); // lines of the child come from its named writer only
+    await expect(world.append('A', child, lineSet(1))).rejects.toThrow('not-the-writer'); // lines of the child come from its named writer only
   });
   it('a device in the middle of copying the parent gets the parent to the fork line first, then the child', async () => {
     w = await repWorld(['A', 'B', 'C']);
     const world = w; const V = wireId('fm');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(4));
+    await world.append('A', V, lineSet(4));
     await vi.waitFor(async () => { for (const n of ['B', 'C']) expect((await world.heads(n, V)).lines).toBe(4); });
     await world.settle();
     world.devs.C.carrier.setOnline(false);
-    await world.devs.A.rep.appendLocal(V, lineSet(6, 'more', 4));
+    await world.append('A', V, lineSet(6, 'more', 4));
     await vi.waitFor(async () => expect((await world.heads('B', V)).lines).toBe(10));
     const child = await takeover(world, V, 10, 'entry-2', 'B');
-    await world.devs.B.rep.appendLocal(child, lineSet(5, 'b', 10));
+    await world.append('B', child, lineSet(5, 'b', 10));
     await world.settle();
     world.hub.releaseThrough(chatGroup(world.setId, CHAT), 1_000_000); // C finds nothing waiting at the relay: only its peers can help
     world.devs.C.carrier.setOnline(true);
@@ -204,7 +205,7 @@ describe('takeovers: forked versions', () => {
     w = await repWorld(['A', 'B', 'C']);
     const world = w; const V = wireId('fc');
     await world.create('A', V);
-    await world.devs.A.rep.appendLocal(V, lineSet(6));
+    await world.append('A', V, lineSet(6));
     await vi.waitFor(async () => { for (const n of ['B', 'C']) expect((await world.heads(n, V)).lines).toBe(6); });
     await world.settle();
     const child = await takeover(world, V, 6, 'same-entry', 'A');
@@ -216,7 +217,7 @@ describe('takeovers: forked versions', () => {
     await vi.waitFor(async () => expect((await world.devs.C.rep.status(child)).reason).toBe('directory-conflict'));
     await world.settle();
     const aLines = lineSet(3, 'from-a', 6);
-    await world.devs.A.rep.appendLocal(child, aLines);
+    await world.append('A', child, aLines);
     const forged = lineSet(3, 'from-b', 6);
     const h0 = Buffer.from((await world.devs.B.store.hashAt(await world.local('B', V), 0, 6)) as string, 'hex');
     const fh = forged.reduce((h, l) => chainStep(h, l), h0);
@@ -236,7 +237,7 @@ describe('frames that are lost, doubled, late or out of order', () => {
     let seed = 12345; const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
     world.hub.holdFilter = () => { const r = rnd(); return r < 0.2 ? 'drop' : r < 0.35 ? 'dup' : 'store'; };
     for (const n of ['A', 'B', 'C']) world.devs[n].carrier.passFilter = () => { const r = rnd(); return r < 0.2 ? 'drop' : r < 0.3 ? 'dup' : r < 0.6 ? Math.floor(rnd() * 25) : 'deliver'; };
-    for (let i = 0; i < 12; i++) { await world.devs.A.rep.appendLocal(V, lineSet(3, `n${i}`, i * 3)); await world.clock.advance(2_000); }
+    for (let i = 0; i < 12; i++) { await world.append('A', V, lineSet(3, `n${i}`, i * 3)); await world.clock.advance(2_000); }
     world.hub.holdFilter = null;
     for (const n of ['A', 'B', 'C']) world.devs[n].carrier.passFilter = null;
     await world.elapse(180_000, 10_000);

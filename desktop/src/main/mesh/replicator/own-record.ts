@@ -1,60 +1,72 @@
-// The writer's memory of the highest head it has signed, kept in TWO places that rollbacks do not take together (review 2, finding 1):
+// The writer's memory of the highest head it has signed, kept in TWO places that partial rollbacks do not take together:
 //   * `<replicator>/own/<wire>`   inside the replicator's own folder;
 //   * `<witness>/<wire>`          a sibling folder, outside both the replicator folder and the store folder.
-// Each record is 40 bytes: line count (8, big endian) then the 32-byte chain value there. A record that is present but the wrong size is MALFORMED, never "absent": a rotted or cut-short
-// file must not read as "this writer has signed nothing".
-// WHAT EACH ROLLBACK LEAVES BEHIND: the store put back alone leaves both records above the store (the writer refuses); the replicator folder put back alone leaves the witness (the writer uses it
-// and rewrites its own); the store and the replicator folder put back together leave the witness (refused); only a restore of ALL THREE at once is invisible, and that stays the documented limit
-// (store inventory limit 4), covered by "wait to hear from the peers" in replicator.ts.
+// Each record is 44 bytes: line count (8, big endian), the 32-byte chain value there, then a CRC-32 of those 40 bytes. A record that is the wrong size or fails its checksum is BAD, never "no record" and
+// never trusted (review 3, finding 5: one flipped bit must not stop a chat for good, nor be signed as `cover`).
+// WHAT THIS IS FOR: a cheap detector for partial rollbacks (store alone, replicator folder alone, both). A whole-profile restore puts all three back together; no local record can see that, and the writer's
+// gate (replicator.ts `gateOpen`) plus the self-fork backstop (selffork.ts) handle it instead.
+// SELF-HEALING: one bad and one good record -> the good one is used and the bad one rewritten (counted). Both bad, or both good but disagreeing at the same count -> `effective` is null and the writer falls back
+// to the store's head plus the peer gate (counted, named in status); it is never a permanent refusal.
 import * as nodePath from 'node:path';
 import { reportFailure } from '../../report-failure';
 import { mkdirDurable, writeFileAtomic, type Fs } from '../store/fsio';
 
 export interface OwnRecord { lines: number; hash: string }
-type RecordRead = { kind: 'ok'; rec: OwnRecord } | { kind: 'absent' } | { kind: 'malformed' };
+type RecordRead = { kind: 'ok'; rec: OwnRecord } | { kind: 'absent' } | { kind: 'bad' };
+const RECORD_BYTES = 44;
+
+const crc32 = (b: Buffer): number => { let c = ~0; for (const x of b) { c ^= x; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
+const encode = (rec: OwnRecord): Buffer => { const b = Buffer.alloc(RECORD_BYTES); b.writeBigUInt64BE(BigInt(rec.lines), 0); Buffer.from(rec.hash, 'hex').copy(b, 8); b.writeUInt32BE(crc32(b.subarray(0, 40)), 40); return b; };
 
 async function readOne(fs: Fs, path: string): Promise<RecordRead> {
   let raw: Buffer | null;
-  try { raw = await fs.readFile(path); } catch (cause) { reportFailure({ what: 'read the writer\'s own record of its highest head (it is treated as unreadable, not as missing)', cause, where: 'mesh.replicator' }); return { kind: 'malformed' }; }
+  try { raw = await fs.readFile(path); } catch (cause) { reportFailure({ what: 'read the writer\'s own record of its highest head (treated as bad, not as missing)', cause, where: 'mesh.replicator' }); return { kind: 'bad' }; }
   if (raw === null) return { kind: 'absent' };
-  if (raw.length !== 40) return { kind: 'malformed' };
+  if (raw.length !== RECORD_BYTES || raw.readUInt32BE(40) !== crc32(raw.subarray(0, 40))) return { kind: 'bad' };
   const lines = Number(raw.readBigUInt64BE(0));
-  if (!Number.isSafeInteger(lines)) return { kind: 'malformed' };
+  if (!Number.isSafeInteger(lines)) return { kind: 'bad' };
   return { kind: 'ok', rec: { lines, hash: raw.subarray(8, 40).toString('hex') } };
 }
 
 export interface OwnEvidence {
   own: RecordRead;
   witness: RecordRead;
-  /** The record to trust: the valid one with the most lines (null when none is valid). */
+  /** The record to trust: the checksum-valid one with the most lines; null when none is usable or the two disagree at one count. */
   effective: OwnRecord | null;
   /** The valid record with FEWER lines, when both are valid and differ (its chain value must also lie on the store's chain). */
   lower: OwnRecord | null;
-  /** A record exists but cannot be read, or the two disagree about the same count: named, never "no record". */
-  problem: 'own-record-unreadable' | 'own-records-disagree' | null;
-  /** The replicator-folder record is older than, or missing next to, the witness (that folder was put back or lost). */
-  replicatorBehind: boolean;
+  /** Both records are valid and agree (or only one exists and is valid): safe to sign as `cover`. */
+  trusted: boolean;
+  /** Why `effective` is null although a record file exists: the writer then uses the store head plus the peer gate. */
+  fallback: 'own-records-unusable' | 'own-records-disagree' | null;
+  /** One record was bad and the other good: the bad one was rewritten (counted by the caller). */
+  healed: boolean;
 }
 
 export class OwnRecords {
   constructor(private readonly fs: Fs, private readonly ownDir: string, private readonly witnessDir: string) {}
-  async read(wire: Buffer): Promise<OwnEvidence> {
-    const name = wire.toString('hex');
-    const own = await readOne(this.fs, nodePath.join(this.ownDir, name));
-    const witness = await readOne(this.fs, nodePath.join(this.witnessDir, name));
+  private path(dir: string, wire: Buffer): string { return nodePath.join(dir, wire.toString('hex')); }
+  async read(wire: Buffer, heal = true): Promise<OwnEvidence> {
+    const own = await readOne(this.fs, this.path(this.ownDir, wire));
+    const witness = await readOne(this.fs, this.path(this.witnessDir, wire));
     const valid = [own, witness].flatMap((r) => (r.kind === 'ok' ? [r.rec] : []));
     valid.sort((a, b) => b.lines - a.lines);
-    let problem: OwnEvidence['problem'] = own.kind === 'malformed' || witness.kind === 'malformed' ? 'own-record-unreadable' : null;
-    if (own.kind === 'ok' && witness.kind === 'ok' && own.rec.lines === witness.rec.lines && own.rec.hash !== witness.rec.hash) problem = 'own-records-disagree';
-    const replicatorBehind = witness.kind === 'ok' && (own.kind !== 'ok' || own.rec.lines < witness.rec.lines);
-    return { own, witness, effective: valid[0] ?? null, lower: valid.length === 2 && valid[1].lines < valid[0].lines ? valid[1] : null, problem, replicatorBehind };
+    let fallback: OwnEvidence['fallback'] = null; let healed = false;
+    if (own.kind === 'ok' && witness.kind === 'ok' && own.rec.lines === witness.rec.lines && own.rec.hash !== witness.rec.hash) fallback = 'own-records-disagree';
+    else if (valid.length === 0 && (own.kind === 'bad' || witness.kind === 'bad')) fallback = 'own-records-unusable';
+    if (heal && !fallback && valid.length === 1 && (own.kind === 'bad' || witness.kind === 'bad')) {
+      // one good record: rewrite the bad one from it
+      const r = await this.save(wire, valid[0]); healed = r.ok === 2;
+    }
+    const effective = fallback ? null : (valid[0] ?? null);
+    return { own, witness, effective, lower: !fallback && valid.length === 2 && valid[1].lines < valid[0].lines ? valid[1] : null, trusted: (own.kind === 'ok' && witness.kind === 'ok' && own.rec.lines === witness.rec.lines && !fallback) || healed, fallback, healed };
   }
-  /** Write both. Each place that failed is counted; the caller says "durable but not recorded" when neither took it. */
+  /** Write both. Each place that failed is reported; the caller says "durable but not recorded" when either did not take it. */
   async save(wire: Buffer, rec: OwnRecord): Promise<{ ok: number; failed: Array<{ where: string; cause: unknown }> }> {
-    const b = Buffer.alloc(40); b.writeBigUInt64BE(BigInt(rec.lines), 0); Buffer.from(rec.hash, 'hex').copy(b, 8);
+    const b = encode(rec);
     const failed: Array<{ where: string; cause: unknown }> = []; let ok = 0;
     for (const [where, dir] of [['replicator', this.ownDir], ['witness', this.witnessDir]] as const) {
-      try { await mkdirDurable(this.fs, dir); await writeFileAtomic(this.fs, nodePath.join(dir, wire.toString('hex')), b); ok++; } catch (cause) { failed.push({ where, cause }); }
+      try { await mkdirDurable(this.fs, dir); await writeFileAtomic(this.fs, this.path(dir, wire), b); ok++; } catch (cause) { failed.push({ where, cause }); }
     }
     return { ok, failed };
   }

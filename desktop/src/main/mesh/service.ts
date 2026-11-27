@@ -35,6 +35,7 @@ import { newSetSecret } from './crypto/keys';
 import { encodeStatement, signStatement } from './crypto/generation';
 import { DeviceCore, GenBook, type Out } from './device-core';
 import { deviceIdFor, setIdFor, type DeviceIdentity } from './crypto/identity';
+import { deriveRootId } from './replicator/directory';
 import { makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, encodeEntry, seenForNextEntry, type SignedEntry } from './crypto/roster';
 import { MeshCryptoError } from './crypto/errors';
 import { relayCarrier } from './carrier-relay';
@@ -318,15 +319,24 @@ export class MeshService {
     this.#rep = await Replicator.create({
       store, link, dir: path.join(this.dir, 'replicator'), setId,
       crypto: { self: id.deviceId, sign: (m) => signWith(id, m), knows: (d) => this.roster.signKeyFor(d) !== undefined, verify: (d, m, sig) => { const k = this.roster.signKeyFor(d); return !!k && verifySig(k, m, sig); } },
-      devices: () => this.roster.activeDevices().map((d) => d.deviceId).filter((d) => !d.equals(id.deviceId)), bindIds: false, // WHY: the rig names root ids by hand; adapters will use deriveRootId (review 2, finding 4)
+      devices: () => this.roster.activeDevices().map((d) => d.deviceId).filter((d) => !d.equals(id.deviceId)), 
       discoveryMs: this.o.headsEveryMs,
     });
     await this.#rep.start();
   }
   /** TEST CONTROL (rig): the replicator's surface, so a real process can be driven the way an adapter will drive it later. */
   private get rep(): import('./replicator').Replicator { if (!this.#rep || !this.#repStore) throw new Error('the replicator is not running (needs test mode, the replicator flag and a set)'); return this.#rep; }
-  async repCreate(version: Buffer, chatId: string): Promise<void> { await this.rep.createVersion({ version, chatId, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null }); }
-  async repAppend(version: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string }> { return this.rep.appendLocal(version, lines); }
+  /** The rig's way to start a chat: the version id is DERIVED from the set, the chat, this device and a nonce (the first 16 bytes of `nonce`), like any adapter must; the derived id is returned. */
+  async repCreate(nonce: Buffer, chatId: string): Promise<Buffer> {
+    const n = nonce.subarray(0, 16); const version = deriveRootId(this.#k.setId as Buffer, chatId, this.id.deviceId, n);
+    await this.rep.createVersion({ version, chatId, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null, nonce: n });
+    return version;
+  }
+  /** The rig's append: the caller's "expected head" is this device's own current head (a real adapter keeps its own ledger of what it was told). */
+  async repAppend(version: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string; result: string }> {
+    const h = await this.#repStore!.head(await this.rep.localId(version));
+    return this.rep.appendLocal(version, lines, { lines: h.lines, hash: h.hash });
+  }
   async repHeads(): Promise<Array<{ version: string; lines: number; hash: string; conversationHash: string; state: string; status: string }>> {
     const rep = this.rep; const out = [];
     for (const e of await rep.advertised()) out.push({ version: e.version.toString('hex'), lines: e.lines, hash: e.hash.toString('hex'), conversationHash: e.conversationHash.toString('hex'), state: e.state, status: (await rep.status(e.version)).state });

@@ -13,6 +13,8 @@ import { Link } from '../../src/main/mesh/link';
 import { RosterStore } from '../../src/main/mesh/roster-store';
 import { ChatStore, type StoreOptions } from '../../src/main/mesh/store';
 import { realFs, type Fs } from '../../src/main/mesh/store/fsio';
+import { InterimDirectory } from '../../src/main/mesh/replicator/directory';
+import { LegacyDirectory } from './legacy-directory';
 import { Replicator } from '../../src/main/mesh/replicator';
 import { incarnationId } from '../../src/main/mesh/replicator/idmap';
 import type { Clock } from '../../src/main/mesh/replicator';
@@ -47,7 +49,7 @@ export class VirtualClock implements Clock {
 }
 
 export interface WDev { name: string; id: DeviceIdentity; dir: string; carrier: MemoryCarrier; link: Link; store: ChatStore; rep: Replicator; roster: RosterStore }
-export interface WorldOptions { scrubEveryMs?: number; stepLimitMs?: number; fsFor?: (name: string) => Fs | undefined; storeOpts?: StoreOptions; discoveryMs?: number; stallMs?: number; autoStart?: boolean; bindIds?: boolean }
+export interface WorldOptions { scrubEveryMs?: number; stepLimitMs?: number; fsFor?: (name: string) => Fs | undefined; storeOpts?: StoreOptions; discoveryMs?: number; stallMs?: number; autoStart?: boolean; /** true: the product's directory (root ids must be derived from the writer); default false: ids may be arbitrary (older tests) */ bound?: boolean }
 
 const secret = newSetSecret();
 
@@ -78,12 +80,15 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
       onFrame: (f) => (rep ? rep.onFrame(f) : undefined),
     });
     await link.start([]);
+    const crypto = {
+      self: ids[n].deviceId, sign: (m: Buffer) => signWith(ids[n], m), knows: (d: Buffer) => roster.signKeyFor(d) !== undefined && !roster.isRemoved(d),
+      verify: (d: Buffer, m: Buffer, s: Buffer) => { const k = roster.signKeyFor(d); return !!k && verifySig(k, m, s); },
+    };
+    const dirFs = fsx ?? realFs; const Dir = o.bound ? InterimDirectory : LegacyDirectory;
+    const directory = new Dir(dirFs, path.join(dirs[n], 'replicator'), crypto, { setId }); await directory.load();
     rep = await Replicator.create({
-      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs, scrubEveryMs: o.scrubEveryMs ?? 0, stepLimitMs: o.stepLimitMs, bindIds: o.bindIds ?? false,
-      crypto: {
-        self: ids[n].deviceId, sign: (m) => signWith(ids[n], m), knows: (d) => roster.signKeyFor(d) !== undefined && !roster.isRemoved(d),
-        verify: (d, m, s) => { const k = roster.signKeyFor(d); return !!k && verifySig(k, m, s); },
-      },
+      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs, scrubEveryMs: o.scrubEveryMs ?? 0, stepLimitMs: o.stepLimitMs, 
+      crypto, directory,
       devices: () => names.filter((x) => x !== n).map((x) => ids[x].deviceId),
     });
     carrier.onConnected(() => rep?.hello());
@@ -118,6 +123,13 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
     /** Advance the virtual clock in steps, settling in between (so timers and frames interleave the way they would). */
     async elapse(ms: number, step = 5_000, fast = false): Promise<void> {
       for (let t = 0; t < ms; t += step) { await clock.advance(Math.min(step, ms - t)); await (fast ? world.settle(20_000, 4, 3) : world.settle()); }
+    },
+    /** An append as an adapter does it: the expected head is the writer's own current head unless the test names another (the product API requires it, review 3, finding 7). */
+    async append(n: string, v: Buffer, ls: Buffer[], expected?: { lines: number; hash: string }): ReturnType<Replicator['appendLocal']> {
+      const rep = devs[n].rep;
+      let e = expected;
+      if (!e) { try { const h = await devs[n].store.head(await rep.localId(v)); e = { lines: h.lines, hash: h.hash }; } catch { /* benign (test): no copy to read a head from; the real refusal below names the cause */ e = { lines: 0, hash: '' }; } }
+      return rep.appendLocal(v, ls, e);
     },
     async create(n: string, version: Buffer, over: Partial<{ chatId: string; runtime: 'claude-code' | 'native' }> = {}): Promise<void> {
       await devs[n].rep.createVersion({ version, chatId: over.chatId ?? CHAT, runtime: over.runtime ?? 'claude-code', parent: null, forkLine: null, forkHash: null, token: null });

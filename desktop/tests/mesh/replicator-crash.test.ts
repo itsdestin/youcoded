@@ -69,7 +69,7 @@ describe('a kill at any file operation', () => {
   it('while RECEIVING lines (the store and the signed-head file): a true prefix, nothing acknowledged is lost, and it resumes', async () => {
     await sweep({ name: 'receive', names: ['A', 'B'], owner: 'B', versions: [V], run: async (world) => {
       await world.create('A', V);
-      await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.devs.A.rep.appendLocal(V, lineSet(4, 'x', 4));
+      await world.append('A', V, lineSet(4)); await world.append('A', V, lineSet(4, 'x', 4));
       await world.settle();
     } });
   }, 900_000);
@@ -78,7 +78,7 @@ describe('a kill at any file operation', () => {
       await world.create('A', V);
       await world.settle();
       world.devs.B.carrier.setOnline(false);
-      await world.devs.A.rep.appendLocal(V, lineSet(6));
+      await world.append('A', V, lineSet(6));
       await world.settle();
       world.hub.releaseThrough(chatGroup(world.setId, CHAT), 1_000_000);
       world.devs.A.carrier.setOnline(false);
@@ -91,17 +91,17 @@ describe('a kill at any file operation', () => {
     let child: Buffer = Buffer.alloc(0);
     const sc: Scenario = { name: 'fork', names: ['A', 'B', 'C'], owner: 'C', versions: [V], run: async (world) => {
       await world.create('A', V);
-      await world.devs.A.rep.appendLocal(V, lineSet(6));
+      await world.append('A', V, lineSet(6));
       await world.settle();
       const hash = (await world.devs.B.store.hashAt(await world.local('B', V), 0, 6)) as string;
       child = deriveForkId(V, 6, hash, 'crash-entry');
       await world.devs.B.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 6, forkHash: Buffer.from(hash, 'hex'), token: 'crash-entry' });
-      await world.devs.B.rep.appendLocal(child, lineSet(3, 'b', 6));
+      await world.append('B', child, lineSet(3, 'b', 6));
       await world.settle();
     } };
     // the child id depends only on the (deterministic) parent chain, so it can be named before the run: compute it once from a clean A
     const probe = await repWorld(['A']); const pv = wireId('crash');
-    await probe.create('A', pv); await probe.devs.A.rep.appendLocal(pv, lineSet(6));
+    await probe.create('A', pv); await probe.append('A', pv, lineSet(6));
     child = deriveForkId(pv, 6, (await probe.devs.A.store.hashAt(await probe.local('A', pv), 0, 6)) as string, 'crash-entry');
     await probe.stopAll();
     sc.versions = [V, child];
@@ -112,11 +112,11 @@ describe('a kill at any file operation', () => {
     // happens: B holds the writer's lines, a byte rots, B finds it, sets the copy aside and recopies.)
     await sweep({ diverges: true, name: 'retire', names: ['A', 'B'], owner: 'B', versions: [V], run: async (world) => {
       await world.create('A', V);
-      await world.devs.A.rep.appendLocal(V, lineSet(5, 'real'));
+      await world.append('A', V, lineSet(5, 'real'));
       await world.settle();
       { const dir = nodePath.join(world.dirs.B, 'store', 'versions', incarnationId(V, 0).toString('hex')); const f = fs.existsSync(dir) ? fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x)) : undefined; if (f) { const pp = nodePath.join(dir, f); const raw = fs.readFileSync(pp); if (raw.length) { raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(pp, raw); } } }
       await world.devs.B.rep.reportCorrupt(V).catch(() => undefined /* benign (test): the kill may land inside this call */);
-      await world.devs.A.rep.appendLocal(V, lineSet(2, 'more', 5));
+      await world.append('A', V, lineSet(2, 'more', 5));
       await world.settle();
     } });
   }, 900_000);

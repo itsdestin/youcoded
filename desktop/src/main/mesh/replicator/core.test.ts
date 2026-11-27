@@ -8,6 +8,7 @@ import { compareHeads, type HeadView } from './compare';
 import { ByteBudget, RateLimiter, MAX_HOLDS_PER_SECOND } from './budget';
 import { IdMap, incarnationId, MAX_INCARNATIONS, type Probe } from './idmap';
 import { SignedHeads, RECORD_BYTES, THIN_AT, UNKNOWN_SPAN, type Point } from './signed-heads';
+import { LegacyDirectory } from '../../../../tests/mesh/legacy-directory';
 import { InterimDirectory, type ReplicatorCrypto } from './directory';
 import { introMessage, type IntroBody } from './wire';
 import { FaultFs, InjectedCrash } from '../store/fault-fs';
@@ -191,16 +192,16 @@ describe('the interim directory', () => {
     const A = generateIdentity(); const B = generateIdentity();
     const ta = await tmpRoot('rep-dir-'); const tb = await tmpRoot('rep-dir-');
     try {
-      const da = new InterimDirectory(realFs, ta.dir, crypto(A, [B])); const db = new InterimDirectory(realFs, tb.dir, crypto(B, [A]));
+      const da = new LegacyDirectory(realFs, ta.dir, crypto(A, [B]), { setId: Buffer.alloc(32) }); const db = new LegacyDirectory(realFs, tb.dir, crypto(B, [A]), { setId: Buffer.alloc(32) });
       const intro = await da.announce(desc(A.deviceId));
       let changes = 0; db.onChange(() => changes++);
       expect(await db.accept(intro)).toBe('new'); expect(await db.accept(intro)).toBe('known'); expect(changes).toBe(1);
       expect(db.describe(intro.version)?.writer.equals(A.deviceId)).toBe(true);
-      const other = await new InterimDirectory(realFs, (await tmpRoot('rep-dir-')).dir, crypto(A, [B])).announce(desc(A.deviceId, { chatId: 'chat-2' }));
+      const other = await new LegacyDirectory(realFs, (await tmpRoot('rep-dir-')).dir, crypto(A, [B]), { setId: Buffer.alloc(32) }).announce(desc(A.deviceId, { chatId: 'chat-2' }));
       expect(await db.accept(other)).toBe('conflict');
       expect(db.describe(intro.version)?.chatId).toBe('chat-1');
       // restart: what was accepted is still known, and what was refused is not
-      const db2 = new InterimDirectory(realFs, tb.dir, crypto(B, [A])); await db2.load();
+      const db2 = new LegacyDirectory(realFs, tb.dir, crypto(B, [A]), { setId: Buffer.alloc(32) }); await db2.load();
       expect(db2.describe(intro.version)?.chatId).toBe('chat-1');
     } finally { await ta.cleanup(); await tb.cleanup(); }
   });
@@ -208,7 +209,7 @@ describe('the interim directory', () => {
     const A = generateIdentity(); const B = generateIdentity(); const X = generateIdentity();
     const t = await tmpRoot('rep-dir-');
     try {
-      const db = new InterimDirectory(realFs, t.dir, crypto(B, [A]));
+      const db = new LegacyDirectory(realFs, t.dir, crypto(B, [A]), { setId: Buffer.alloc(32) });
       const good = { ...desc(A.deviceId), sig: signWith(A, introMessage(desc(A.deviceId))) };
       expect(await db.accept({ ...good, sig: Buffer.alloc(64, 1) })).toBe('bad-signature');
       expect(await db.accept({ ...good, writer: X.deviceId, sig: signWith(X, introMessage(desc(X.deviceId))) })).toBe('unknown-writer');

@@ -51,15 +51,13 @@ export function deriveRootId(setId: Buffer, chatId: string, writer: Buffer, nonc
 export interface DirectoryOptions {
   /** The set this device belongs to (part of every root id). */
   setId: Buffer;
-  /** Require root ids and takeover tokens to be bound to the announcing writer. ON in the app; some legacy tests switch it off. */
-  bind: boolean;
 }
 
 export class InterimDirectory implements VersionDirectory {
   readonly #byWire = new Map<string, IntroBody>();
   readonly #conflicts = new Map<string, string>();
   #cbs: Array<(wire: Buffer) => void> = [];
-  constructor(private readonly fs: Fs, private readonly dir: string, private readonly crypto: ReplicatorCrypto, private readonly opts: DirectoryOptions = { setId: Buffer.alloc(32), bind: false }) {}
+  constructor(private readonly fs: Fs, private readonly dir: string, private readonly crypto: ReplicatorCrypto, private readonly opts: DirectoryOptions) {}
   private path(wire: Buffer): string { return nodePath.join(this.dir, 'intro', wire.toString('hex')); }
   private conflictPath(wire: Buffer): string { return nodePath.join(this.dir, 'conflict', wire.toString('hex')); }
 
@@ -82,13 +80,16 @@ export class InterimDirectory implements VersionDirectory {
     }
   }
 
+  /** A root id must be derived from its writer and nonce, a child's token must start with its writer (review 2, finding 4): an announcement for someone else's id is dropped on its face and creates no conflict.
+   *  There is no unbound mode (review 3, finding 10); only a TEST subclass may override this, to keep arbitrary ids in older tests. */
+  protected bindingOk(b: IntroBody): 'ok' | AcceptResult {
+    if (b.parent === null && (!b.nonce || !b.version.equals(deriveRootId(this.opts.setId, b.chatId, b.writer, b.nonce)))) return 'bad-root-id';
+    if (b.parent !== null && !(b.token as string).startsWith(`${b.writer.toString('hex')}:`)) return 'bad-token';
+    return 'ok';
+  }
   private check(b: IntroBody): 'ok' | AcceptResult {
     if (b.parent !== null && !b.version.equals(deriveForkId(b.parent, b.forkLine as number, (b.forkHash as Buffer).toString('hex'), b.token as string))) return 'bad-fork-id';
-    if (this.opts.bind) {
-      // finding 4: the id (root) or the token (child) names the writer; an announcement for someone else's id is dropped on its face and creates no conflict
-      if (b.parent === null && (!b.nonce || !b.version.equals(deriveRootId(this.opts.setId, b.chatId, b.writer, b.nonce)))) return 'bad-root-id';
-      if (b.parent !== null && !(b.token as string).startsWith(`${b.writer.toString('hex')}:`)) return 'bad-token';
-    }
+    const bound = this.bindingOk(b); if (bound !== 'ok') return bound;
     if (!this.crypto.knows(b.writer)) return 'unknown-writer';
     const { sig, ...d } = b;
     return this.crypto.verify(b.writer, introMessage(d), sig) ? 'ok' : 'bad-signature';

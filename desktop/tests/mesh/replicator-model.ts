@@ -42,7 +42,7 @@ const NAMES = ['A', 'B', 'C'];
 export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const rand = rng(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
-  const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000, bindIds: true });
+  const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000, bound: true });
   const lostIntro = new Set<string>(); // devices whose replicator folder (with the announcements in it) was put back
   const fsnaps: Array<{ dev: string; dir: string }> = []; // review 2: whole-folder snapshots (store, replicator, witness) of any device
   const ops: Record<string, number> = {};
@@ -117,7 +117,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       } else if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
-        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; });
+        await world.append(wr, v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; });
         note('append');
       } else if (r < 42) { const d = pick(NAMES); if (online.has(d)) { world.devs[d].carrier.setOnline(false); online.delete(d); } else { world.devs[d].carrier.setOnline(true); online.add(d); } note('toggle-link'); }
       else if (r < 48) { const d = pick(NAMES); await world.restart(d, { graceful: rand() < 0.5 }); if (!online.has(d)) world.devs[d].carrier.setOnline(false); note('restart'); }
@@ -181,7 +181,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           fs.cpSync(root, snap, { recursive: true });
           // a few lines more, so the put-back copy is genuinely older than what peers hold
           await world.restart(wr); const extra = lineSet(2, `ws${seed}-${counter++}`, O.length);
-          const ok = await world.devs[wr].rep.appendLocal(v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
+          const ok = await world.append(wr, v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
           if (ok) O.push(...extra);
           await world.elapse(30_000, 10_000, true);
           // the put-back is only a recoverable fault if an online peer holds every line the writer has acknowledged by now (the extra lines too); otherwise nothing is rolled back
@@ -211,7 +211,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       if (rand() < 0.0006) {
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string; const O = oracle.get(v.toString('hex')) as Buffer[];
         const big = Buffer.concat([Buffer.from('{"type":"user","message":{"content":"'), Buffer.alloc(17 * 1024 * 1024, 0x62), Buffer.from('"}}\n')]);
-        const ok = await world.devs[wr].rep.appendLocal(v, [big]).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
+        const ok = await world.append(wr, v, [big]).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
         if (ok) O.push(big);
         note('big-line');
       }

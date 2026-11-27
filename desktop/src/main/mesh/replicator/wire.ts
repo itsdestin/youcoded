@@ -157,12 +157,12 @@ export function parseWantBody(body: unknown): WantBody {
     if (typeof m.intro !== 'boolean') throw new RangeError('intro flag');
     let cover: SignedHead | null = null;
     if (m.cover !== undefined) { const c = asMap(m.cover, 'cover'); onlyKeys(c, ['lines', 'hash', 'sig'], 'cover'); cover = { lines: asUint(c.lines, 'cover lines'), hash: hash(c.hash, 'cover hash'), sig: asBytes(c.sig, 'cover sig', 64) }; }
-    return { version: ver(m.v), haveLines: asUint(m.have, 'have'), haveHash: hash(m.hash, 'hash'), through: m.through === null ? null : asUint(m.through, 'through'), intro: m.intro, round: m.round === undefined ? 0 : asUint(m.round, 'round', 0xffffffff), cover };
+    return { version: ver(m.v), haveLines: asUint(m.have, 'have'), haveHash: hash(m.hash, 'hash'), through: m.through === null ? null : asUint(m.through, 'through'), intro: m.intro, round: m.round === undefined ? 0 : asUint(m.round, 'round', Number.MAX_SAFE_INTEGER), cover };
   });
 }
 export const ackBodyOf = (b: AckBody): CborValue => ({ v: b.version, lines: b.lines, hash: b.hash, round: b.round, sig: b.sig });
 export function parseAckBody(body: unknown): AckBody {
-  return guard(() => { const m = asMap(body, 'ack body'); onlyKeys(m, ['v', 'lines', 'hash', 'round', 'sig'], 'ack body'); return { version: ver(m.v), lines: asUint(m.lines, 'lines'), hash: hash(m.hash, 'hash'), round: m.round === undefined ? 0 : asUint(m.round, 'round', 0xffffffff), sig: asBytes(m.sig, 'sig', 64) }; });
+  return guard(() => { const m = asMap(body, 'ack body'); onlyKeys(m, ['v', 'lines', 'hash', 'round', 'sig'], 'ack body'); return { version: ver(m.v), lines: asUint(m.lines, 'lines'), hash: hash(m.hash, 'hash'), round: m.round === undefined ? 0 : asUint(m.round, 'round', Number.MAX_SAFE_INTEGER), sig: asBytes(m.sig, 'sig', 64) }; });
 }
 export const nakBodyOf = (b: NakBody): CborValue => ({ v: b.version, at: b.at, why: b.why, mine: b.hashAtYourCount });
 export function parseNakBody(body: unknown): NakBody {
