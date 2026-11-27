@@ -14,6 +14,12 @@
 //  9. Every failure ends in a named status (`status()`), never in silence; work on one version runs one step at a time.
 // 10. Bounded memory (budget.ts) and frames of at most 1 MiB (wire.ts).
 // 11. No frame body, chat text or key material in any log or failure report; keys never leave the device (this folder only calls `sign` and `verify`).
+// 12. (reviews 1-3) THE WRITER'S GATE is best-effort and simple: it appends only while it is not behind its own checksummed records (a detector for PARTIAL rollbacks), no fresh peer claim of more lines or another
+//     chain value is still plausible (an unbacked claim is discounted after 10 minutes, its clock reset only by a batch from that device), and the process gate is open (every reachable roster device has sent its heads
+//     COMPLETELY, or nobody is reachable after 5 s). The gate latches and never expires; a status read never changes it; every refusal asks for heads again. `appendLocal` REQUIRES the head the caller last saw.
+// 13. What no local gate can see (a whole-profile restore) is made LOSSLESS, not fatal: a writer that signed two histories moves its newer lines into a second version (selffork.ts) and brings its copy of the first back
+//     to the peers' history; a contradicted peer copy is kept under a named, non-calm state and resolved on the writer's announcement. No device ever drops a line that does not exist, verified, in one of the two versions.
+// 14. A status is never calm while the writer is refusing or a copy is stalled: every refusal reason of `appendLocal` is a status (`writerGate`), and `in-sync` carries a note when the own records were rebuilt.
 // ============================================================================================================================================================================
 //
 // HOW IT WORKS, in one paragraph. Every device says what it holds (`rep.sum`, then `rep.heads` when the summaries differ). The device that is BEHIND asks the device that is ahead
@@ -484,7 +490,7 @@ export class Replicator {
     // per-page bookkeeping (review 3, finding 2): complete means EVERY page of one list arrived, not that the last one did
     if (b.page === 0 || peer.pages === null || peer.pages.of !== b.of) peer.pages = { of: b.of, seen: new Set() };
     peer.pages.seen.add(b.page);
-    if (peer.pages.seen.size === peer.pages.of) { peer.headsComplete = now; peer.pages = null; this.tryLatch(); }
+    if (peer.pages.seen.size === peer.pages.of) { peer.headsComplete = now; peer.pages = null; }
   }
   private async onIntro(peer: PeerInfo, body: ReturnType<typeof parseIntroBody>): Promise<void> {
     const r = await (this.#directory as InterimDirectory).accept?.(body);

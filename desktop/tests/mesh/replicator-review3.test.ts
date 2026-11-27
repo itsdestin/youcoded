@@ -50,14 +50,16 @@ describe('the writer gate after a start', () => {
     await down(world, 'A');
     world.devs.B.carrier.passFilter = () => 'drop'; // B's answers are lost while A starts
     await world.restart('A');
+    // (only the broadcast ask counts, not the answers to someone's sum)
     const asks: boolean[] = []; const link = world.devs.A.link; const orig = link.sendLive.bind(link);
-    link.sendLive = ((f: Parameters<typeof orig>[0]) => { if (f.kind === KIND_HEADS && (f.body as { ask: boolean }).ask) asks.push(true); return orig(f); }) as typeof orig;
-    world.devs.B.carrier.passFilter = null;
+    link.sendLive = ((f: Parameters<typeof orig>[0]) => { if (f.kind === KIND_HEADS && (f.body as { ask: boolean }).ask && !f.to) asks.push(true); return orig(f); }) as typeof orig;
     await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-waiting-for-peers/);
-    const before = asks.length;
+    await world.settle(); const before = asks.length;
     await world.elapse(3_000, 1_000, true);
-    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-waiting-for-peers|^$/).catch(() => undefined);
-    expect(asks.length).toBeGreaterThan(before); // each refusal asked the others for their heads again
+    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-waiting-for-peers/);
+    await world.settle();
+    expect(asks.length).toBeGreaterThan(before); // each refusal asked the others for their heads again (B is silent, so nothing else could have)
+    world.devs.B.carrier.passFilter = null;
     await world.elapse(8_000, 1_000, true);
     expect((await world.append('A', V, lineSet(1, 'n', 4))).result).toBe('saved'); // and it ended by itself
   }, 90_000);
@@ -120,8 +122,12 @@ describe('the unbacked-claim clock', () => {
   }
   it('a device that alternates between more and fewer lines cannot keep the writer waiting past the clock, and the status names the device', async () => {
     const { world, V, say } = await liar();
-    for (let i = 0; i < 17; i++) { say(i % 2 ? 2 : 50); await world.elapse(45_000, 15_000); await st(world, 'A', V); /* a status read between claims must not reset the clock either */ }
-    expect((await world.append('A', V, lineSet(1, 'n', 3))).result).toBe('saved');
+    for (let i = 0; i < 17; i++) {
+      if (i === 8) { say(2); await world.settle(); expect((await world.append('A', V, lineSet(1, 'mid', 3))).result).toBe('saved'); } // a "fewer" claim lets the writer write, and must not restart the clock of the "more" claims
+      else say(50 + i);
+      await world.elapse(45_000, 15_000);
+    }
+    expect((await world.append('A', V, lineSet(1, 'n', 4))).result).toBe('saved');
     expect(world.devs.A.rep.counters()['claim-discounted']).toBeGreaterThanOrEqual(1);
   }, 120_000);
   it('a claim of the SAME count with another chain value is discounted the same way, and while it holds the status names the device without saying the chat diverged', async () => {
@@ -138,7 +144,7 @@ describe('the unbacked-claim clock', () => {
 describe('signed points and covering points', () => {
   it('two loads of one version that overlap an add never lose the point that was added', async () => {
     const dir = fs.mkdtempSync(nodePath.join(fs.realpathSync('/tmp'), 'r3-sh-')); const wire = randomBytes(32);
-    const slow = { ...realFs, readFile: async (p: string) => { await new Promise((r) => setTimeout(r, 40)); return realFs.readFile(p); } };
+    let reads = 0; const slow = { ...realFs, readFile: async (p: string) => { const got = await realFs.readFile(p); if (reads++ === 0) await new Promise((r) => setTimeout(r, 150)); return got; } }; // it READS first, then is slow to answer: a stale answer // only the FIRST read is slow
     const heads = new SignedHeads(slow as typeof realFs, dir);
     const pt = { lines: 3, hash: randomBytes(32), sig: randomBytes(64), spanBytes: 10 };
     const first = heads.load(wire); const second = heads.add(wire, pt); const third = heads.load(wire);

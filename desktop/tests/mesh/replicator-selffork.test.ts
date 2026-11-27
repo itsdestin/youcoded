@@ -116,9 +116,26 @@ describe('a writer restored from a backup that chats before it hears the others'
     const token = selfForkToken(world.ids.C.deviceId, CHAT); const child = deriveForkId(V, 0, (await world.devs.B.store.hashAt(await world.local('B', V), 0, 0)) as string, token);
     const d = { version: child, chatId: CHAT, runtime: 'claude-code' as const, parent: V, forkLine: 0, forkHash: Buffer.from((await world.devs.B.store.hashAt(await world.local('B', V), 0, 0)) as string, 'hex'), token, writer: world.ids.C.deviceId, nonce: null };
     world.devs.C.link.sendLive({ group: GROUP_LIVE, kind: KIND_INTRO, body: introBodyOf({ ...d, sig: signWith(world.ids.C, introMessage(d)) }) });
+    // ... and C signs one different line for that child, so that comparing would tell B "you hold the older history" if it believed C
+    const { headMessage: hm, linesBody: lb, KIND_LINES: KL } = await import('../../src/main/mesh/replicator/wire');
+    const cl = lineSet(1, 'C-own'); const chC = chainStep(defaultChainSeeds({ chatId: CHAT, version: new Uint8Array(), segment: 0 }).raw, cl[0]);
+    await world.devs.C.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KL, line: true, to: world.ids.B.deviceId, body: lb({ version: child, from: 0, lines: cl, head: { lines: 1, hash: chC, sig: signWith(world.ids.C, hm(child, 1, chC)) } }) });
     await world.elapse(60_000, 10_000);
     expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/); // still waiting for the WRITER
     expect((await world.devs.B.store.head(await world.local('B', V))).lines).toBe(bHead.lines);
+  });
+
+  it('a child announced with a token that does not start with its writer is dropped on its face', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000, bound: true }); const world = w;
+    const { deriveRootId } = await import('../../src/main/mesh/replicator/directory');
+    const nonce = randomBytes(16); const V = deriveRootId(world.setId, CHAT, world.ids.A.deviceId, nonce);
+    await world.devs.A.rep.createVersion({ version: V, chatId: CHAT, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null, nonce });
+    await world.append('A', V, lineSet(3)); await world.settle();
+    const h0 = (await world.devs.A.store.hashAt(await world.local('A', V), 0, 0)) as string; const token = 'plain-token-without-the-writer';
+    const d = { version: deriveForkId(V, 0, h0, token), chatId: CHAT, runtime: 'claude-code' as const, parent: V, forkLine: 0, forkHash: Buffer.from(h0, 'hex'), token, writer: world.ids.A.deviceId, nonce: null };
+    world.devs.A.link.sendLive({ group: GROUP_LIVE, kind: KIND_INTRO, body: introBodyOf({ ...d, sig: signWith(world.ids.A, introMessage(d)) }) });
+    await world.settle();
+    expect(world.devs.B.rep.counters()['intro-bad-token']).toBeGreaterThanOrEqual(1);
   });
 
   it('the token marks a self-fork only for its own writer and carries a domain word, so it cannot be mistaken for a takeover', () => {
