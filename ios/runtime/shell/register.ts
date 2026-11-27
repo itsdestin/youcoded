@@ -17,4 +17,9 @@ setInAppSpawner(createInAppSpawner({
     const token = (await getGithubClient()?.getToken())?.token;
     return token ? { 'github.com': token } : {};
   },
+  // The same sign-in also says who the person is. GitHub's own no-reply address form keeps their real email private.
+  getIdentity: async () => {
+    const login = (await getGithubClient()?.status())?.login;
+    return login ? { name: login, email: `${login}@users.noreply.github.com` } : undefined;
+  },
 }));

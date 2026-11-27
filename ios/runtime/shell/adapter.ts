@@ -23,6 +23,8 @@ export interface ShellJob {
   tmp: string;
   /** host name -> sign-in token. Reaches only git's own password answer in the worker, never the shell's environment. */
   tokens: Record<string, string>;
+  /** Whose name git puts on a save when the project itself names nobody. Absent: a neutral placeholder. */
+  identity?: { name: string; email: string };
 }
 
 export interface InAppSpawnerConfig {
@@ -32,6 +34,8 @@ export interface InAppSpawnerConfig {
   tmp?: () => string;
   /** Saved sign-ins to hand the worker, looked up per command. Failure means "none". */
   getTokens?: () => Promise<Record<string, string>>;
+  /** The signed-in person, for git's "who made this save" (see ShellJob.identity). */
+  getIdentity?: () => Promise<{ name: string; email: string } | undefined>;
 }
 
 type Reply = { stdout: string; stderr: string; exitCode: number };
@@ -74,7 +78,9 @@ export function createInAppSpawner(cfg: InAppSpawnerConfig): (command: string, o
       try { tokens = (await cfg.getTokens?.()) ?? {}; } catch { /* no saved sign-in: git simply asks nobody */ }
       if (child.exitCode !== null || child.signalCode !== null) return; // stopped while we looked
       const home = cfg.home?.() ?? process.env.HOME ?? os.homedir();
-      const job: ShellJob = { script: command, cwd: String(opts.cwd ?? home), home, tmp: cfg.tmp?.() ?? os.tmpdir(), tokens };
+      let identity: ShellJob['identity'];
+      try { identity = await cfg.getIdentity?.(); } catch { /* benign: nobody is signed in, so git uses its placeholder name */ }
+      const job: ShellJob = { script: command, cwd: String(opts.cwd ?? home), home, tmp: cfg.tmp?.() ?? os.tmpdir(), tokens, identity };
       try {
         worker = new Worker(cfg.workerPath, { workerData: job });
       } catch (e) {

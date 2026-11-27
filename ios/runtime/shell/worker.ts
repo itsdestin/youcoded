@@ -51,7 +51,10 @@ const curlFetch: SecureFetch = async (url, o = {}) => {
 // --- git. The saved sign-in (if the app has one) is handed over as { host: token } and offered only to git's own
 // "what is the password for this site" question. It is never put in the environment, the command text or the output.
 const git = createGit({
-  identity: { name: 'YouCoded', email: 'you@youcoded.local' },
+  // WHY: a computer's git knows who you are from its own settings; a phone has none. A project's own name setting wins
+  // (git checks it first); otherwise the GitHub account the app is signed in to; otherwise a neutral placeholder, so a
+  // save never fails for want of a name.
+  identity: job.identity ?? { name: 'YouCoded', email: 'you@youcoded.local' },
   credentials: (url: string) => {
     let host = '';
     try { host = new URL(url).hostname; } catch { return null; }
