@@ -35,7 +35,7 @@ export interface VersionStatus { state: VState; reason: string | null; lines: nu
 export interface PeerAck { holder: string; version: string; lines: number; hash: string; signature: string; round: number; receivedAt: number }
 
 interface PeerHead { lines: number; hash: string; state: AdvertisedState; at: number; /** came from an equal summary digest, which a hostile device can echo: never evidence for the writer's own gate (review 2, finding 1) */ echo?: boolean }
-export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number; round: number }>; /** when this peer last finished sending ALL its head pages in this process (null = not yet); the writer's start-up evidence (review 2, finding 1) */ headsComplete: number | null; /** pages of the list being received (review 3) */ pages: { of: number; seen: Set<number> } | null; /** version hex -> when this peer's claim of more lines (or another chain value) was first heard; reset only by a batch from it (review 3, finding 6) */ claimSince: Map<string, number>; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
+export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number; round: number }>; /** when this peer last finished sending ALL its head pages in this process (null = not yet); the writer's start-up evidence (review 2, finding 1) */ headsComplete: number | null; /** pages of the list being received (review 3) */ pages: { of: number; seen: Set<number> } | null; /** version hex -> when this peer's claim of more lines (or another chain value) was first heard; reset only by a batch from it (review 3, finding 6) */ claimSince: Map<string, number>; /** version hex -> when the claim was FIRST heard; ends only when this device's claim is backed by held lines (absolute cap, review 4, F3) */ claimFirst: Map<string, number>; /** when anything from this device was first heard in this process (the gate waits for its heads only for a bounded time, review 4, F4) */ heardAt: number; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
 
 /** The source of lines no peer holds (the writer's own chat file, via an adapter): `resupply(wire, from, to)` gives raw lines [from, to) or null. */
 export type SourceRefill = (wire: Buffer, from: number, to: number) => Promise<Buffer[] | null>;
@@ -82,6 +82,8 @@ export interface VRun {
   ownNote: string | null;
   /** The device whose unbacked claim the append gate is no longer holding, or null. */
   discounted: string | null;
+  /** This chat is being moved into a second version (journal on disk, or the move is running): appends refuse by name and a second move cannot start (review 4, F2). */
+  selfForking: boolean;
   /** The writer's last own-record save did not reach both places: retried at the next append and scrub tick. */
   ownPending: { lines: number; hash: string } | null;
   /** This process has seen evidence the writer is at its own latest head (review 2, finding 1). Set only by `Replicator.evidence`. */
@@ -128,7 +130,9 @@ export interface RepCtx {
   /** Record a sticky fault for this version: in memory and on disk. Never cleared by this module. */
   fault(wire: Buffer, reason: string): Promise<void>;
   /** The writer's own divergence: move the lines from `p` into a second version (selffork.ts). */
-  selfFork(wire: Buffer, p: number): Promise<void>;
+  selfFork(wire: Buffer, p: number): void;
+  /** A fault that a verified writer-signed batch has shown to be stale (a peer whose copy the writer's current history extends). */
+  clearFault(wire: Buffer): Promise<void>;
 }
 
 export const hex8 = (b: Buffer): string => b.toString('hex').slice(0, 8);

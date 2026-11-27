@@ -13,8 +13,10 @@ import { createHash } from 'node:crypto';
 const SELF_FORK = 'selffork';
 
 /** The token of a self-fork announcement: the writer's id, the domain word, then the chat id (so the same divergence point in another chat derives another version). */
-export const selfForkToken = (writer: Buffer, chatId: string): string => `${writer.toString('hex')}:${SELF_FORK}:${createHash('sha256').update(chatId).digest('hex').slice(0, 16)}`;
+export const selfForkToken = (writer: Buffer, chatId: string, tail = ''): string => `${writer.toString('hex')}:${SELF_FORK}:${createHash('sha256').update(chatId).digest('hex').slice(0, 16)}${tail ? `:${tail}` : ''}`;
 export const isSelfForkToken = (writer: Buffer, token: string | null): boolean => token !== null && token.startsWith(`${writer.toString('hex')}:${SELF_FORK}:`);
 
 /** What the writer keeps on disk while it moves lines, so a crash at any file operation can be finished (never repeated wrongly): `inc` is V's incarnation when the move began. */
-export interface SelfForkJournal { p: number; hp: string; v2: string; inc: number; stage: 'start' | 'copied' }
+export interface SelfForkJournal { p: number; hp: string; v2: string; token: string; inc: number; stage: 'start' | 'copied' | 'done' }
+// WHY THE TARGET IS CHOSEN, NOT ASSUMED (review 4, F1): the id of the second version depends on the writer's head (a tail in the token) and, when a version with that id already exists here, on a counter, and the copy
+// into it is only ever made onto a version that is empty or whose content is EXACTLY the prefix being copied (same chain value at its head). Content that differs is never appended onto: a fresh id is derived instead.

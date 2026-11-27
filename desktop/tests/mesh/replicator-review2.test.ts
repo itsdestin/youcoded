@@ -230,13 +230,13 @@ describe('appendLocal after a failure that left the lines durable', () => {
   it('a store step that gave up (store-call-blocked) is cleared and shows the true count once the store answers', async () => {
     w = await repWorld(['A'], { discoveryMs: 600_000, stepLimitMs: 150 }); const world = w; const V = wireId('r2-late');
     await world.create('A', V); await world.append('A', V, lineSet(3));
-    const real = world.devs.A.store.head.bind(world.devs.A.store); let hold: (() => void) | null = null;
-    world.devs.A.store.head = (async (id: Buffer) => { await new Promise<void>((r) => { hold = r; }); return real(id); }) as typeof world.devs.A.store.head;
-    await expect(world.devs.A.rep.reportCorrupt(V)).rejects.toThrow(/store-call-blocked/);
+    const real = world.devs.A.store.head.bind(world.devs.A.store); const holds: Array<() => void> = []; const h3 = await real(await world.local('A', V)); // (an append is a step that is given up at the ceiling; a repair step is waited for, review 4)
+    world.devs.A.store.head = (async (id: Buffer) => { await new Promise<void>((r) => { holds.push(r); }); return real(id); }) as typeof world.devs.A.store.head;
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 3), { lines: 3, hash: h3.hash })).rejects.toThrow(/store-call-blocked/);
     expect(await st(world, 'A', V)).toBe('stuck(store-call-blocked)');
-    world.devs.A.store.head = real; (hold as (() => void) | null)?.();
+    world.devs.A.store.head = real; for (const r of holds) r();
     await vi.waitFor(async () => expect(await st(world, 'A', V)).not.toMatch(/^stuck/));
-    expect((await world.devs.A.rep.status(V)).lines).toBe(3);
+    expect((await world.devs.A.rep.status(V)).lines).toBe(4); // the append that was given up at the ceiling finished once the store answered: the true count
   });
 });
 

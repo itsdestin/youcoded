@@ -106,7 +106,11 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   const iAmWriter = desc.writer.equals(ctx.crypto.self);
   const end = b.from + lines.length;
   // A version with a sticky fault takes nothing more from anyone (F1/F4): the copy is kept exactly as it is, and still served.
-  if (run.fault) { ctx.bump('lines-refused-faulted'); return; }
+  // (review 4, F5) ... except that a copy faulted by a second history may be taken off the fault by ONE thing: a verified writer-signed batch that starts exactly at my head with my own chain value as its
+  // base. Its signed head is the chain over MY lines plus these, so the writer's current history contains my copy; the contradicting history no longer exists in the writer's signed line. Checked below,
+  // after the chain is verified; anything else is refused as before.
+  const staleFault = !!run.fault && (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') && !iAmWriter && b.from === head.lines && lines.length > 0;
+  if (run.fault && !staleFault) { ctx.bump('lines-refused-faulted'); return; }
   // WRITER-SIDE (review 1, F1). Lines past my own head that carry MY signature are my own lines coming back (a rolled-back or set-aside copy refilling): the signature is the proof, and they are
   // verified below exactly like any receiver's (signature, chain from a trusted base, then append). Nothing else can put lines past a writer's head, because the writer signs only what it holds.
   if (iAmWriter && end > head.lines) ctx.bump('writer-restored-from-peer');
@@ -129,6 +133,11 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     if (baseIsMine && b.from > 0 && !run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); run.diverged = 'chain-mismatch'; await ctx.want(wire, peer, { haveLines: 0 }); }
     throw new FrameReject('chain-mismatch');
   }
+  if (staleFault) {
+    // the base must be MY chain value at my head, not a value the sender told me (a remembered `lastSigned` is the sender's word until it is compared with my store)
+    if ((await ctx.store.hashAt(v.local, 0, b.from).catch(() => null /* benign: an unreadable chain value cannot show the extension; the batch is refused below */)) !== hex(base)) { ctx.bump('lines-refused-faulted'); return; }
+    await ctx.clearFault(wire); ctx.bump('fault-cleared-by-extension');
+  }
   run.lastSigned.set(peer.hex, { lines: b.head.lines, hash: b.head.hash });
   // 5. keep the signed point (a non-writer needs it to serve; the writer signs on demand)
   if (!iAmWriter) {
@@ -146,7 +155,10 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     // the sender holds at least what the writer signed in this batch (a signed statement, not a bare claim), so its entry is at least that
     const sk = wire.toString('hex'); const prev = peer.heads.get(sk);
     if (!prev || prev.lines <= b.head.lines) peer.heads.set(sk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });
-    peer.claimSince.delete(sk); // a batch from this device is the one thing that backs (or ends) its claim
+    // a batch backs a claim only if it ADVANCED my verified content (review 4, F3): a replay of lines I already hold changes nothing. The absolute clock ends only when I hold what was claimed.
+    if (end > head.lines) peer.claimSince.delete(sk);
+    const claimed = peer.heads.get(sk);
+    if (!claimed || end >= claimed.lines) peer.claimFirst.delete(sk);
     await sendAck(ctx, peer, wire, v.local);
     if (run.pull) run.pull = { ...run.pull, at: ctx.clock.now() };
     await checkRepair(ctx, wire);

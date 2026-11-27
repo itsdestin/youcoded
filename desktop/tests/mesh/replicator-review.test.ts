@@ -136,11 +136,11 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(writer-signed-two-histories\), waiting for the writer\)$/));
     expect(await world.readAll('B', V)).toEqual(keep);
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
+    // the writer's CURRENT signed history extends the peer's copy (the other history no longer exists on the writer): the next verified batch takes the peer off the fault (review 4, F5)
     await world.append('A', V, lineSet(2, 'more', 6)); await world.elapse(30_000, 10_000);
-    expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(writer-signed-two-histories\), waiting for the writer\)$/); // not cleared by the next append
-    expect(await world.readAll('B', V)).toEqual(keep);
-    await world.restart('B'); await world.settle();
-    expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(writer-signed-two-histories\), waiting for the writer\)$/); // nor by a restart
+    expect(await st(world, 'B', V)).not.toMatch(/writer-two-histories/); // (the hostile device's own unbacked claim is another matter and is named as such)
+    expect((await headOf(world, 'B', V)).lines).toBe(8);
+    expect((await world.readAll('B', V)).slice(0, 6)).toEqual(keep);
   });
   it('lines no saved writer signature covers, contradicted by the writer, are KEPT and the version goes to a named fault (a replicator folder older than the store looks exactly like this, so nothing is set aside on a guess)', async () => {
     w = await repWorld(['A', 'B']); const world = w; const V = wireId('f1e');

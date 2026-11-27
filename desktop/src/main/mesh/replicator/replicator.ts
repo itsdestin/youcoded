@@ -38,7 +38,7 @@ import { unhex } from '../store/chain';
 import { realFs, type Fs } from '../store/fsio';
 import { FrameReject, type LinkFrame } from '../link';
 import { reportFailure } from '../../report-failure';
-import { ByteBudget, CLAIM_UNBACKED_MS, INTRO_PERIOD_MS, WRITER_ALONE_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
+import { ByteBudget, CLAIM_ABSOLUTE_MS, CLAIM_UNBACKED_MS, GATE_HEADS_WAIT_MS, INTRO_PERIOD_MS, WRITER_ALONE_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
 import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
@@ -88,7 +88,7 @@ export interface ReplicatorOptions {
   stepLimitMs?: number;
 }
 
-const newRun = (): VRun => ({ rounds: [], ownNote: null, discounted: null, stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null, unavailable: new Set(), unavailableRounds: 0, ownPending: null, evidence: false });
+const newRun = (): VRun => ({ selfForking: false, rounds: [], ownNote: null, discounted: null, stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null, unavailable: new Set(), unavailableRounds: 0, ownPending: null, evidence: false });
 
 export class Replicator {
   readonly #o: ReplicatorOptions;
@@ -104,7 +104,9 @@ export class Replicator {
   #stopped = false;
   readonly #own: OwnRecords;
   readonly #selfForks: Array<{ version: Buffer; from: number; movedTo: Buffer }> = [];
-  #gate = false; // latched: the writer gate has opened in this process (never expires)
+  readonly #pendingNotes: Array<{ wire: Buffer; j: SelfForkJournal }> = [];
+  #gate = false;
+  readonly #gateDiscounted = new Set<string>(); // devices the gate stopped waiting for (named in status) // latched: the writer gate has opened in this process (never expires)
   #gateTimer: { cancel(): void } | null = null;
   #askedAt = -1e12;
   /** When this process's replicator started (virtual clock): evidence must be newer than this. */
@@ -134,7 +136,8 @@ export class Replicator {
       run: (wire, fn) => self.queue(wire, fn),
       runOf: (wire) => { const k = wire.toString('hex'); let r = self.#ctx.runs.get(k); if (!r) { r = newRun(); r.fault = self.#savedFaults.get(k) ?? null; self.#ctx.runs.set(k, r); } return r; },
       fault: (wire, reason) => self.recordFault(wire, reason),
-      selfFork: (wire, p) => self.selfForkNow(wire, p),
+      selfFork: (wire, p) => self.startSelfFork(wire, p),
+      clearFault: (wire) => self.clearFault(wire),
       localOf: (wire) => self.localOf(wire),
       bump: (c) => { self.#ctx.counters.set(c, (self.#ctx.counters.get(c) ?? 0) + 1); },
       sendLive: (kind, body, to) => o.link.sendLive({ group: GROUP_LIVE, kind, body, ...(to ? { to } : {}) }),
@@ -179,37 +182,73 @@ export class Replicator {
   private journalPath(wire: Buffer): string { return nodePath.join(this.#o.dir, 'selffork', wire.toString('hex')); }
   /** Lines moved by a self-fork in this process or found in a journal at start: `from` is where the histories parted, `movedTo` the second version. Exposed so the adapter and the control log can see both. */
   selfForks(): Array<{ version: Buffer; from: number; movedTo: Buffer }> { return this.#selfForks.map((x) => ({ ...x })); }
-  /** The writer found it signed two histories of `wire` that part at line `p`: move its lines from `p` into a second version and bring `wire` back to the history the peers hold. Crash-safe (journal), runs inside
-   *  the version's queue. Nothing is deleted: the old bytes of `wire` go to the store's aside folder like any retired copy. */
+  /** The writer found it signed two histories of `wire` that part at line `p`. Called from inside the version's own queue step, so it only marks the chat as being moved and queues the move as the NEXT step
+   *  (it must not wait for it). From the mark until the move is finished, appends refuse by name, status is never calm, and a second move cannot start (review 4, F2). */
+  private startSelfFork(wire: Buffer, p: number): void {
+    const run = this.#ctx.runOf(wire);
+    if (run.selfForking) { this.#ctx.bump('self-fork-reentry-blocked'); return; }
+    run.selfForking = true;
+    void this.queue(wire, () => this.selfForkNow(wire, p), { hold: true }).catch((e: unknown) => { reportFailure({ what: 'move this chat\'s newer lines into a second version (it is tried again)', cause: e, where: 'mesh.replicator' }); this.armSelfForkRetry(wire); });
+  }
+  /** A move that failed keeps its mark (and its journal, if it got that far) and is tried again, so the refusal is loud and never silently ends. */
+  private armSelfForkRetry(wire: Buffer): void {
+    if (this.#stopped) return;
+    this.#ctx.clock.setTimeout(() => { void this.resumeOne(wire).catch((e: unknown) => { reportFailure({ what: 'move this chat\'s newer lines into a second version (it is tried again)', cause: e, where: 'mesh.replicator' }); this.armSelfForkRetry(wire); }); }, 30_000);
+  }
+  /** Pick the id of the second version: derived from the parting point, the chain value there and a token that carries the writer's HEAD (so another rollback with other lines gets another id) and a counter.
+   *  A version with that id that already exists here is used only if it is EMPTY or its content is exactly my own lines up to its head; otherwise the counter moves on (review 4, F1). */
+  private async pickSelfForkTarget(wire: Buffer, local: Buffer, desc: VersionDescriptor, p: number, hp: string, head: Head): Promise<{ v2: Buffer; token: string }> {
+    const self = this.#ctx.crypto.self; const tail = head.hash.slice(0, 8);
+    for (let k = 0; k < 64; k++) {
+      const token = selfForkToken(self, desc.chatId, k === 0 ? tail : `${tail}-${k}`); const v2 = deriveForkId(wire, p, hp, token);
+      if (!this.#directory.describe(v2)) return { v2, token };
+      const v2v = await this.localOf(v2); if (!v2v) continue;
+      const h2 = await this.#o.store.head(v2v.local);
+      if (await this.isPrefixOf(v2v.local, h2, local, head)) return { v2, token };
+    }
+    throw new Error('self-fork: no usable second version id');
+  }
+  /** Is everything version `a` (head `ha`) holds exactly what `b` (head `hb`) holds up to the shorter of the two? Empty counts. */
+  private async isPrefixOf(a: Buffer, ha: Head, b: Buffer, hb: Head): Promise<boolean> {
+    if (ha.lines === 0) return true;
+    const n = Math.min(ha.lines, hb.lines);
+    return (await this.#o.store.hashAt(a, 0, n)) === (await this.#o.store.hashAt(b, 0, n));
+  }
+  /** Move my lines from `p` into a second version, then bring `wire` back to the peers' history. Crash-safe (journal), runs as one queued step that keeps the queue until it is done (`hold`).
+   *  Nothing is deleted: the old bytes of `wire` go to the store's aside folder like any retired copy. */
   private async selfForkNow(wire: Buffer, p: number, resume?: SelfForkJournal): Promise<void> {
-    const ctx = this.#ctx; const fs = this.#o.fs ?? realFs;
+    const ctx = this.#ctx; const fs = this.#o.fs ?? realFs; const run = ctx.runOf(wire);
     const desc = this.#directory.describe(wire); const v = await this.localOf(wire);
     if (!desc || !v) return;
+    if (resume?.stage === 'done') return;
     const head = await this.#o.store.head(v.local);
+    run.selfForking = true;
     let j = resume;
     if (!j) {
       const hp = await this.#o.store.hashAt(v.local, 0, p);
       if (hp === null || p > head.lines) throw new Error('self-fork: no chain value at the parting point');
-      const v2 = deriveForkId(wire, p, hp, selfForkToken(ctx.crypto.self, desc.chatId));
-      j = { p, hp, v2: v2.toString('hex'), inc: v.incarnation, stage: 'start' };
+      const t = await this.pickSelfForkTarget(wire, v.local, desc, p, hp, head);
+      j = { p, hp, v2: t.v2.toString('hex'), token: t.token, inc: v.incarnation, stage: 'start' };
       await mkdirDurable(fs, nodePath.dirname(this.journalPath(wire)));
       await writeFileAtomic(fs, this.journalPath(wire), Buffer.from(JSON.stringify(j)));
     }
     const v2 = Buffer.from(j.v2, 'hex');
     if (j.stage === 'start') {
       // 1. announce the second version (a fork of this one at p; the announcement is the writer-signed statement) and make its copy
-      if (!this.#directory.describe(v2)) await this.createVersion({ version: v2, chatId: desc.chatId, runtime: desc.runtime, parent: wire, forkLine: j.p, forkHash: Buffer.from(j.hp, 'hex'), token: selfForkToken(ctx.crypto.self, desc.chatId) });
+      if (!this.#directory.describe(v2)) await this.createVersion({ version: v2, chatId: desc.chatId, runtime: desc.runtime, parent: wire, forkLine: j.p, forkHash: Buffer.from(j.hp, 'hex'), token: j.token });
       else await this.adopt(v2);
       const v2v = await this.localOf(v2);
       if (!v2v) throw new Error('self-fork: the second version cannot be set up yet');
       // 2. copy my lines from p on into it (my copy of this version still holds them: it is retired only after this)
       for (;;) {
         const h2 = await this.#o.store.head(v2v.local);
+        // THE CLASS GUARD (review 4, F1): lines are appended to the target only while what it holds is exactly my own content up to its head
+        if (!(await this.isPrefixOf(v2v.local, h2, v.local, head))) throw new Error('self-fork: the second version holds other lines than mine; nothing is appended onto it');
         if (h2.lines >= head.lines) break;
         const upto = Math.min(head.lines, h2.lines + 200);
         const got = await this.#o.store.read(v.local, 0, h2.lines, upto);
         if (got === 'evicted') throw new Error('self-fork: my own lines are not readable');
-        const res = await this.queue(v2, () => this.#o.store.append(v2v.local, 0, h2.lines, got));
+        const res = await this.#o.store.append(v2v.local, 0, h2.lines, got); // (inside this step already: the queue of the second version is its own, and nothing else writes it meanwhile)
         if (res !== 'ok') throw new Error(`self-fork: append answered ${res}`);
       }
       const h2 = await this.#o.store.head(v2v.local);
@@ -224,21 +263,37 @@ export class Replicator {
       this.#ctx.runOf(wire).caughtUp = false;
       await retireAndRecopy(ctx, wire, 'self-fork');
     }
-    try { await fs.unlink(this.journalPath(wire)); } catch (cause) { reportFailure({ what: 'remove the finished self-fork note', cause, where: 'mesh.replicator' }); }
+    // the note STAYS (stage `done`): it is what `selfForks()` reads after a restart, so the second version can still be shown (review 4, F9)
+    j = { ...j, stage: 'done' };
+    await writeFileAtomic(fs, this.journalPath(wire), Buffer.from(JSON.stringify(j)));
     this.#selfForks.push({ version: wire, from: j.p, movedTo: v2 });
+    run.selfForking = false;
     this.#ctx.bump('self-fork-done');
     this.#o.onSelfFork?.({ version: wire, from: j.p, movedTo: v2 });
   }
-  /** At start: finish any self-fork that a crash interrupted. */
-  private async resumeSelfForks(): Promise<void> {
+  /** At start: read every note. Finished moves are the list `selfForks()` shows; unfinished ones mark their chat as being moved BEFORE anything else can append to it (review 4, F2c). */
+  private async loadSelfForkNotes(): Promise<void> {
     const fs = this.#o.fs ?? realFs;
     for (const name of await fs.readdir(nodePath.join(this.#o.dir, 'selffork'))) {
       if (!/^[0-9a-f]{2,128}$/.test(name)) continue;
       try {
         const raw = await fs.readFile(nodePath.join(this.#o.dir, 'selffork', name)); if (!raw) continue;
         const j = JSON.parse(raw.toString('utf8')) as SelfForkJournal; const wire = Buffer.from(name, 'hex');
-        await this.queue(wire, () => this.selfForkNow(wire, j.p, j));
-      } catch (cause) { reportFailure({ what: 'finish a chat move that an earlier run began', cause, where: 'mesh.replicator' }); }
+        if (j.stage === 'done') this.#selfForks.push({ version: wire, from: j.p, movedTo: Buffer.from(j.v2, 'hex') });
+        else { this.#ctx.runOf(wire).selfForking = true; this.#pendingNotes.push({ wire, j }); }
+      } catch (cause) { reportFailure({ what: 'read a note about a chat move', cause, where: 'mesh.replicator' }); }
+    }
+  }
+  private async resumeOne(wire: Buffer): Promise<void> {
+    const fs = this.#o.fs ?? realFs;
+    const raw = await fs.readFile(this.journalPath(wire)); if (!raw) return;
+    const j = JSON.parse(raw.toString('utf8')) as SelfForkJournal;
+    await this.queue(wire, () => this.selfForkNow(wire, j.p, j), { hold: true });
+  }
+  /** At start: finish any self-fork that a crash interrupted. */
+  private async resumeSelfForks(): Promise<void> {
+    for (const { wire } of this.#pendingNotes.splice(0)) {
+      try { await this.resumeOne(wire); } catch (cause) { reportFailure({ what: 'finish a chat move that an earlier run began (it is tried again)', cause, where: 'mesh.replicator' }); this.armSelfForkRetry(wire); }
     }
   }
   /** A peer's side: a self-fork announcement for V2 (a fork of V) resolves V's named state when it shows which history this device holds (see selffork.ts). */
@@ -267,9 +322,9 @@ export class Replicator {
   }
 
   // ------------------------------------------------------------------ plumbing
-  private queue<T>(wire: Buffer, fn: () => Promise<T>): Promise<T> {
+  private queue<T>(wire: Buffer, fn: () => Promise<T>, opts: { hold?: boolean } = {}): Promise<T> {
     const k = wire.toString('hex');
-    const next = (this.#queues.get(k) ?? Promise.resolve()).then(() => this.guarded(wire, fn));
+    const next = (this.#queues.get(k) ?? Promise.resolve()).then(() => this.guarded(wire, fn, opts.hold === true));
     const tail = next.then(() => undefined, () => undefined /* benign: the step's failure goes to the caller of `next` and was reported where it happened; it must not stop the next step */);
     this.#queues.set(k, tail);
     // an idle version leaves no entry behind (F6): the map is bounded by the versions with work in flight
@@ -277,18 +332,22 @@ export class Replicator {
     return next;
   }
   /** One step of a version's queue, with a ceiling (review 1, F8): a store call that never answers ends in the named state `stuck(store-call-blocked)` and the queue moves on, instead of wedging every later step. */
-  private guarded<T>(wire: Buffer, fn: () => Promise<T>): Promise<T> {
+  private guarded<T>(wire: Buffer, fn: () => Promise<T>, hold: boolean): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      let done = false;
+      let done = false; let fired = false;
       const timer = { cancel: ((): (() => void) => { const t = setTimeout(() => {
         if (done) return;
-        done = true; this.#ctx.runOf(wire).stuck = 'store-call-blocked'; this.#ctx.bump('store-call-blocked');
-        reportFailure({ what: 'finish a step on a chat copy (the store did not answer; the step was given up)', where: 'mesh.replicator' });
+        fired = true; this.#ctx.runOf(wire).stuck = 'store-call-blocked'; this.#ctx.bump('store-call-blocked');
+        // WHY a `hold` step keeps the queue (review 4, F2): a step that CHANGES the copy for a long time (the self-fork's copy, a repair, a refill) must not let the next step run while it is still writing; its
+        // state is named (`stuck(store-call-blocked)`) and it is waited for. Steps that only read are given up as before, so one hung store call can never wedge a chat's queue for good.
+        reportFailure({ what: hold ? 'finish a long step on a chat copy (still running; later steps wait for it)' : 'finish a step on a chat copy (the store did not answer; the step was given up)', where: 'mesh.replicator' });
+        if (hold) return;
+        done = true;
         reject(new Error('store-call-blocked'));
       }, this.#o.stepLimitMs ?? QUEUE_STEP_LIMIT_MS); t.unref?.(); return () => clearTimeout(t); })() };
       // WHY the late answer clears the named state (review 2, finding 7): `stuck(store-call-blocked)` means the store has not answered; once it HAS (even long after the ceiling) the state would be a lie
       const answered = (): void => { const r = this.#ctx.runOf(wire); if (r.stuck === 'store-call-blocked') { r.stuck = null; this.#ctx.bump('store-call-answered-late'); } void this.reconsider(wire).catch((e: unknown) => reportFailure({ what: 'look at a chat copy again after its store answered late', cause: e, where: 'mesh.replicator' })); };
-      fn().then((v) => { if (!done) { done = true; timer.cancel(); resolve(v); } else answered(); }, (e: unknown) => { if (!done) { done = true; timer.cancel(); reject(e); } else answered(); });
+      fn().then((v) => { if (!done) { done = true; timer.cancel(); resolve(v); if (fired) answered(); } else answered(); }, (e: unknown) => { if (!done) { done = true; timer.cancel(); reject(e); if (fired) answered(); } else answered(); });
     });
   }
   /** Resolves when no work is queued (for tests and orderly shutdown). */
@@ -307,7 +366,7 @@ export class Replicator {
   private peerOf(id: Buffer): PeerInfo {
     const k = id.toString('hex');
     let p = this.#ctx.peers.get(k);
-    if (!p) { p = { hex: k, id, lastSeen: this.#ctx.clock.now(), heads: new Map(), acks: new Map(), headsComplete: null, pages: null, claimSince: new Map(), introAsks: 0, introPeriodStart: this.#ctx.clock.now(), answers: new RateLimiter(0.5, () => this.#ctx.clock.now(), 6) }; this.#ctx.peers.set(k, p); }
+    if (!p) { p = { hex: k, id, lastSeen: this.#ctx.clock.now(), heads: new Map(), acks: new Map(), headsComplete: null, pages: null, claimSince: new Map(), claimFirst: new Map(), heardAt: this.#ctx.clock.now(), introAsks: 0, introPeriodStart: this.#ctx.clock.now(), answers: new RateLimiter(0.5, () => this.#ctx.clock.now(), 6) }; this.#ctx.peers.set(k, p); }
     return p;
   }
 
@@ -320,6 +379,7 @@ export class Replicator {
 
   // ------------------------------------------------------------------ start, stop, connect
   async start(): Promise<void> {
+    await this.loadSelfForkNotes(); // before anything can append: a chat with an unfinished move is marked as being moved
     for (const wire of this.#directory.list()) await this.adopt(wire);
     await this.resumeSelfForks();
     for (const wire of this.#directory.list()) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
@@ -366,7 +426,7 @@ export class Replicator {
     const desc = this.#directory.describe(wire);
     if (desc) { const g = chatGroup(this.#o.setId, desc.chatId); this.#o.link.follow(g); void this.#o.link.sync(g); }
     this.#o.link.retryPending();
-    if (v) await this.queue(wire, () => checkRepair(this.#ctx, wire));
+    if (v) await this.queue(wire, () => checkRepair(this.#ctx, wire), { hold: true });
     await this.reconsider(wire);
   }
   /** Connected (or reconnected, or the timer): say what I hold. Drops everything that belonged to the old connection. */
@@ -379,7 +439,7 @@ export class Replicator {
     dropReassembly(this.#ctx);
     this.#introAsked.clear();
     // WHY here: damage the store finds on its own (a scrub, a read) is otherwise noticed only at the next append; every hello looks again
-    for (const wire of this.#directory.list()) void this.queue(wire, () => checkRepair(this.#ctx, wire)).catch((e: unknown) => reportFailure({ what: 'look over a chat copy for damage', cause: e, where: 'mesh.replicator' }));
+    for (const wire of this.#directory.list()) void this.queue(wire, () => checkRepair(this.#ctx, wire), { hold: true }).catch((e: unknown) => reportFailure({ what: 'look over a chat copy for damage', cause: e, where: 'mesh.replicator' }));
     void this.sendSum().catch((e: unknown) => reportFailure({ what: 'announce what this device holds', cause: e, where: 'mesh.replicator' }));
     this.#discovery?.cancel();
     this.#discovery = this.#ctx.clock.setTimeout(() => this.hello(), this.#o.discoveryMs ?? DEFAULT_DISCOVERY_MS);
@@ -508,7 +568,9 @@ export class Replicator {
     this.#ctx.bump(`nak-${n.why}`);
     // WHY a nak never changes a copy (invariant 4/5): it is unsigned. `not-a-prefix` only makes me ask this peer for the version from line 0, where every batch is signature-checked and `append` decides.
     if (n.why === 'not-a-prefix') {
-      run.diverged = `peer ${hex8(peer.id)} says my copy is not a prefix of theirs`;
+      // an unsigned nak never changes the WRITER's view of its own chat (review 4, F8); the restart-from-zero ask below is all it can cause
+      const wd = this.#directory.describe(n.version);
+      if (!(wd && wd.writer.equals(this.#ctx.crypto.self))) run.diverged = `peer ${hex8(peer.id)} says my copy is not a prefix of theirs`;
       if (!run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); await this.want(n.version, peer, { haveLines: 0 }); }
       return;
     }
@@ -595,7 +657,7 @@ export class Replicator {
         const verdict = compareHeads(mine, { lines: ph.lines, hash: ph.hash, state: ph.state }, at);
         if (ph.state === 'ok' && ph.lines >= head.lines && !holder) holder = p;
         if (verdict.do !== 'in-sync') allSync = false;
-        if ((verdict.do === 'pull' || verdict.do === 'diverged') && ph.state === 'ok' && !p.claimSince.has(wk)) p.claimSince.set(wk, now); // the unbacked-claim clock starts when the claim is HEARD
+        if ((verdict.do === 'pull' || verdict.do === 'diverged') && ph.state === 'ok') { if (!p.claimSince.has(wk)) p.claimSince.set(wk, now); if (!p.claimFirst.has(wk)) p.claimFirst.set(wk, now); } // the unbacked-claim clock starts when the claim is HEARD
         if (verdict.do === 'in-sync' && ph.state === 'ok' && !ph.echo) inSyncPeers++; // an echoed digest is not evidence (review 2, finding 1)
         if (verdict.do === 'ignore-theirs') unsureHolders++; // a peer that is repairing may hold more than it can vouch for: it proves nothing either way
         if (verdict.do === 'pull') pulls.push(p);
@@ -628,7 +690,7 @@ export class Replicator {
       } else if (run.refill && v.desc.writer.equals(ctx.crypto.self)) await this.writerRefill(wire, v.local, run);
       await this.adoptWaitingChildren(wire);
     } catch (e) {
-      if (e instanceof StoreError && e.code === 'damaged') { await this.queue(wire, () => retireAndRecopy(ctx, wire, 'store-damaged')); return; }
+      if (e instanceof StoreError && e.code === 'damaged') { await this.queue(wire, () => retireAndRecopy(ctx, wire, 'store-damaged'), { hold: true }); return; }
       run.stuck = e instanceof StoreError ? e.code : 'reconsider-failed';
       reportFailure({ what: 'compare chat copies with the other devices', cause: e, where: 'mesh.replicator' });
     }
@@ -649,7 +711,7 @@ export class Replicator {
     const res = await this.queue(wire, () => this.#o.store.append(local, 0, r.from, lines));
     if (res !== 'ok') { run.stuck = 'refill-rejected'; return; }
     run.caughtUp = true; // the writer's own chat file is the authority on its own lines
-    await this.queue(wire, () => checkRepair(this.#ctx, wire));
+    await this.queue(wire, () => checkRepair(this.#ctx, wire), { hold: true });
   }
 
   // ------------------------------------------------------------------ for the rest of the app (adapters, the control log, the service)
@@ -671,7 +733,14 @@ export class Replicator {
     const devs = this.#o.devices();
     if (devs.length === 0) return true;
     const now = this.#ctx.clock.now();
-    const reachable = devs.flatMap((d) => { const p = this.#ctx.peers.get(d.toString('hex')); return p && p.lastSeen >= this.#startedAt && now - p.lastSeen <= REACH_MS ? [p] : []; });
+    // a device that has been heard for GATE_HEADS_WAIT_MS without sending its heads completely stops counting (review 4, F4): a chatty or broken device cannot hold the writer shut. It is counted and named
+    // (`gate-device-discounted`), and what it skips is covered by the self-fork backstop; if its heads arrive later they are honoured like anyone's.
+    const reachable = devs.flatMap((d) => {
+      const p = this.#ctx.peers.get(d.toString('hex'));
+      if (!p || p.lastSeen < this.#startedAt || now - p.lastSeen > REACH_MS) return [];
+      if ((p.headsComplete === null || p.headsComplete < this.#startedAt) && now - Math.max(p.heardAt, this.#startedAt) > GATE_HEADS_WAIT_MS) { this.#gateDiscounted.add(hex8(p.id)); return []; }
+      return [p];
+    });
     if (reachable.length === 0) return now - this.#startedAt >= WRITER_ALONE_MS;
     return reachable.every((p) => p.headsComplete !== null && p.headsComplete >= this.#startedAt);
   }
@@ -712,6 +781,7 @@ export class Replicator {
    *  append only while it could still be backed; the process-wide gate (`gateOpen`) covers a start. Every refusal re-asks the peers for heads, so none is permanent while the others are healthy. A whole-profile
    *  restore is invisible here by nature; the self-fork (selffork.ts) turns that into a second version instead of lost lines. */
   private async writerGate(wire: Buffer, v: { local: Buffer; incarnation: number }, head: Head, run: VRun, opts: { heal: boolean }): Promise<{ reason: string; device?: string } | null> {
+    if (run.selfForking) return { reason: 'self-fork-in-progress' };
     if (run.fault) return { reason: `faulted-${run.fault}` };
     if (repairFrom(head) !== null) return { reason: 'refilling' };
     const ev = await this.#own.read(wire, opts.heal);
@@ -721,7 +791,8 @@ export class Replicator {
     const eff = ev.effective;
     if (eff) {
       if (head.lines < eff.lines) return { reason: 'behind-own-signed-head' };
-      for (const rec of ev.lower ? [eff, ev.lower] : [eff]) {
+      // (only the newest record is compared with the store: the chain value is cumulative, so a match at its count proves every earlier count too; an older record needs no check of its own)
+      for (const rec of [eff]) {
         let mine: string | null = null;
         try { mine = await this.#o.store.hashAt(v.local, 0, rec.lines); } catch (e) { if (!(e instanceof StoreError && e.code === 'evicted')) throw e; mine = rec.hash; /* evicted: the chain value was lost with the index, cannot be compared here */ }
         if (mine !== rec.hash) return { reason: 'diverged-from-own-signed-head' };
@@ -730,14 +801,15 @@ export class Replicator {
     const wk = wire.toString('hex'); const now = this.#ctx.clock.now();
     for (const p of this.#ctx.peers.values()) {
       const h = p.heads.get(wk);
-      if (!h || now - h.at > PEER_FRESH_MS || h.state !== 'ok' || h.echo) continue;
+      if (!h || now - h.at > PEER_FRESH_MS || h.state !== 'ok') continue; // (an echoed claim equals my own state, so it is never against it)
       // (a claim of ZERO lines with another chain value holds no history that could contradict mine: it is only another chat's empty start, e.g. a squatter folder)
       const against = h.lines > head.lines || (h.lines === head.lines && h.lines > 0 && h.hash !== head.hash);
       if (!against) continue;
       // a claim holds appends only while it could still be backed: the clock starts at the first such claim and is reset ONLY by a batch from that device, never by the device changing its claim (finding 6)
       let since = p.claimSince.get(wk);
-      if (since === undefined) { since = now; if (opts.heal) p.claimSince.set(wk, now); }
-      if (now - since > CLAIM_UNBACKED_MS) { if (opts.heal) this.#ctx.bump('claim-discounted'); run.discounted = hex8(p.id); continue; }
+      if (since === undefined) { since = now; if (opts.heal) { p.claimSince.set(wk, now); if (!p.claimFirst.has(wk)) p.claimFirst.set(wk, now); } }
+      const first = p.claimFirst.get(wk) ?? since;
+      if (now - since > CLAIM_UNBACKED_MS || now - first > CLAIM_ABSOLUTE_MS) { if (opts.heal) this.#ctx.bump('claim-discounted'); run.discounted = hex8(p.id); continue; }
       return { reason: h.lines > head.lines ? 'behind-peer-holds-more' : 'diverged-from-peer', device: hex8(p.id) };
     }
     if (!run.evidence && !this.#gate && !this.gateOpen()) return { reason: 'waiting-for-peers' };
@@ -803,6 +875,8 @@ export class Replicator {
     const early = (state: VersionStatus['state'], reason: string): VersionStatus => ({ state, reason, lines: run.lastHead.lines, incarnation: run.lastHead.incarnation });
     const conflict = this.#directory.conflict?.(wire);
     if (conflict) return early('faulted', 'directory-conflict');
+    // a chat whose newer lines are being moved into a second version, or whose move is journaled and unfinished, is never calm (review 4, F2d)
+    if (run.selfForking) return early('refilling', 'self-fork-in-progress');
     // a copy contradicted by writer-signed lines of another history is KEPT and says what it waits for (the writer's self-fork announcement resolves it, selffork.ts); never a calm label
     if (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') return early('diverged', `writer-two-histories (${run.fault}), waiting for the writer`);
     if (run.fault) return early('faulted', run.fault);
@@ -824,6 +898,7 @@ export class Replicator {
         const g = await this.writerGate(wire, { local: cur.local, incarnation: cur.incarnation }, h3, run, { heal: false });
         if (g) {
           if (g.reason === 'waiting-for-peers') return mk('comparing', 'writer-waiting-for-peers');
+          if (g.reason === 'self-fork-in-progress') return mk('refilling', 'self-fork-in-progress');
           if (g.reason === 'behind-own-signed-head') return mk('refilling', 'behind-own-signed-head');
           if (g.reason === 'diverged-from-own-signed-head') return mk('diverged', 'diverged-from-own-signed-head');
           if (g.reason === 'behind-peer-holds-more') return mk('pulling', `peer-claims-more ${g.device}`);
@@ -864,7 +939,7 @@ export class Replicator {
       }
     }
     // in sync = I hold everything any fresh claim names (a peer that claims fewer is behind me, which is its status to name, not mine)
-    return fresh.every((h) => h.lines <= lines) ? mk('in-sync', run.ownNote ? `own-records-rebuilt-from-store (${run.ownNote})` : null) : mk('comparing');
+    return fresh.every((h) => h.lines <= lines) ? mk('in-sync', [run.ownNote ? `own-records-rebuilt-from-store (${run.ownNote})` : '', this.#gateDiscounted.size ? `gate-did-not-wait-for ${[...this.#gateDiscounted].join(',')}` : ''].filter(Boolean).join('; ') || null) : mk('comparing');
   }
 
   /** Signed statements by other devices that they hold the first `lines` lines of `wire`, in the shape of an eviction proof's acks.
@@ -914,7 +989,7 @@ export class Replicator {
   /** THE SEAM FOR READERS. The store tells damage apart only when something reads it (`read` throws `corrupt`; head().damagedFromLine can stay null past the scrub mark). A screen, an adapter or
    *  anything else that gets `corrupt` from the store for a version calls this, and the replicator scrubs, sets the repair going and asks a peer for the lines. */
   async reportCorrupt(wire: Buffer): Promise<void> {
-    await this.queue(wire, async () => { const v = await this.localOf(wire); if (v) await onCorruptRead(this.#ctx, wire, v.local); });
+    await this.queue(wire, async () => { const v = await this.localOf(wire); if (v) await onCorruptRead(this.#ctx, wire, v.local); }, { hold: true });
     await this.reconsider(wire);
   }
   /** The store's id for the current incarnation of a version (for the rig's read and verify routes). */

@@ -33,8 +33,6 @@ export interface OwnEvidence {
   witness: RecordRead;
   /** The record to trust: the checksum-valid one with the most lines; null when none is usable or the two disagree at one count. */
   effective: OwnRecord | null;
-  /** The valid record with FEWER lines, when both are valid and differ (its chain value must also lie on the store's chain). */
-  lower: OwnRecord | null;
   /** Both records are valid and agree (or only one exists and is valid): safe to sign as `cover`. */
   trusted: boolean;
   /** Why `effective` is null although a record file exists: the writer then uses the store head plus the peer gate. */
@@ -59,7 +57,7 @@ export class OwnRecords {
       const r = await this.save(wire, valid[0]); healed = r.ok === 2;
     }
     const effective = fallback ? null : (valid[0] ?? null);
-    return { own, witness, effective, lower: !fallback && valid.length === 2 && valid[1].lines < valid[0].lines ? valid[1] : null, trusted: (own.kind === 'ok' && witness.kind === 'ok' && own.rec.lines === witness.rec.lines && !fallback) || healed, fallback, healed };
+    return { own, witness, effective, trusted: (own.kind === 'ok' && witness.kind === 'ok' && own.rec.lines === witness.rec.lines && !fallback) || healed, fallback, healed };
   }
   /** Forget both records of a version (its history moved to a second version, so they describe lines it no longer holds). */
   async clear(wire: Buffer): Promise<void> {

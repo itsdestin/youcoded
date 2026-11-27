@@ -66,3 +66,8 @@ export const WRITER_ALONE_MS = 5_000;
 
 /** A peer's claim of MORE lines than the writer holds that has stayed the same, unbacked by any batch from that peer, for this long no longer blocks the writer's append (it is counted and named). */
 export const CLAIM_UNBACKED_MS = 10 * 60_000;
+
+/** A claim of more lines ends its hold on the writer after this long since it was FIRST heard, whatever happened in between (review 4, F3). */
+export const CLAIM_ABSOLUTE_MS = 30 * 60_000;
+/** The writer gate waits this long for a device it has heard to send its heads completely, then stops counting it (named, review 4, F4). */
+export const GATE_HEADS_WAIT_MS = 60_000;
