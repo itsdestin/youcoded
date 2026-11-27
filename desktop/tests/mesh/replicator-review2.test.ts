@@ -85,8 +85,9 @@ describe('a device that knows its copy is damaged acknowledges only what it can 
     const body = nodePath.join(world.dirs.B, 'store', 'versions', bl.toString('hex'), 'body-0000000000000000.bin');
     const raw = fs.readFileSync(body); raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(body, raw);
     await world.restart('B');
+    world.devs.B.carrier.passFilter = () => 'drop'; // nothing B says reaches A, so B cannot ask for a repair: what B SENDS is captured before it is encrypted
     await world.devs.B.rep.reportCorrupt(V);
-    world.devs.B.carrier.passFilter = () => 'drop'; // nothing B says reaches A, and B cannot repair itself: what B SENDS is captured before it is encrypted
+    await vi.waitFor(async () => expect((await world.devs.B.store.head(bl)).damagedFromLine).not.toBeNull()); // B has found its damage before the push comes
     const sent: number[] = []; const link = world.devs.B.link; const orig = link.sendLive.bind(link);
     link.sendLive = ((f: Parameters<typeof orig>[0]) => { if (f.kind === KIND_ACK) sent.push((f.body as { lines: number }).lines); return orig(f); }) as typeof orig;
     await world.devs.A.rep.appendLocal(V, lineSet(5, 'push', 40)); await world.settle();

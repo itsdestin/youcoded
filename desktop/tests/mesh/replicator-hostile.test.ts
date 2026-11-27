@@ -111,7 +111,7 @@ describe('acknowledgements', () => {
   it('an ack for lines the peer cannot prove on MY chain is not credited, even when its signature is good (guard: ack checked against hashAt)', async () => {
     const { world, V } = await trio();
     const bad = randomBytes(32);
-    world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 10, hash: bad, sig: signWith(world.ids.C, ackMessage(world.ids.C.deviceId, V, 10, bad)) }) });
+    world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 10, hash: bad, round: 0, sig: signWith(world.ids.C, ackMessage(world.ids.C.deviceId, V, 10, bad)) }) });
     await vi.waitFor(() => expect(world.devs.A.rep.counters()['ack-not-on-my-chain']).toBe(1));
     await world.settle();
     expect(world.devs.A.rep.peerAcks(V).some((a) => a.holder === world.ids.C.deviceId.toString('hex') && a.hash === bad.toString('hex'))).toBe(false);
@@ -119,7 +119,7 @@ describe('acknowledgements', () => {
   it('an ack with a signature that is not the sender\'s is ignored (guard: ack signature)', async () => {
     const { world, V } = await trio();
     const h = Buffer.from((await world.devs.A.store.head(await world.local('A', V))).hash, 'hex');
-    world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 10, hash: h, sig: signWith(world.ids.B, ackMessage(world.ids.C.deviceId, V, 10, h)) }) });
+    world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 10, hash: h, round: 0, sig: signWith(world.ids.B, ackMessage(world.ids.C.deviceId, V, 10, h)) }) });
     await vi.waitFor(() => expect(world.devs.A.rep.counters()['ack-bad-signature']).toBe(1));
   });
   it('acks may fall as well as rise: a peer that now acknowledges fewer lines is credited with fewer (guard: no max())', async () => {
@@ -128,7 +128,7 @@ describe('acknowledgements', () => {
     const before = world.devs.A.rep.peerAcks(V).find((a) => a.holder === cHex);
     expect(before?.lines).toBe(10);
     const h5 = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 5)) as string, 'hex');
-    world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 5, hash: h5, sig: signWith(world.ids.C, ackMessage(world.ids.C.deviceId, V, 5, h5)) }) });
+    world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_ACK, body: ackBodyOf({ version: V, lines: 5, hash: h5, round: 0, sig: signWith(world.ids.C, ackMessage(world.ids.C.deviceId, V, 5, h5)) }) });
     await vi.waitFor(() => expect(world.devs.A.rep.peerAcks(V).find((a) => a.holder === cHex)?.lines).toBe(5));
   });
   it('"the relay stored it" is not an acknowledgement: with B away, A holds no ack from B however many frames the relay keeps (guard: relay store != ack)', async () => {

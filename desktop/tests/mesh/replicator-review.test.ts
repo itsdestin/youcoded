@@ -342,7 +342,7 @@ describe('F6 a paired hostile device cannot make a device do unbounded work', ()
     for (let i = 0; i < 300; i++) {
       const v = wireId(`ghost-${i}`);
       sendLive(world, KIND_NAK, nakBodyOf({ version: v, at: 0, why: 'unavailable', hashAtYourCount: null }), 'A');
-      sendLive(world, KIND_WANT, wantBodyOf({ version: v, haveLines: 0, haveHash: Buffer.alloc(32), through: null, intro: false }), 'A');
+      sendLive(world, KIND_WANT, wantBodyOf({ version: v, haveLines: 0, haveHash: Buffer.alloc(32), through: null, intro: false, round: 0, cover: null }), 'A');
     }
     await world.settle();
     const s = world.devs.A.rep.stateSizes();
