@@ -33,13 +33,13 @@ describe('the writer gate after a start', () => {
     await world.create('A', V); await world.append('A', V, lineSet(5)); await world.settle();
     world.devs.B.rep.stop(); world.devs.C.rep.stop(); // only their links speak now
     await down(world, 'A'); await world.restart('A');
-    headsFrame(world, 'B', 0, 2, []); // B: page 1 of 2 only
+    headsFrame(world, 'B', 1, 2, []); // B: only the LAST page of two (the first never came)
     headsFrame(world, 'C', 0, 1, []);                                            // C: an empty, complete list
     await world.settle();
     await expect(world.append('A', V, lineSet(1, 'x', 5))).rejects.toThrow(/writer-waiting-for-peers/);
     expect(await st(world, 'A', V)).toBe('comparing(writer-waiting-for-peers)');
     const real = (await world.devs.A.store.head(await world.local('A', V)));
-    headsFrame(world, 'B', 1, 2, []);                                            // B's second page arrives: B has now answered completely
+    headsFrame(world, 'B', 0, 2, []); headsFrame(world, 'B', 1, 2, []);          // B's two pages now arrive in order: B has answered completely
     await world.settle();
     await vi.waitFor(async () => expect((await world.append('A', V, lineSet(1, 'x', 5), { lines: real.lines, hash: real.hash })).result).toBe('saved'));
   });
@@ -50,13 +50,16 @@ describe('the writer gate after a start', () => {
     await down(world, 'A');
     world.devs.B.carrier.passFilter = () => 'drop'; // B's answers are lost while A starts
     await world.restart('A');
-    world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 2, ask: false, heads: [] }) }); // B is heard, but has not answered completely
-    // (that frame is dropped by the filter too: B is simply silent. A is alone after the short wait.)
+    const asks: boolean[] = []; const link = world.devs.A.link; const orig = link.sendLive.bind(link);
+    link.sendLive = ((f: Parameters<typeof orig>[0]) => { if (f.kind === KIND_HEADS && (f.body as { ask: boolean }).ask) asks.push(true); return orig(f); }) as typeof orig;
     world.devs.B.carrier.passFilter = null;
-    await world.settle();
-    let refused = 0;
-    await vi.waitFor(async () => { try { await world.append('A', V, lineSet(1, 'n', 4)); } catch (e) { refused++; await world.elapse(3_000, 1_000, true); throw e; } }, { timeout: 60_000, interval: 50 });
-    expect(refused).toBeGreaterThanOrEqual(0);
+    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-waiting-for-peers/);
+    const before = asks.length;
+    await world.elapse(3_000, 1_000, true);
+    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-waiting-for-peers|^$/).catch(() => undefined);
+    expect(asks.length).toBeGreaterThan(before); // each refusal asked the others for their heads again
+    await world.elapse(8_000, 1_000, true);
+    expect((await world.append('A', V, lineSet(1, 'n', 4))).result).toBe('saved'); // and it ended by itself
   }, 90_000);
 
   it('with nobody reachable the writer waits a short, bounded time and then writes, counted as writing-alone', async () => {
@@ -117,7 +120,7 @@ describe('the unbacked-claim clock', () => {
   }
   it('a device that alternates between more and fewer lines cannot keep the writer waiting past the clock, and the status names the device', async () => {
     const { world, V, say } = await liar();
-    for (let i = 0; i < 17; i++) { say(i % 2 ? 2 : 50); await world.elapse(45_000, 15_000); }
+    for (let i = 0; i < 17; i++) { say(i % 2 ? 2 : 50); await world.elapse(45_000, 15_000); await st(world, 'A', V); /* a status read between claims must not reset the clock either */ }
     expect((await world.append('A', V, lineSet(1, 'n', 3))).result).toBe('saved');
     expect(world.devs.A.rep.counters()['claim-discounted']).toBeGreaterThanOrEqual(1);
   }, 120_000);
@@ -151,6 +154,20 @@ describe('signed points and covering points', () => {
     expect(await st(world, 'C', V)).not.toMatch(/holds-lines-without-signature/);
     expect(world.devs.C.rep.counters()['cover-fetch']).toBeGreaterThanOrEqual(1);
   }, 120_000);
+});
+
+describe('a record that could not be saved', () => {
+  it('the background check saves it again and announces the lines, without another append', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000, scrubEveryMs: 5_000 }); const world = w; const V = wireId('r3-scrub');
+    await world.create('A', V); const first = await world.append('A', V, lineSet(2)); await world.settle();
+    fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true }); fs.writeFileSync(nodePath.join(world.dirs.A, 'witness'), 'in the way');
+    expect((await world.append('A', V, lineSet(2, 'p', 2), { lines: first.lines, hash: first.hash })).result).toBe('durable-not-recorded');
+    expect(await st(world, 'A', V)).toBe('stuck(own-record-not-saved)');
+    fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { force: true });
+    await world.elapse(30_000, 5_000, true);
+    expect(await st(world, 'A', V)).not.toMatch(/^stuck/);
+    expect((await world.devs.B.store.head(await world.local('B', V))).lines).toBe(4);
+  });
 });
 
 describe('solicit rounds', () => {
