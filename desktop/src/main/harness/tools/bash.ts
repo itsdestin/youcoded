@@ -1,5 +1,6 @@
 // PTY-less exec (spec §2.3): none of the ConPTY 56-byte machinery applies —
 // that is a CC-TUI constraint, not an exec constraint.
+import { canRunPrograms } from '../../headless/host-bridge';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -108,6 +109,11 @@ function resolveOnPath(cmd: string): string | null {
 /** Windows shell preference (spec §2.3): Git Bash when present (models write
  *  bash), else PowerShell — and the tool DESCRIPTION states which is live. */
 export function detectShell(): ShellInfo {
+  // WHY (iPhone app, card #89): no program can start on an iPhone, so there is no /bin/bash to run. Commands run in the
+  // app's own built-in shell instead (handed to shell-registry.ts's spawnDetached by the iPhone build). The label starts
+  // with "bash" on purpose: it is a bash-style shell, so the working-directory tracking below applies to it unchanged.
+  // The `-c` keeps the command text as the LAST argument, which is where spawnDetached looks for it.
+  if (!canRunPrograms()) return { cmd: 'built-in', args: ['-c'], label: 'bash (built-in)' };
   if (process.platform !== 'win32') return { cmd: '/bin/bash', args: ['-c'], label: 'bash' };
   const gitBash = gitBashCandidates().find((p) => {
     try {
@@ -374,8 +380,12 @@ function bashDescription(): string {
         // between calls, nothing else about the shell does.
         'ASYMMETRY: only the working directory persists. Environment variables, aliases, ' +
         'and shell functions do NOT carry to your next call (e.g. `export FOO=bar` here is ' +
-        'gone by your next call, unless you pass `persistent_env: true` to carry exported ' +
-        'vars — not aliases/functions — forward) — every call is a fresh shell that inherits ' +
+        (canRunPrograms()
+          ? 'gone by your next call, unless you pass `persistent_env: true` to carry exported ' +
+            'vars — not aliases/functions — forward) — every call is a fresh shell that inherits '
+          // WHY (iPhone): persistent_env is refused there, so the description must not offer it.
+          : 'gone by your next call — put the export and the command that needs it in one call) — ' +
+            'every call is a fresh shell that inherits ') +
         'your `cd` and nothing else. ' +
         'Note that the other tools (Read/Edit/Write/Glob/Grep) resolve relative paths from the ' +
         'workspace root, NOT from this shell directory — prefer absolute paths with them. '
@@ -449,10 +459,23 @@ function bashDescription(): string {
     // Passwordless (NOPASSWD) sudo keeps working on EVERY platform either
     // way — nothing about this feature refuses it; this paragraph only ever
     // changes the model's own expectations, never behavior.
-    ADMIN_WORK_GUIDANCE + ' ' + adminSudoSentence() +
-    '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
+    ADMIN_WORK_GUIDANCE + ' ' +
+    // WHY (iPhone): there is no sudo to describe; the built-in shell's real abilities and gaps go here instead.
+    (canRunPrograms()
+      ? adminSudoSentence() + '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
+      : IPHONE_SHELL_PARAGRAPH)
   );
 }
+
+/** What the model is told about the iPhone's built-in shell (shown only there). Every claim is checked by
+ *  ios/runtime/shell/conformance.json, which the simulator job runs inside the real app. */
+export const IPHONE_SHELL_PARAGRAPH =
+  'THIS SHELL IS BUILT INTO THE APP, not a computer\'s: it runs inside YouCoded on an iPhone. It has about 80 common ' +
+  'commands (ls, cat, grep, sed, awk, jq, find, sort, tar, diff, curl and more) with GNU-style flags, and a built-in ' +
+  '`git` (clone, commit, diff, log, branch, merge, push). `curl` and `git` can reach the internet. It sees only the app\'s ' +
+  'Documents folder (your home) and a temp folder. There is no Python, Node, npm, pip, sudo, compiler or installer, ' +
+  'and nothing can be installed: do not ask the person to run commands for you. Output arrives all at once when the ' +
+  'command finishes. Searching a big folder is faster with the Grep tool than with grep here.';
 
 function adminSudoSentence(): string {
   const capability = getSettledAdminCapability();
@@ -534,6 +557,11 @@ export const BashTool = defineTool({
     // the warning below too, so a request that silently can't be honored still
     // gets an honest "won't persist" note instead of a false all-clear.
     const captureEnv = probe && args.persistent_env === true;
+    // WHY (iPhone): carrying variables between calls needs `compgen`/`mktemp` and a temp file the shell announces, which the
+    // built-in shell does not give. Refused in a sentence, before anything runs, rather than silently not honoured.
+    if (!canRunPrograms() && args.persistent_env) {
+      return { text: 'Bash rejected: persistent_env is not available on this iPhone (the built-in shell cannot carry variables between calls). Put the export and the command that needs it in one call.', isError: true };
+    }
     // The exact env this child is spawned with — process.env plus whatever a
     // PRIOR persistent_env call already captured, minus nothing. Doubles as the
     // diff baseline in finish(): only a var that changed FROM this becomes
@@ -595,7 +623,7 @@ export const BashTool = defineTool({
     // active for this call — never on anything the child process does.
     const envCulprits = captureEnv ? [] : unpersistedEnvCulprits(args.command);
     const envNotice = envCulprits.length
-      ? `\nNote: ${envCulprits.join(', ')} won't persist to your next Bash call (env resets each call) — pass persistent_env: true to carry it forward, or use it in this same command.`
+      ? `\nNote: ${envCulprits.join(', ')} won't persist to your next Bash call (env resets each call) — ${canRunPrograms() ? 'pass persistent_env: true to carry it forward, or use it' : 'use it'} in this same command.`
       : '';
     // G-1: an explicit background start (spec §4.1). No cwd probe, no env
     // capture (D6) — the registry runs the bare command; stdin is closed

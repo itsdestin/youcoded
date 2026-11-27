@@ -200,12 +200,17 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
       text: [
         ENV_OPEN,
         `Working directory: ${i.cwd}`,
-        `Platform: ${process.platform} (${process.arch})`,
-        // WHY said outright (2026-11-25, iPhone app): the model's habit is to reach for a shell or tell the person to
-        // run a command. On an iPhone neither exists, and saying so once stops both.
-        ...(canRunPrograms() ? [] : ['This device is an iPhone. It cannot run shell commands, git or any other program, and neither can the person using it here. Work with the file and web tools; do not ask them to run commands.']),
+        // WHY (iPhone): process.platform there is "linux" (nodejs-mobile's own answer), which is false for the phone and
+        // sent the model after Linux habits. Say what the device really is.
+        canRunPrograms() ? `Platform: ${process.platform} (${process.arch})` : 'Platform: iPhone (iOS)',
+        // WHY said outright (2026-11-25, iPhone app): the model's habit is to reach for a shell or tell the person to run a
+        // command. Updated 2026-11-26: the iPhone now has a built-in shell (the Bash tool), but it is not a computer's, and
+        // nobody can install anything, so it still must not tell the person to run commands.
+        ...(canRunPrograms() ? [] : ['This device is an iPhone. The Bash tool is a built-in shell (about 80 commands plus git; no Python, Node, installs or sudo), and the person using it cannot run commands themselves: do not ask them to. Searching a big folder is faster with the Grep tool.']),
         `Date: ${new Date().toDateString()}`,
-        i.gitSnapshot ?? gitSnapshot(i.cwd),
+        // WHY (iPhone): the git line comes from starting the real `git` program, which an iPhone cannot do, so it would always
+        // say "not a repository" — wrong for a folder the built-in git can use. Say nothing rather than something false.
+        ...(canRunPrograms() ? [i.gitSnapshot ?? gitSnapshot(i.cwd)] : []),
         `YouCoded version: ${i.appVersion}`,
         '</env>',
       ].join('\n'),

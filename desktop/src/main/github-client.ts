@@ -43,6 +43,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { resolveCommand } from './prerequisite-installer';
 import { detectGh, type FetchLike, type ExecFn } from './github-auth';
+import { canRunPrograms } from './headless/host-bridge';
 
 const execFileAsync = promisify(execFile);
 
@@ -197,6 +198,9 @@ export function createGithubClient(opts: GithubClientOpts): GithubClient {
   }
 
   async function ghToken(): Promise<string | null> {
+    // WHY (iPhone, card #89): an iPhone cannot start `gh` (no program can start there), and the built-in shell's git asks
+    // for the saved sign-in on every command. Where no program can run there is no `gh` login to borrow: answer "none".
+    if (!canRunPrograms()) return null;
     try {
       const { stdout } = await execFn('gh', ['auth', 'token'], { timeout: 10_000 });
       const t = stdout.trim();

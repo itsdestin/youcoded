@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import type { ShellRunView, ShellStopReason } from '../../shared/types';
+import { canRunPrograms } from '../headless/host-bridge';
 import { spillDirFor, sweepOldSpillFilesOnce } from './tools/spill-paths';
 import { ENV_SENTINEL, normalizeNewlines, stripAnsi, stripSentinelLines } from './tools/shell-text';
 import { RunningCalls } from './askpass/running-calls';
@@ -193,6 +194,15 @@ export async function persistedRunViews(records: PersistedShellRun[]): Promise<S
   return out;
 }
 
+/** What the iPhone build plugs in: runs one command in the app's built-in shell and returns a child-process-shaped
+ *  handle (stdout, stderr, kill(), exitCode, signalCode, 'exit' then 'close'; no pid). */
+export type InAppSpawner = (command: string, opts: SpawnOptions) => ChildProcess;
+let inAppSpawner: InAppSpawner | null = null;
+/** Called once by the iPhone backend at start-up (ios/runtime/shell/register.ts). Nothing on desktop or Android calls it. */
+export function setInAppSpawner(fn: InAppSpawner | null): void {
+  inAppSpawner = fn;
+}
+
 /** spawn() in its own process group on POSIX. Why: a plain spawn puts the
  *  shell in OUR group, so a kill reaches only the outer bash and a `node` it
  *  started lives on (spec §1 — today's Escape orphans grandchildren). Windows
@@ -206,6 +216,14 @@ export async function persistedRunViews(records: PersistedShellRun[]): Promise<S
 export function spawnDetached(cmd: string, args: string[], opts: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams;
 export function spawnDetached(cmd: string, args: string[], opts: SpawnOptions): ChildProcess;
 export function spawnDetached(cmd: string, args: string[], opts: SpawnOptions): ChildProcess {
+  // WHY (iPhone app, card #89): an iPhone may not start any program, so a command there runs inside the app's own
+  // built-in shell instead. That shell is not part of this (desktop) code: the iPhone build hands it in through
+  // setInAppSpawner (ios/runtime/shell/). Everything else — time limits, background runs, the Stop button — keeps
+  // using this one function, so it needs no iPhone version. The last argument is the command text, as with `bash -c`.
+  if (!canRunPrograms()) {
+    if (!inAppSpawner) throw new Error('this device has no way to run commands');
+    return inAppSpawner(args[args.length - 1] ?? '', opts) as ChildProcessWithoutNullStreams;
+  }
   return spawn(cmd, args, { ...opts, windowsHide: true, detached: process.platform !== 'win32' });
 }
 
@@ -215,7 +233,12 @@ export function spawnDetached(cmd: string, args: string[], opts: SpawnOptions): 
  *  immediately — callers that need the exit await `run.exited`. */
 export function killTree(child: ChildProcess, opts: { graceMs?: number } = {}): void {
   const pid = child.pid;
-  if (!pid) return;
+  if (!pid) {
+    // WHY (iPhone): the built-in shell has no process id; ending its worker thread (child.kill()) is the whole kill.
+    // Only on a device that cannot run programs: elsewhere a missing pid means "never started", where nothing is done.
+    if (!canRunPrograms()) { try { child.kill(); } catch { /* benign: the command had already finished, so there is nothing left to stop */ } }
+    return;
+  }
   if (process.platform === 'win32') {
     try {
       const tk = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
