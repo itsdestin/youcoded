@@ -43,6 +43,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const rand = rng(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
   const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000, bindIds: true });
+  const lostIntro = new Set<string>(); // devices whose replicator folder (with the announcements in it) was put back
   const fsnaps: Array<{ dev: string; dir: string }> = []; // review 2: whole-folder snapshots (store, replicator, witness) of any device
   const ops: Record<string, number> = {};
   const excuses: string[] = [];
@@ -103,6 +104,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             const lp = nodePath.join(world.dirs[dd], 'store', 'LOCK'); if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' }));
             fs.rmSync(e.dir, { recursive: true, force: true });
             await world.restart(dd, { graceful: false }); if (!online.has(dd)) world.devs[dd].carrier.setOnline(false);
+            if (kind !== 'restore-store') lostIntro.add(dd);
             note(kind);
           } else if (e) { fs.rmSync(e.dir, { recursive: true, force: true }); note('restore-skipped'); }
         } else if (writesSomething) {
@@ -115,7 +117,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       } else if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
-        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; });
+        await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; });
         note('append');
       } else if (r < 42) { const d = pick(NAMES); if (online.has(d)) { world.devs[d].carrier.setOnline(false); online.delete(d); } else { world.devs[d].carrier.setOnline(true); online.add(d); } note('toggle-link'); }
       else if (r < 48) { const d = pick(NAMES); await world.restart(d, { graceful: rand() < 0.5 }); if (!online.has(d)) world.devs[d].carrier.setOnline(false); note('restart'); }
@@ -179,7 +181,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           fs.cpSync(root, snap, { recursive: true });
           // a few lines more, so the put-back copy is genuinely older than what peers hold
           await world.restart(wr); const extra = lineSet(2, `ws${seed}-${counter++}`, O.length);
-          const ok = await world.devs[wr].rep.appendLocal(v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; return false; });
+          const ok = await world.devs[wr].rep.appendLocal(v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
           if (ok) O.push(...extra);
           await world.elapse(30_000, 10_000, true);
           // the put-back is only a recoverable fault if an online peer holds every line the writer has acknowledged by now (the extra lines too); otherwise nothing is rolled back
@@ -209,7 +211,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       if (rand() < 0.0006) {
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string; const O = oracle.get(v.toString('hex')) as Buffer[];
         const big = Buffer.concat([Buffer.from('{"type":"user","message":{"content":"'), Buffer.alloc(17 * 1024 * 1024, 0x62), Buffer.from('"}}\n')]);
-        const ok = await world.devs[wr].rep.appendLocal(v, [big]).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; return false; });
+        const ok = await world.devs[wr].rep.appendLocal(v, [big]).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
         if (ok) O.push(big);
         note('big-line');
       }
@@ -260,6 +262,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           // every device that held the lines is itself repairing or retired: all copies were damaged one fault at a time, each fault harmless alone (inventory limit 1: a fault that destroys the ONLY copy destroys it). Loud on every device, never in-sync.
           const others = await Promise.all(NAMES.filter((x) => x !== n).map((x) => world.devs[x].rep.status(v)));
           const allDamaged = (st.state === 'retired-recopy' || st.state === 'refilling') && others.every((x) => ['refilling', 'retired-recopy', 'stuck', 'faulted', 'peer-repairing'].includes(x.state));
+          // a replicator folder put back forgets announcements it never passed on: the device says `unknown` (named), never anything calmer; the peers that know the version teach it again when they are heard
+          if (st.state === 'unknown' && lostIntro.has(n)) { excuses.push(`${n}:limit:announcement-lost-with-the-replicator-folder`); continue; }
           const key = allDamaged ? 'state:all-copies-damaged' : `state:${st.state}`; excuses.push(`${n}:${v.toString('hex').slice(0, 6)}:${st.state}:${st.reason ?? ''}`);
           if (!EXCUSE_LIMITS[key] && st.state !== 'stuck') fail(`${n} ends ${st.state} (${st.reason}) with no documented limit that explains it; version #${vs.indexOf(v)} writer ${writer.get(v.toString('hex'))} oracle ${O.length} lines, ${n} holds ${h.lines} (inc ${st.incarnation}) counters ${JSON.stringify(dev.rep.counters())} peers ${JSON.stringify(dev.rep.peerView(v))}`);
           // review 2: both of a writer's own records rotted is a NAMED, loud stop (it cannot tell what it has signed); the model damages them on purpose, so only that exact reason is excused

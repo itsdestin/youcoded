@@ -89,8 +89,8 @@ describe('F2: a device that knows its copy is damaged acknowledges only what it 
     let allow = 0; world.devs.B.carrier.passFilter = () => (allow-- > 0 ? 'deliver' : 'drop'); // B's own heads cannot reach A: exactly one frame (its ack, if it sends one) may
     allow = 1; await world.devs.A.rep.appendLocal(V, lineSet(5, 'push', 40)); await world.settle();
     const bhex = world.ids.B.deviceId.toString('hex');
+    await vi.waitFor(() => expect(world.devs.A.rep.rawAcksForTests(V).some((a) => a.holder === bhex)).toBe(true)); // B did answer the push (the frame crosses the in-memory relay a moment after settle)
     const said = world.devs.A.rep.rawAcksForTests(V).filter((a) => a.holder === bhex); // what B SAID, before any listing rule hides it
-    expect(said.length).toBeGreaterThan(0); // B did answer the push
     expect(said.every((a) => a.lines < 40)).toBe(true); // B's head is 40 lines but its bytes are damaged from the middle: it may vouch for less than 40
     const acks = world.devs.A.rep.peerAcks(V).filter((a) => a.holder === bhex);
     expect(acks.every((a) => a.lines < 45)).toBe(true);

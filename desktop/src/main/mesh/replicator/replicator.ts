@@ -321,13 +321,18 @@ export class Replicator {
     const entries = await this.myEntries();
     if (ask) this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries), ask: false }), peer.id); // answer a hello with mine, once
     // WHY equal digests do not end the exchange until this peer has sent its heads once in this process: a digest can be echoed by a hostile device and proves nothing about what it HOLDS (review 2, finding 1)
-    if (digestOf(entries).equals(digest) && peer.headsComplete !== null) {
+    // ... and not for a recopied copy that still waits for a peer to be level with it, when this peer's claim about it is only an echo (that peer must say it in its own heads frame)
+    const needsHeads = entries.some((e) => { const k = e.version.toString('hex'); const r = this.#ctx.runs.get(k); const ph = peer.heads.get(k); return r !== undefined && (r.retiredRecopy || (r.lastHead.incarnation > 0 && !r.caughtUp)) && (!ph || ph.echo === true); });
+    if (digestOf(entries).equals(digest) && peer.headsComplete !== null && !needsHeads) {
       // the digest covers every (version, count, chain value, state): equal means this peer holds exactly what I hold, for every version
       this.#ctx.bump('sum-equal');
       const now = this.#ctx.clock.now();
       for (const e of entries) {
         const k = e.version.toString('hex');
-        peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now, echo: true });
+        // WHY the echo flag is kept OFF when this peer's own heads already said exactly this (review 2, finding 1): an equal digest only repeats what its heads frame said, so evidence it gave stays evidence
+        const prevE = peer.heads.get(k); const hexE = e.hash.toString('hex');
+        const backed = prevE !== undefined && !prevE.echo && prevE.lines === e.lines && prevE.hash === hexE && prevE.state === e.state;
+        peer.heads.set(k, { lines: e.lines, hash: hexE, state: e.state, at: now, ...(backed ? { since: prevE.since } : { echo: true }) });
         // a version still marked diverged or pulling is looked at again now that this peer holds exactly what I hold (a stale or forged claim no longer stands)
         const r = this.#ctx.runs.get(k);
         if (r && (r.diverged || r.pull || r.retiredRecopy || !r.caughtUp)) void this.reconsider(e.version);
