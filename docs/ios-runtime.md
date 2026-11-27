@@ -201,7 +201,15 @@ cd /tmp/ios-backend && HOME=/tmp/h YOUCODED_USER_DATA=/tmp/u YOUCODED_HOST_OS=io
 - **Mesh (`session/64-mesh-sync-build`)** merges with this branch without conflicts; the bundle builds (the Unicode
   pass picks up its extra properties by itself) and the Mesh starts on Node 18 `--jitless` in its test mode. Two
   lines there still say Android: `headless-boot.ts` passes `platform: 'android'` to `startMeshIfEnabled` (should be
-  `hostOs()`), and the Mesh accepts only `android_keystore` as a phone's secret store (the shell sends `ios_keychain`).
+  `hostOs() ?? 'android'`), and `holdSecretStoreBackend` accepts only `android_keystore` as a phone's secret store (the
+  shell sends `ios_keychain`), so the Mesh refuses to start on an iPhone. `desktop/tests/ios-mesh-ready.test.ts` is
+  skipped until the Mesh code is present and then fails until both are changed.
+  **Trial, 2026-11-27 (Mesh at 95a820193):** an iPhone-mode backend (this bundle, Node 18 `--jitless`) and a computer
+  backend, both jailed, through the real relay code run locally: pairing by typed code, notes both ways, a 300-line chat
+  copied each way, and catch-up after being offline all passed, with the test key file and (after the two changes) with the
+  real secret-store path. Not covered: the phone's own engine (no ICU), a real network, suspend and resume.
+  The owner's direction (2026-11-27): the Mesh and the backup rebuild are the phone's sync; the git panel and GitHub
+  sync are not planned for iPhone.
 - **Automations (`session/90-pages-finish`)** overlaps this branch in three files (`shared/capabilities.ts` — it adds
   `pageFiles`, which `IOS_LOCAL_CAPABILITIES` then needs; `harness/tools/index.ts`; the generated `preload.ts`).
   Its `net-guard.ts` imports `undici`, which the alias above covers. Its Claude engine (`claude -p`) cannot exist on
