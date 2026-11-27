@@ -101,6 +101,18 @@ export class SignedHeads {
     points.splice(0, points.length, ...kept);
     const e = this.#cache.get(key); if (e) e.fileRecords = kept.length;
   }
+  /** Forget the points that are NOT on this copy's chain (the batch that brought them was refused, so the lines they cover were never appended here). `chainAt(n)` is this copy's chain value after n lines, or null
+   *  beyond its head. Such a point vouches for nothing this copy holds, and a copy that keeps them stays unable to serve the lines it really has. Whole-file atomic replace. */
+  async dropOffChain(wire: Buffer, chainAt: (lines: number) => Promise<string | null>): Promise<number> {
+    const points = await this.load(wire); const key = wire.toString('hex'); const kept: Point[] = [];
+    for (const q of points) { const mine = await chainAt(q.lines).catch(() => null /* benign: no chain value at that count; the point is not backed */); if (mine === q.hash.toString('hex')) kept.push(q); }
+    if (kept.length === points.length) return 0;
+    // DESTRUCTIVE-OK(off-chain-points): the dropped points cover lines this copy does not hold; the file is replaced whole, a crash leaves the old, longer one
+    await writeFileAtomic(this.fs, this.file(wire), Buffer.concat(kept.map(encodeRecord)));
+    const dropped = points.length - kept.length; points.splice(0, points.length, ...kept);
+    const e = this.#cache.get(key); if (e) e.fileRecords = kept.length;
+    return dropped;
+  }
   /** The smallest held point above `lines`, or null. */
   async nextAfter(wire: Buffer, lines: number): Promise<Point | null> {
     for (const p of await this.load(wire)) if (p.lines > lines) return p;

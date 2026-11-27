@@ -191,6 +191,9 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   }
   // 'not-a-prefix' under a VALID writer signature: the lines I hold at those positions differ from the writer's. Find out whether my own bytes are damaged.
   ctx.bump('not-a-prefix');
+  // the batch was refused, so the signed point that came with it (saved before the append, step 5) covers lines this copy does not hold: points off this copy's chain are forgotten, or this copy would answer
+  // `unavailable` for the lines it really has (review 4 gap round, found by the self-fork schedules)
+  { const dropped = await ctx.heads.dropOffChain(wire, (n) => ctx.store.hashAt(v.local, 0, n)); if (dropped) ctx.bump('off-chain-signed-points-dropped'); }
   // the writer's SIGNED batch is evidence that the sender holds at least this much: it is what the recopy asks for
   const nk = wire.toString('hex'); const pv = peer.heads.get(nk);
   if (!pv || pv.lines <= b.head.lines) peer.heads.set(nk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });

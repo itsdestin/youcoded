@@ -369,6 +369,10 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       const group: Buffer[] = []; const collect = (x: Buffer): void => { group.push(x); for (const c of forks.get(x.toString('hex')) ?? []) collect(c); }; collect(V); void kids;
       const per = new Map<string, Array<{ lines: string[]; state: string; reason: string | null } | null>>();
       for (const n of NAMES) per.set(n, await Promise.all(group.map((gv) => linesOf(n, gv))));
+      if (process.env.MESH_REPLICATOR_DUMP) {
+        const tagOf = (l: string): string => (l.match(/(\w+-\d+) (\d+)/) ?? ['?'])[0];
+        for (const n of NAMES) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ${n} statuses ${JSON.stringify(await Promise.all(group.map(async (gv) => world.devs[n].rep.status(gv).then((x) => x.state + '/' + x.reason))))} counters ${JSON.stringify(world.devs[n].rep.counters())} forks ${JSON.stringify(world.devs[n].rep.selfForks().map((f) => [f.version.toString('hex').slice(0, 6), f.from, f.movedTo.toString('hex').slice(0, 6)]))} versions ${JSON.stringify(await Promise.all(group.map(async (gv, gi) => [gv.toString('hex').slice(0, 6), (per.get(n)?.[gi]?.lines ?? []).map(tagOf), per.get(n)?.[gi]?.state])))}\n`);
+      }
       group.forEach((gv, gi) => {
         const calm: string[] = [];
         for (const n of NAMES) {
@@ -379,10 +383,6 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         }
         if (new Set(calm).size > 1) fail(`devices that say in-sync differ on ${gv.toString('hex').slice(0, 6)} (ledger)`);
       });
-      if (process.env.MESH_REPLICATOR_DUMP) {
-        const tagOf = (l: string): string => (l.match(/(\w+-\d+) (\d+)/) ?? ['?'])[0];
-        for (const n of NAMES) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ${n} forks ${JSON.stringify(world.devs[n].rep.selfForks().map((f) => [f.version.toString('hex').slice(0, 6), f.from, f.movedTo.toString('hex').slice(0, 6)]))} versions ${JSON.stringify(await Promise.all(group.map(async (gv, gi) => [gv.toString('hex').slice(0, 6), (per.get(n)?.[gi]?.lines ?? []).map(tagOf), per.get(n)?.[gi]?.state])))}\n`);
-      }
       for (const [line, owner] of toldBy) {
         if (owner !== vk) continue;
         for (const n of NAMES) {
