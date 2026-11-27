@@ -687,8 +687,14 @@ export class Replicator {
     const wk = wire.toString('hex'); const out: PeerAck[] = []; const now = this.#ctx.clock.now();
     for (const p of this.#ctx.peers.values()) {
       const a = p.acks.get(wk); const h = p.heads.get(wk);
-      if (!a || !h || h.state !== 'ok' || now - h.at > PEER_FRESH_MS) continue;
-      if (h.lines < a.lines || (h.lines === a.lines && h.hash !== a.hash)) continue;
+      if (!a) continue;
+      // freshness basis, stated exactly: an ack that answers one of MY solicit rounds is fresh by itself (it was signed after that device received the solicit, and it reached me within the window);
+      // an unsolicited one (round 0) is fresh only while that device's own heads are fresh. The device's heads, when newer than the ack, may only CONTRADICT it (state, fewer lines, another chain value).
+      const solicited = a.round > 0 && now - a.at <= PEER_FRESH_MS;
+      if (!solicited && (!h || now - h.at > PEER_FRESH_MS)) continue;
+      if (h && (solicited ? h.at >= a.at : true)) {
+        if (h.state !== 'ok' || h.lines < a.lines || (h.lines === a.lines && h.hash !== a.hash)) continue;
+      }
       out.push({ holder: p.hex, version: wk, lines: a.lines, hash: a.hash, signature: a.sig.toString('hex'), round: a.round, receivedAt: a.at });
     }
     return out;

@@ -18,14 +18,14 @@ describe('replicator wire: round trips', () => {
     expect(parseLinesBody(via(linesBody(lb)))).toEqual(lb);
     const heads = { page: 0, of: 1, ask: true, heads: [{ version: v, lines: 9, hash: h32(), conversationHash: h32(3), stamp: 2, state: 'refilling' as const }] };
     expect(parseHeadsBody(via(headsBodyOf(heads)))).toEqual(heads);
-    const w = { version: v, haveLines: 4, haveHash: h32(4), through: null, intro: false };
+    const w = { version: v, haveLines: 4, haveHash: h32(4), through: null, intro: false, round: 0, cover: null };
     expect(parseWantBody(via(wantBodyOf(w)))).toEqual(w);
-    const a = { version: v, lines: 4, hash: h32(5), sig };
+    const a = { version: v, lines: 4, hash: h32(5), round: 0, sig };
     expect(parseAckBody(via(ackBodyOf(a)))).toEqual(a);
     const n = { version: v, at: 4, why: 'not-a-prefix' as const, hashAtYourCount: h32(6) };
     expect(parseNakBody(via(nakBodyOf(n)))).toEqual(n);
     expect(parseSumBody(via(sumBody({ count: 3, digest: h32(8), ask: true })))).toEqual({ count: 3, digest: h32(8), ask: true });
-    const intro = { version: v, chatId: 'chat-1', runtime: 'native' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: Buffer.alloc(16, 9), sig };
+    const intro = { version: v, chatId: 'chat-1', runtime: 'native' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: Buffer.alloc(16, 9), nonce: null, sig };
     expect(parseIntroBody(via(introBodyOf(intro)))).toEqual(intro);
   });
   it('every signed statement covers a different label, so one signature can never stand in for another kind', () => {
@@ -116,5 +116,16 @@ describe('replicator wire: the other parsers refuse hostile shapes', () => {
       const val = decode(encode(rnd(0)));
       for (const p of parsers) { try { p(val); } catch (e) { expect(e).toBeInstanceOf(MeshCryptoError); } }
     }
+  });
+});
+
+describe('review 2 wire additions', () => {
+  it('a want carries a solicit round and a cover point; an ack signs its round; an intro signs its nonce', () => {
+    const v = Buffer.alloc(32, 7); const h = Buffer.alloc(32, 3); const sig = Buffer.alloc(64, 5);
+    const w = { version: v, haveLines: 4, haveHash: h, through: null, intro: false, round: 9, cover: { lines: 12, hash: h, sig } };
+    expect(parseWantBody(via(wantBodyOf(w)))).toEqual(w);
+    expect(ackMessage(Buffer.alloc(16, 1), v, 5, h, 1).equals(ackMessage(Buffer.alloc(16, 1), v, 5, h, 2))).toBe(false); // the round is covered by the signature
+    const base = { version: v, chatId: 'c', runtime: 'native' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: Buffer.alloc(16, 9) };
+    expect(introMessage({ ...base, nonce: Buffer.alloc(16, 1) }).equals(introMessage({ ...base, nonce: Buffer.alloc(16, 2) }))).toBe(false);
   });
 });

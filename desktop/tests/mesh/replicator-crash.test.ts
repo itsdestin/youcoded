@@ -3,6 +3,8 @@
 //  2. the work simply resumes: after the restart every device ends with identical lines.
 // Method of store/crash.test.ts: count the operations of one clean run, then for each k run again with a file system that dies at the k-th (the write does not happen, or only
 // half of it lands). The normal suite samples every SAMPLE-th operation; MESH_REPLICATOR_CRASH_FULL=1 runs every one.
+import * as fs from 'node:fs';
+import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { repWorld, wireId, lineSet, CHAT, type World } from './replicator-world';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
@@ -110,6 +112,7 @@ describe('a kill at any file operation', () => {
       await world.create('A', V);
       await world.settle();
       await world.devs.B.store.append(incarnationId(V, 0), 0, 0, lineSet(5, 'other')).catch(() => undefined /* benign (test): the kill may land inside this very call; the writer's lines below must still be written */);
+      { const dir = nodePath.join(world.dirs.B, 'store', 'versions', incarnationId(V, 0).toString('hex')); const f = fs.existsSync(dir) ? fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x)) : undefined; if (f) { const pp = nodePath.join(dir, f); const raw = fs.readFileSync(pp); if (raw.length) { raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(pp, raw); } } } // WHY rot, not foreign lines: see replicator-repair.test.ts (review 2, finding 5)
       await world.devs.A.rep.appendLocal(V, lineSet(7, 'real'));
       await world.settle();
     } });

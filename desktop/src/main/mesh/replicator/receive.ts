@@ -150,6 +150,8 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     if (run.pull) run.pull = { ...run.pull, at: ctx.clock.now() };
     await checkRepair(ctx, wire);
     await ctx.reconsider(wire);
+    // WHY: an ack no longer refreshes what the writer thinks I hold (review 2, finding 6); the device's own heads do, so once this pull is finished they are sent
+    if (!run.pull) ctx.advertise();
     return;
   }
   if (res === 'parked') {

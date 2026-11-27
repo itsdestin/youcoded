@@ -107,6 +107,7 @@ describe('a copy that differs from the writer\'s', () => {
     await world.settle();
     // B's copy of the version holds other lines than the writer will sign
     await world.devs.B.store.append(await world.local('B', V), 0, 0, lineSet(6, 'other'));
+    { const dir = nodePath.join(world.dirs.B, 'store', 'versions', incarnationId(V, 0).toString('hex')); const f = fs.readdirSync(dir).find((x) => /^body-.*\.bin$/.test(x)); if (f) { const p = nodePath.join(dir, f); const raw = fs.readFileSync(p); raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(p, raw); } } // WHY rotted bytes: lines nobody ever signed now go to a named fault (review 2, finding 5); a copy that is damaged is still set aside and recopied
     const good = lineSet(8, 'real');
     await world.devs.A.rep.appendLocal(V, good);
     await vi.waitFor(async () => expect(world.devs.B.rep.counters()['retired-recopy']).toBe(1));

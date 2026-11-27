@@ -58,7 +58,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await vi.waitFor(async () => expect((await headOf(world, 'B', V)).lines).toBe(6)); await world.settle();
     world.devs.B.carrier.setOnline(false);
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
-    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); // the writer's own record is gone too: only a level peer can say it is not behind
+    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true }); // the writer's own record is gone too: only a level peer can say it is not behind
     await world.restart('A'); // a new process: it remembers no peer claim at all
     await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 6))).rejects.toThrow(/writer-recopy-not-confirmed/);
     world.devs.B.carrier.setOnline(true);
@@ -80,7 +80,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     sendLive(world, KIND_HEADS, headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 2, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 3, state: 'refilling' }] }), 'A');
     await vi.waitFor(() => expect(world.devs.A.rep.peerView(V).some((p) => p.state === 'refilling')).toBe(true));
     await world.devs.A.store.setAsideDamaged((await world.localOf('A', V)) as Buffer);
-    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); world.devs.A.rep.forgetOwnHeadForTests(V);
+    fs.rmSync(nodePath.join(world.dirs.A, 'replicator', 'own'), { recursive: true, force: true }); fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true }); world.devs.A.rep.forgetOwnHeadForTests(V);
     await world.devs.A.rep.reportCorrupt(V); await world.settle();
     await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'new', 4))).rejects.toThrow(/writer-recopy-not-confirmed/);
   });
@@ -102,7 +102,8 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
     await world.devs.A.rep.idle(); world.devs.A.rep.stop(); world.devs.A.link.stop(); await world.devs.A.store.close();
     const snap = nodePath.join(world.dirs.A, 'snap'); fs.cpSync(nodePath.join(world.dirs.A, 'store'), snap, { recursive: true });
-    await world.restart('A'); await world.devs.A.rep.appendLocal(V, lineSet(3, 't', 3)); await world.settle();
+    await world.restart('A'); await world.settle(); // the first append after a start waits for a peer to be heard (review 2, finding 1)
+    await world.devs.A.rep.appendLocal(V, lineSet(3, 't', 3)); await world.settle();
     const six = await world.readAll('A', V);
     await world.devs.A.rep.idle(); world.devs.A.rep.stop(); world.devs.A.link.stop(); await world.devs.A.store.close();
     fs.rmSync(nodePath.join(world.dirs.A, 'store'), { recursive: true, force: true }); fs.cpSync(snap, nodePath.join(world.dirs.A, 'store'), { recursive: true });
@@ -140,14 +141,15 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await world.restart('B'); await world.settle();
     expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'); // nor by a restart
   });
-  it('a copy never endorsed by a writer signature that the writer contradicts is still set aside and recopied (damaged or foreign bytes are not a writer fault)', async () => {
+  it('lines no saved writer signature covers, contradicted by the writer, are KEPT and the version goes to a named fault (review 2, finding 5: a folder older than the store looks exactly like this, so nothing is set aside on a guess)', async () => {
     w = await repWorld(['A', 'B']); const world = w; const V = wireId('f1e');
     await world.create('A', V); await world.settle();
     const lb = (await world.localOf('B', V)) as Buffer;
     await world.devs.B.store.append(lb, 0, 0, lineSet(4, 'unsigned'));
     const good = lineSet(6, 'real'); await world.devs.A.rep.appendLocal(V, good);
-    await vi.waitFor(async () => expect(await world.readAll('B', V)).toEqual(good));
-    expect(world.devs.B.rep.counters()['retired-recopy']).toBe(1);
+    await vi.waitFor(async () => expect(await st(world, 'B', V)).toBe('faulted(unsigned-lines-contradicted)'));
+    expect((await headOf(world, 'B', V)).lines).toBe(4);
+    expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
   });
 });
 
