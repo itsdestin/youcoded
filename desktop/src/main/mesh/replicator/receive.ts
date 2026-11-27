@@ -151,6 +151,7 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   let res: AppendResult;
   try { res = await ctx.store.append(v.local, 0, b.from, lines); } catch (e) { await storeFailed(ctx, peer, wire, e, b.from); return; }
   if (res === 'ok') {
+    const wasDiverged = run.diverged !== null; // (a divergence is chased to its end below, review 4, F6)
     run.diverged = null; run.stuck = null; run.retiredRecopy = false; run.unavailable.clear(); run.unavailableRounds = 0;
     // the sender holds at least what the writer signed in this batch (a signed statement, not a bare claim), so its entry is at least that
     const sk = wire.toString('hex'); const prev = peer.heads.get(sk);
@@ -162,6 +163,11 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     await sendAck(ctx, peer, wire, v.local);
     if (run.pull) run.pull = { ...run.pull, at: ctx.clock.now() };
     await checkRepair(ctx, wire);
+    // F6 (review 4): the restart-from-zero ask that a divergence causes is answered one signed point at a time. The first points are usually lines both histories share, so the batch is a no-op for me and nothing
+    // asked for the next one: both devices sat in `diverged` for good. Now the ask CONTINUES from where the batch ended for as long as that device claims more than that, until the lines part (and the
+    // writer moves its lines to a second version, or a peer names its state).
+    const claimedNow = peer.heads.get(wire.toString('hex'));
+    if (wasDiverged && claimedNow && end < claimedNow.lines && end > b.from) { ctx.bump('diverged-ask-continued'); await ctx.want(wire, peer, { haveLines: end }); }
     await ctx.reconsider(wire);
     // WHY: an ack no longer refreshes what the writer thinks I hold (review 2, finding 6); the device's own heads do, so once this pull is finished they are sent
     if (!run.pull) ctx.advertise();

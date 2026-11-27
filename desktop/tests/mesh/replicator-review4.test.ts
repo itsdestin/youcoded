@@ -342,3 +342,26 @@ describe('the gate is never changed by a status read, and the slow-relay path lo
     for (const n of ['A', 'B']) { expect(await textOf(world, n, V)).toEqual(peers); expect((await textOf(world, n, world.devs.A.rep.selfForks()[0].movedTo)).length).toBe(8); }
   }, 600_000);
 });
+
+describe('F6: the same count of lines with different content is chased to where the lines part', () => {
+  it('A and B both hold 15 lines that agree for 11 and then differ: the writer moves its four lines to a second version, and both end in sync (the ask goes on past the first shared signed point)', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-f6');
+    await world.create('A', V); await world.settle();
+    const { SignedHeads } = await import('../../src/main/mesh/replicator/signed-heads'); const { realFs } = await import('../../src/main/mesh/store/fsio');
+    await down(world, 'B'); const dev = await world.restart('B', { graceful: false, start: false });
+    const common = lineSet(11, 'cc'); const ys = [...common, ...lineSet(4, 'yy', 11)];
+    const hC = common.reduce((h, l) => chainStep(h, l), seed()); const hY = ys.reduce((h, l) => chainStep(h, l), seed());
+    await dev.store.append((await world.localOf('B', V)) as Buffer, 0, 0, ys);
+    const sh = new SignedHeads(realFs, nodePath.join(world.dirs.B, 'replicator'));
+    await sh.add(V, { lines: 11, hash: hC, sig: signWith(world.ids.A, headMessage(V, 11, hC)), spanBytes: 100 });
+    await sh.add(V, { lines: 15, hash: hY, sig: signWith(world.ids.A, headMessage(V, 15, hY)), spanBytes: 100 });
+    world.devs.B.carrier.setOnline(false); await dev.rep.start(); await world.elapse(8_000, 1_000, true);
+    await world.append('A', V, [...common, ...lineSet(4, 'xx', 11)]);
+    world.devs.B.carrier.setOnline(true);
+    await world.elapse(300_000, 10_000, true);
+    expect(world.devs.A.rep.selfForks()).toHaveLength(1);
+    expect(world.devs.A.rep.counters()['diverged-ask-continued']).toBeGreaterThanOrEqual(1);
+    for (const n of ['A', 'B']) { expect(await st(world, n, V)).not.toMatch(/diverged|faulted|stuck/); expect((await textOf(world, n, V)).slice(11).every((l) => /yy \d/.test(l))).toBe(true); }
+    expect((await textOf(world, 'A', world.devs.A.rep.selfForks()[0].movedTo)).slice(11).every((l) => /xx \d/.test(l))).toBe(true);
+  }, 400_000);
+});
