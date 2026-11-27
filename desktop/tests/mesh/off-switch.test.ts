@@ -95,7 +95,8 @@ describe('the chat store and the replicator create their folders only on request
   const noChatFolders = (d: string): void => {
     expect(fs.existsSync(path.join(d, 'mesh', 'store'))).toBe(false);
     expect(fs.existsSync(path.join(d, 'mesh', 'replicator'))).toBe(false);
-    expect(listFiles(d).filter((f) => /(^|\/)(store|replicator)\//.test(f))).toEqual([]);
+    expect(fs.existsSync(path.join(d, 'mesh', 'witness'))).toBe(false); // the writer's second record folder (review 3, finding 11): another folder this feature adds, absent when it is off
+    expect(listFiles(d).filter((f) => /(^|\/)(store|replicator|witness)\//.test(f))).toEqual([]);
   };
   it('with the feature off, and with the switch on but no relay, no store or replicator folder appears (even with the replicator variable set)', async () => {
     const off = tmp('profile-');

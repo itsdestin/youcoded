@@ -45,6 +45,7 @@ function decodeRecord(b: Buffer): Point | null {
 
 export class SignedHeads {
   readonly #cache = new Map<string, { points: Point[]; fileRecords: number }>();
+  readonly #loading = new Map<string, Promise<Point[]>>();
   /** Records skipped because they failed their CRC, since this object was made (a number for status, never an error: the points that remain are still true). */
   skipped = 0;
   constructor(private readonly fs: Fs, private readonly dir: string) {}
@@ -54,6 +55,14 @@ export class SignedHeads {
     const key = wire.toString('hex');
     const hit = this.#cache.get(key);
     if (hit) return hit.points;
+    // WHY one shared load per version (review 3, finding 4): two overlapping first loads each read the file and each filled the cache, and a slow one that read BEFORE an `add` wrote could overwrite the entry
+    // that held the new point. Everyone now waits for the same read, and a cache entry that exists is never replaced by a load.
+    const going = this.#loading.get(key); if (going) return going;
+    const p = this.#read(wire, key).finally(() => this.#loading.delete(key));
+    this.#loading.set(key, p);
+    return p;
+  }
+  async #read(wire: Buffer, key: string): Promise<Point[]> {
     const raw = await this.fs.readFile(this.file(wire));
     const points: Point[] = [];
     let n = 0;
@@ -67,6 +76,7 @@ export class SignedHeads {
       }
       points.sort((a, b) => a.lines - b.lines);
     }
+    const kept = this.#cache.get(key); if (kept) return kept.points; // never replace an entry something already made
     this.#cache.set(key, { points, fileRecords: n });
     return points;
   }

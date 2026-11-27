@@ -233,6 +233,9 @@ export class Replicator {
       const r = await this.#o.store.scrubStep(v.local, { maxBytes: SCRUB_SLICE_BYTES });
       this.#ctx.bump('scrub-slice');
       if (r.damagedFromLine !== null) { this.#ctx.bump('scrub-found-damage'); await checkRepair(this.#ctx, wire); }
+      // the writer's own record could not be saved earlier: try again here, and announce once it is saved (review 3, finding 11)
+      const run = this.#ctx.runOf(wire);
+      if (run.ownPending) { await this.retryOwnPending(wire); if (!run.ownPending) void pushNew(this.#ctx, wire).catch((e: unknown) => reportFailure({ what: 'push new chat lines to the other devices', cause: e, where: 'mesh.replicator' })); }
     });
   }
   stop(): void {
@@ -467,7 +470,7 @@ export class Replicator {
       const from = repairFrom(head);
       const mine: HeadView = from === null ? { lines: head.lines, hash: head.hash, state: 'ok' } : { lines: from, hash: (await this.#o.store.hashAt(v.local, 0, from).catch(() => null /* benign: no chain value at that count (evicted): my own head's value stands in, which only makes this comparison more cautious */)) ?? head.hash, state: 'refilling' };
       const now = ctx.clock.now();
-      const pulls: PeerInfo[] = []; let diverged: PeerInfo | null = null; let anySeen = false; let allSync = true; let inSyncPeers = 0; let unsureHolders = 0;
+      const pulls: PeerInfo[] = []; let diverged: PeerInfo | null = null; let anySeen = false; let allSync = true; let inSyncPeers = 0; let unsureHolders = 0; let holder: PeerInfo | null = null;
       for (const p of ctx.peers.values()) {
         const ph = p.heads.get(wk);
         if (!ph || now - ph.at > PEER_FRESH_MS) continue;
@@ -475,6 +478,7 @@ export class Replicator {
         let at: MineAtTheirs = null;
         if (ph.lines <= head.lines) { try { at = await this.#o.store.hashAt(v.local, 0, ph.lines); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') at = 'unknown'; else throw e; } }
         const verdict = compareHeads(mine, { lines: ph.lines, hash: ph.hash, state: ph.state }, at);
+        if (ph.state === 'ok' && ph.lines >= head.lines && !holder) holder = p;
         if (verdict.do !== 'in-sync') allSync = false;
         if ((verdict.do === 'pull' || verdict.do === 'diverged') && ph.state === 'ok' && !p.claimSince.has(wk)) p.claimSince.set(wk, now); // the unbacked-claim clock starts when the claim is HEARD
         if (verdict.do === 'in-sync' && ph.state === 'ok' && !ph.echo) inSyncPeers++; // an echoed digest is not evidence (review 2, finding 1)
@@ -482,8 +486,15 @@ export class Replicator {
         if (verdict.do === 'pull') pulls.push(p);
         if (verdict.do === 'diverged' && !diverged) diverged = p;
       }
+      // a copy that holds lines no saved writer signature covers (its signed-points file is older than its store) asks a device that holds at least as much for a covering signed point now, instead of waiting
+      // for the writer's next append (review 3, finding 4). The batch it gets is checked against the writer's signature like any other, and appends nothing it already holds.
+      const d0 = this.#directory.describe(wire);
+      if (d0 && !d0.writer.equals(this.#ctx.crypto.self) && holder && !pulls.length && !diverged && !run.pull && repairFrom(head) === null) {
+        const vz = await vouchLines(this.#ctx, wire, v.local, d0, head);
+        if (vz.unsignable) { this.#ctx.bump('cover-fetch'); await this.want(wire, holder, { haveLines: vz.lines }); }
+      }
       if (diverged) {
-        run.diverged = `peer ${hex8(diverged.id)} holds a different history at the same point`;
+        run.diverged = `peer ${hex8(diverged.id)} claims a different history at the same point (not backed by a signed batch from it)`;
         // ask the WRITER (or the divergent peer) from line 0 once: signed batches decide what is true, never a count
         if (!run.rewanted.has(diverged.hex)) { run.rewanted.add(diverged.hex); await this.want(wire, diverged, { haveLines: 0 }); }
       } else if (!pulls.length && allSync && anySeen) { run.diverged = null; run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
@@ -717,7 +728,11 @@ export class Replicator {
     }
     if ([...ctx.sessions.values()].some((s) => s.wire.equals(wire))) return mk('serving', run.serveWait ? 'waiting-for-read-memory' : null);
     // no copy is registered at the current incarnation (the announcement is known but the store has not been set up for it yet): nothing can be in sync with anything
-    if (!cur?.registered) return mk('comparing', 'copy not set up yet');
+    if (!cur?.registered) {
+      // name the cause (review 3, finding 11): a takeover child waits for its parent copy; anything else waits for the store to set the copy up
+      const par = desc?.parent ?? null; const pc = par ? await ctx.ids.current(par).catch(() => null /* benign: unknown parent state is reported as waiting for it */) : null;
+      return mk('comparing', par && !pc?.registered ? `waiting-for-parent-version ${hex8(par)}` : 'waiting-for-the-store-to-set-the-copy-up');
+    }
     const wk = wire.toString('hex'); const now = ctx.clock.now();
     const known = [...ctx.peers.values()].flatMap((p) => { const h = p.heads.get(wk); return h ? [h] : []; });
     if (known.length === 0) return mk('comparing');
