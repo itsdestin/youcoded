@@ -53,14 +53,6 @@ describe('guards the reviewer\'s mutation run found nothing depending on', () =>
     world.devs.B.rep.stop(); claim(world, V, 3, randomBytes(32)); await world.settle();
     await expect(world.append('A', V, lineSet(1, 'n', 3))).rejects.toThrow(/writer-diverged-from-peer/);
   });
-  it('a writer that signed two histories is faulted by name and refuses appendLocal (iAmWriter fault, appendLocal fault check)', async () => {
-    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('m-wfault');
-    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
-    const other = lineSet(5, 'FORK'); const seed = defaultChainSeeds({ chatId: CHAT, version: new Uint8Array(), segment: 0 }).raw; const ch = other.reduce((h, l) => chainStep(h, l), seed);
-    await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
-    await vi.waitFor(async () => expect(await st(world, 'A', V)).toBe('faulted(writer-signed-two-histories)'));
-    await expect(world.append('A', V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-faulted-writer-signed-two-histories/);
-  });
   it('appendLocal refuses by name while the copy is being repaired (refilling check)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('m-refill');
     await world.create('A', V); await world.append('A', V, lineSet(30)); await world.settle();

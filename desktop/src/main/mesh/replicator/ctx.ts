@@ -127,6 +127,8 @@ export interface RepCtx {
   advertise(): void;
   /** Record a sticky fault for this version: in memory and on disk. Never cleared by this module. */
   fault(wire: Buffer, reason: string): Promise<void>;
+  /** The writer's own divergence: move the lines from `p` into a second version (selffork.ts). */
+  selfFork(wire: Buffer, p: number): Promise<void>;
 }
 
 export const hex8 = (b: Buffer): string => b.toString('hex').slice(0, 8);

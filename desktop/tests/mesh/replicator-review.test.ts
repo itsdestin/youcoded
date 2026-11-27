@@ -133,14 +133,14 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     // the writer's key signs ANOTHER history for the same version id (a fork of itself); M carries it
     const other = lineSet(5, 'FORK', 0); const ch = chainOver(CHAT, other);
     await world.devs.M.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
-    await vi.waitFor(async () => expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'));
+    await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(writer-signed-two-histories\), waiting for the writer\)$/));
     expect(await world.readAll('B', V)).toEqual(keep);
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
     await world.append('A', V, lineSet(2, 'more', 6)); await world.elapse(30_000, 10_000);
-    expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'); // not cleared by the next append
+    expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(writer-signed-two-histories\), waiting for the writer\)$/); // not cleared by the next append
     expect(await world.readAll('B', V)).toEqual(keep);
     await world.restart('B'); await world.settle();
-    expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'); // nor by a restart
+    expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(writer-signed-two-histories\), waiting for the writer\)$/); // nor by a restart
   });
   it('lines no saved writer signature covers, contradicted by the writer, are KEPT and the version goes to a named fault (a replicator folder older than the store looks exactly like this, so nothing is set aside on a guess)', async () => {
     w = await repWorld(['A', 'B']); const world = w; const V = wireId('f1e');
@@ -148,7 +148,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     const lb = (await world.localOf('B', V)) as Buffer;
     await world.devs.B.store.append(lb, 0, 0, lineSet(4, 'unsigned'));
     const good = lineSet(6, 'real'); await world.append('A', V, good);
-    await vi.waitFor(async () => expect(await st(world, 'B', V)).toBe('faulted(unsigned-lines-contradicted)'));
+    await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories \(unsigned-lines-contradicted\), waiting for the writer\)$/));
     expect((await headOf(world, 'B', V)).lines).toBe(4);
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
   });

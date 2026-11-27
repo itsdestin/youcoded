@@ -175,6 +175,12 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   //  * they were never covered by any writer signature (foreign bytes): nothing endorsed them, so they are set aside and recopied.
   // A copy whose lines run past its newest saved signed point (the replicator folder is older than the store, or those lines never had a signature) cannot be judged here: it is KEPT and the version
   // goes to a named fault, never set aside on a guess (review 2, finding 5). Only a copy whose points reach its head can be shown to be unendorsed.
+  if (iAmWriter) {
+    // I signed both histories: the lines from the point where they part move to a second version of mine, and my copy of this one is brought back to the history the peers hold (selffork.ts)
+    ctx.bump('writer-self-fork');
+    await ctx.selfFork(wire, await conflictPoint(ctx, v.local, b.from, lines, head.lines));
+    return;
+  }
   const unsignable = !iAmWriter && (await vouchLines(ctx, wire, v.local, desc, head)).unsignable;
   if (unsignable) {
     await ctx.fault(wire, 'unsigned-lines-contradicted');
@@ -182,7 +188,7 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     ctx.advertise();
     return;
   }
-  if (iAmWriter || (await endorsedByWriter(ctx, wire, v.local, b.from, lines, head.lines, desc.writer))) {
+  if (await endorsedByWriter(ctx, wire, v.local, b.from, lines, head.lines, desc.writer)) {
     await ctx.fault(wire, 'writer-signed-two-histories');
     sendNak(ctx, peer, wire, head.lines, 'not-a-prefix', head.hash);
     ctx.advertise();
@@ -193,18 +199,24 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
 }
 
 /** Was my copy, at the first line where the new batch disagrees, covered by a writer signature I hold (a saved signed point above that line whose chain value is mine)? */
+/** The first line where a batch (starting at `from`) parts from my copy: walk the batch along MY chain. */
+async function conflictPoint(ctx: RepCtx, local: Buffer, from: number, lines: Buffer[], head: number): Promise<number> {
+  let conflict = Math.max(0, from - 1);
+  const start = await ctx.store.hashAt(local, 0, from);
+  if (start !== null) {
+    let c = unhex(start);
+    for (let i = 0; i < lines.length && from + i < head; i++) {
+      c = chainStep(c, lines[i]);
+      if ((await ctx.store.hashAt(local, 0, from + i + 1)) !== hex(c)) { conflict = from + i; break; }
+    }
+  }
+  return conflict;
+}
+
 async function endorsedByWriter(ctx: RepCtx, wire: Buffer, local: Buffer, from: number, lines: Buffer[], head: number, writer: Buffer): Promise<boolean> {
   try {
     // walk the batch along MY chain from `from`: the first line whose chain value differs from mine is where the two histories part
-    let conflict = Math.max(0, from - 1);
-    const start = await ctx.store.hashAt(local, 0, from);
-    if (start !== null) {
-      let c = unhex(start);
-      for (let i = 0; i < lines.length && from + i < head; i++) {
-        c = chainStep(c, lines[i]);
-        if ((await ctx.store.hashAt(local, 0, from + i + 1)) !== hex(c)) { conflict = from + i; break; }
-      }
-    }
+    const conflict = await conflictPoint(ctx, local, from, lines, head);
     // any saved point above the conflict that the writer signed AND that lies on my chain proves my lines there were endorsed (a point from the contradicting history does not lie on my chain)
     for (const pt of await ctx.heads.pointsAfter(wire, conflict)) {
       if (pt.lines > head || !ctx.crypto.verify(writer, headMessage(wire, pt.lines, pt.hash), pt.sig)) continue;

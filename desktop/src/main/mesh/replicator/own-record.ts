@@ -61,6 +61,10 @@ export class OwnRecords {
     const effective = fallback ? null : (valid[0] ?? null);
     return { own, witness, effective, lower: !fallback && valid.length === 2 && valid[1].lines < valid[0].lines ? valid[1] : null, trusted: (own.kind === 'ok' && witness.kind === 'ok' && own.rec.lines === witness.rec.lines && !fallback) || healed, fallback, healed };
   }
+  /** Forget both records of a version (its history moved to a second version, so they describe lines it no longer holds). */
+  async clear(wire: Buffer): Promise<void> {
+    for (const dir of [this.ownDir, this.witnessDir]) { try { await this.fs.unlink(this.path(dir, wire)); } catch (cause) { reportFailure({ what: 'forget a writer record that no longer applies', cause, where: 'mesh.replicator' }); } }
+  }
   /** Write both. Each place that failed is reported; the caller says "durable but not recorded" when either did not take it. */
   async save(wire: Buffer, rec: OwnRecord): Promise<{ ok: number; failed: Array<{ where: string; cause: unknown }> }> {
     const b = encode(rec);

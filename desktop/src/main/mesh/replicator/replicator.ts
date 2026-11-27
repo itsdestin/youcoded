@@ -21,7 +21,7 @@
 // acknowledges. The writer also pushes each new line to everyone as soon as it is appended, on the durable lane, so a device that is offline finds it waiting. The receiver drives:
 // a lost frame is simply asked for again.
 import { createHash, randomBytes } from 'node:crypto';
-import { StoreError } from '../store';
+import { StoreError, deriveForkId } from '../store';
 import { MAX_LINE_BYTES } from './wire';
 import { mkdirDurable, writeFileAtomic } from '../store/fsio';
 import { OwnRecords } from './own-record';
@@ -40,6 +40,7 @@ import { setupVersion } from './forks';
 import { IdMap, type Probe } from './idmap';
 import { askIntro, dropReassembly, receiveLines, sendNak } from './receive';
 import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
+import { isSelfForkToken, selfForkToken, type SelfForkJournal } from './selffork';
 import { onAck, onWant, pushNew } from './serve';
 import { SignedHeads } from './signed-heads';
 import { GROUP_LIVE, headMessage, headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, parseAckBody, parseHeadsBody, parseIntroBody, parseLinesBody, parseNakBody, parseSumBody, parseWantBody, REPLICATOR_KINDS, sumBody, wantBodyOf, type AdvertisedState, type HeadEntry, type NakBody, type HeadsBody } from './wire';
@@ -75,6 +76,8 @@ export interface ReplicatorOptions {
   stallMs?: number;
   /** How often the replicator scrubs one slice of one version (review 1, F9); 0 turns it off. Default 30 s. */
   scrubEveryMs?: number;
+  /** Called when this device, as a writer, moved lines into a second version (review 3): the adapter and the control log learn that lines from `from` now live in `movedTo`. */
+  onSelfFork?: (e: { version: Buffer; from: number; movedTo: Buffer }) => void;
   /** A queued step that has not finished after this many REAL milliseconds is given up as `stuck(store-call-blocked)` (default 120 s). Real time on purpose: it measures a call that never answers, not virtual time. */
   stepLimitMs?: number;
 }
@@ -94,6 +97,7 @@ export class Replicator {
   #discovery: { cancel(): void } | null = null;
   #stopped = false;
   readonly #own: OwnRecords;
+  readonly #selfForks: Array<{ version: Buffer; from: number; movedTo: Buffer }> = [];
   #gate = false; // latched: the writer gate has opened in this process (never expires)
   #gateTimer: { cancel(): void } | null = null;
   #askedAt = -1e12;
@@ -124,6 +128,7 @@ export class Replicator {
       run: (wire, fn) => self.queue(wire, fn),
       runOf: (wire) => { const k = wire.toString('hex'); let r = self.#ctx.runs.get(k); if (!r) { r = newRun(); r.fault = self.#savedFaults.get(k) ?? null; self.#ctx.runs.set(k, r); } return r; },
       fault: (wire, reason) => self.recordFault(wire, reason),
+      selfFork: (wire, p) => self.selfForkNow(wire, p),
       localOf: (wire) => self.localOf(wire),
       bump: (c) => { self.#ctx.counters.set(c, (self.#ctx.counters.get(c) ?? 0) + 1); },
       sendLive: (kind, body, to) => o.link.sendLive({ group: GROUP_LIVE, kind, body, ...(to ? { to } : {}) }),
@@ -154,6 +159,105 @@ export class Replicator {
     reportFailure({ what: `keep a chat copy as it is (${reason})`, where: 'mesh.replicator' });
     const dir = nodePath.join(this.#o.dir, 'faults');
     try { await mkdirDurable(this.#o.fs ?? realFs, dir); await writeFileAtomic(this.#o.fs ?? realFs, nodePath.join(dir, k), Buffer.from(reason, 'utf8')); } catch (cause) { reportFailure({ what: 'save a version fault (it stays in memory until restart)', cause, where: 'mesh.replicator' }); }
+  }
+
+  /** A fault that a resolution (below) has shown to be over: forgotten in memory and on disk. Only the self-fork resolution calls this; nothing else clears a fault. */
+  private async clearFault(wire: Buffer): Promise<void> {
+    const k = wire.toString('hex'); const run = this.#ctx.runOf(wire);
+    if (!run.fault) return;
+    run.fault = null; this.#savedFaults.delete(k); this.#ctx.bump('fault-cleared');
+    try { await (this.#o.fs ?? realFs).unlink(nodePath.join(this.#o.dir, 'faults', k)); } catch (cause) { reportFailure({ what: 'forget a resolved version fault (it will be forgotten again at the next start)', cause, where: 'mesh.replicator' }); }
+  }
+
+  // ------------------------------------------------------------------ the self-fork (selffork.ts)
+  private journalPath(wire: Buffer): string { return nodePath.join(this.#o.dir, 'selffork', wire.toString('hex')); }
+  /** Lines moved by a self-fork in this process or found in a journal at start: `from` is where the histories parted, `movedTo` the second version. Exposed so the adapter and the control log can see both. */
+  selfForks(): Array<{ version: Buffer; from: number; movedTo: Buffer }> { return this.#selfForks.map((x) => ({ ...x })); }
+  /** The writer found it signed two histories of `wire` that part at line `p`: move its lines from `p` into a second version and bring `wire` back to the history the peers hold. Crash-safe (journal), runs inside
+   *  the version's queue. Nothing is deleted: the old bytes of `wire` go to the store's aside folder like any retired copy. */
+  private async selfForkNow(wire: Buffer, p: number, resume?: SelfForkJournal): Promise<void> {
+    const ctx = this.#ctx; const fs = this.#o.fs ?? realFs;
+    const desc = this.#directory.describe(wire); const v = await this.localOf(wire);
+    if (!desc || !v) return;
+    const head = await this.#o.store.head(v.local);
+    let j = resume;
+    if (!j) {
+      const hp = await this.#o.store.hashAt(v.local, 0, p);
+      if (hp === null || p > head.lines) throw new Error('self-fork: no chain value at the parting point');
+      const v2 = deriveForkId(wire, p, hp, selfForkToken(ctx.crypto.self, desc.chatId));
+      j = { p, hp, v2: v2.toString('hex'), inc: v.incarnation, stage: 'start' };
+      await mkdirDurable(fs, nodePath.dirname(this.journalPath(wire)));
+      await writeFileAtomic(fs, this.journalPath(wire), Buffer.from(JSON.stringify(j)));
+    }
+    const v2 = Buffer.from(j.v2, 'hex');
+    if (j.stage === 'start') {
+      // 1. announce the second version (a fork of this one at p; the announcement is the writer-signed statement) and make its copy
+      if (!this.#directory.describe(v2)) await this.createVersion({ version: v2, chatId: desc.chatId, runtime: desc.runtime, parent: wire, forkLine: j.p, forkHash: Buffer.from(j.hp, 'hex'), token: selfForkToken(ctx.crypto.self, desc.chatId) });
+      else await this.adopt(v2);
+      const v2v = await this.localOf(v2);
+      if (!v2v) throw new Error('self-fork: the second version cannot be set up yet');
+      // 2. copy my lines from p on into it (my copy of this version still holds them: it is retired only after this)
+      for (;;) {
+        const h2 = await this.#o.store.head(v2v.local);
+        if (h2.lines >= head.lines) break;
+        const upto = Math.min(head.lines, h2.lines + 200);
+        const got = await this.#o.store.read(v.local, 0, h2.lines, upto);
+        if (got === 'evicted') throw new Error('self-fork: my own lines are not readable');
+        const res = await this.queue(v2, () => this.#o.store.append(v2v.local, 0, h2.lines, got));
+        if (res !== 'ok') throw new Error(`self-fork: append answered ${res}`);
+      }
+      const h2 = await this.#o.store.head(v2v.local);
+      await this.saveOwnHead(v2, h2.lines, h2.hash);
+      j = { ...j, stage: 'copied' };
+      await writeFileAtomic(fs, this.journalPath(wire), Buffer.from(JSON.stringify(j)));
+      void pushNew(ctx, v2).catch((e: unknown) => reportFailure({ what: 'send the moved lines of the second version to the other devices', cause: e, where: 'mesh.replicator' }));
+    }
+    // 3. bring this version back to the peers' history: its records are reset (they describe the history that now lives in the second version) and its copy is set aside and refilled from the peers
+    if (v.incarnation === j.inc) {
+      await this.#own.clear(wire);
+      this.#ctx.runOf(wire).caughtUp = false;
+      await retireAndRecopy(ctx, wire, 'self-fork');
+    }
+    try { await fs.unlink(this.journalPath(wire)); } catch (cause) { reportFailure({ what: 'remove the finished self-fork note', cause, where: 'mesh.replicator' }); }
+    this.#selfForks.push({ version: wire, from: j.p, movedTo: v2 });
+    this.#ctx.bump('self-fork-done');
+    this.#o.onSelfFork?.({ version: wire, from: j.p, movedTo: v2 });
+  }
+  /** At start: finish any self-fork that a crash interrupted. */
+  private async resumeSelfForks(): Promise<void> {
+    const fs = this.#o.fs ?? realFs;
+    for (const name of await fs.readdir(nodePath.join(this.#o.dir, 'selffork'))) {
+      if (!/^[0-9a-f]{2,128}$/.test(name)) continue;
+      try {
+        const raw = await fs.readFile(nodePath.join(this.#o.dir, 'selffork', name)); if (!raw) continue;
+        const j = JSON.parse(raw.toString('utf8')) as SelfForkJournal; const wire = Buffer.from(name, 'hex');
+        await this.queue(wire, () => this.selfForkNow(wire, j.p, j));
+      } catch (cause) { reportFailure({ what: 'finish a chat move that an earlier run began', cause, where: 'mesh.replicator' }); }
+    }
+  }
+  /** A peer's side: a self-fork announcement for V2 (a fork of V) resolves V's named state when it shows which history this device holds (see selffork.ts). */
+  private async resolveSelfFork(v2: Buffer): Promise<void> {
+    const d2 = this.#directory.describe(v2);
+    if (!d2 || !d2.parent || d2.forkLine === null || !d2.forkHash) return;
+    const V = d2.parent; const dV = this.#directory.describe(V);
+    if (!dV || dV.writer.equals(this.#ctx.crypto.self) || !d2.writer.equals(dV.writer) || !isSelfForkToken(d2.writer, d2.token)) return;
+    const runV = this.#ctx.runOf(V);
+    if (runV.fault !== 'writer-signed-two-histories' && runV.fault !== 'unsigned-lines-contradicted') return;
+    await this.queue(V, async () => {
+      const vv = await this.localOf(V); const v2v = await this.localOf(v2);
+      if (!vv || !v2v) return;
+      const hV = await this.#o.store.head(vv.local); const h2 = await this.#o.store.head(v2v.local);
+      const p = d2.forkLine as number;
+      if (hV.lines < p || (await this.#o.store.hashAt(vv.local, 0, p)) !== (d2.forkHash as Buffer).toString('hex')) return; // not a statement about my copy
+      const k = Math.min(hV.lines, h2.lines);
+      if (k <= p) { if (h2.lines >= hV.lines) await this.clearFault(V); return; } // nothing of mine past p to compare
+      const mine = await this.#o.store.hashAt(vv.local, 0, k); const theirs = await this.#o.store.hashAt(v2v.local, 0, k);
+      if (mine !== theirs) { await this.clearFault(V); this.#ctx.bump('self-fork-old-history-kept'); return; } // I hold the older history: it stays under V
+      if (h2.lines >= hV.lines) { // my lines past p are exactly what now lives, verified, under V2: set this copy aside and refill V from the peers
+        await retireAndRecopy(this.#ctx, V, 'moved-to-self-fork'); await this.clearFault(V); this.#ctx.bump('self-fork-newer-history-moved');
+      }
+      // else: the second version has not caught up with my lines yet; asked again when it grows
+    });
   }
 
   // ------------------------------------------------------------------ plumbing
@@ -211,6 +315,8 @@ export class Replicator {
   // ------------------------------------------------------------------ start, stop, connect
   async start(): Promise<void> {
     for (const wire of this.#directory.list()) await this.adopt(wire);
+    await this.resumeSelfForks();
+    for (const wire of this.#directory.list()) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
     this.#directory.onChange((wire) => { void this.adopt(wire).catch((e: unknown) => reportFailure({ what: 'start copying a new chat version', cause: e, where: 'mesh.replicator' })); });
     this.hello();
     this.armScrub();
@@ -383,7 +489,7 @@ export class Replicator {
   private async onIntro(peer: PeerInfo, body: ReturnType<typeof parseIntroBody>): Promise<void> {
     const r = await (this.#directory as InterimDirectory).accept?.(body);
     if (r === undefined) return; // a directory that does not take announcements (the control log) ignores them
-    if (r === 'new') { await this.adopt(body.version); return; }
+    if (r === 'new') { await this.adopt(body.version); void this.resolveSelfFork(body.version).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' })); return; }
     if (r === 'known') return;
     if (r === 'unknown-writer') { this.#ctx.bump('intro-unknown-writer'); return; } // the roster has not arrived yet; the next heads ask again
     if (r === 'conflict') { this.#ctx.bump('intro-conflict'); reportFailure({ what: 'accept a version announcement (it contradicts the one already held; the version is marked faulted)', where: 'mesh.replicator' }); return; }
@@ -462,6 +568,9 @@ export class Replicator {
   private async reconsider(wire: Buffer): Promise<void> {
     if (this.#stopped) return;
     const ctx = this.#ctx; const run = ctx.runOf(wire);
+    // a self-fork child that grew may now show which history a contradicted parent copy holds (selffork.ts); only a contradicted parent is looked at
+    const dd = this.#directory.describe(wire);
+    if (dd?.parent && ctx.runOf(dd.parent).fault) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
     try {
       const v = await this.localOf(wire);
       if (!v) return;
@@ -687,6 +796,8 @@ export class Replicator {
     const early = (state: VersionStatus['state'], reason: string): VersionStatus => ({ state, reason, lines: run.lastHead.lines, incarnation: run.lastHead.incarnation });
     const conflict = this.#directory.conflict?.(wire);
     if (conflict) return early('faulted', 'directory-conflict');
+    // a copy contradicted by writer-signed lines of another history is KEPT and says what it waits for (the writer's self-fork announcement resolves it, selffork.ts); never a calm label
+    if (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') return early('diverged', `writer-two-histories (${run.fault}), waiting for the writer`);
     if (run.fault) return early('faulted', run.fault);
     if (run.stuck) return early('stuck', run.stuck);
     const cur = await ctx.ids.current(wire).catch(() => null /* benign: a version the store cannot open yet is reported below as having no lines; the state then comes from the other fields */);

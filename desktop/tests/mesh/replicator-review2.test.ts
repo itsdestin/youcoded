@@ -153,7 +153,7 @@ describe('a replicator folder older than the store never lets a peer replace an 
     await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 7, hash: ch, sig: signWith(world.ids.A, headMessage(V, 7, ch)) } }) });
     await world.elapse(30_000, 10_000);
     expect(await world.readAll('B', V)).toEqual(keep);
-    expect(await st(world, 'B', V)).toMatch(/^faulted/);
+    expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);
   });
 });
 
