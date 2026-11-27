@@ -91,6 +91,16 @@ export class SignedHeads {
     return 'added';
   }
 
+  /** Forget every point ABOVE `lines` (they cover lines this device does not hold: the file is written before the lines are appended, so a kill between the two leaves such a point). Whole-file atomic replace. */
+  async dropAbove(wire: Buffer, lines: number): Promise<void> {
+    const points = await this.load(wire); const key = wire.toString('hex');
+    const kept = points.filter((q) => q.lines <= lines);
+    if (kept.length === points.length) return;
+    // DESTRUCTIVE-OK(unbacked-points): points above the held lines vouch for nothing this device has; the file is replaced whole, a crash leaves the old, longer one
+    await writeFileAtomic(this.fs, this.file(wire), Buffer.concat(kept.map(encodeRecord)));
+    points.splice(0, points.length, ...kept);
+    const e = this.#cache.get(key); if (e) e.fileRecords = kept.length;
+  }
   /** The smallest held point above `lines`, or null. */
   async nextAfter(wire: Buffer, lines: number): Promise<Point | null> {
     for (const p of await this.load(wire)) if (p.lines > lines) return p;

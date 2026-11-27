@@ -145,6 +145,13 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     // WHY the catch: this file is a write too, and a full disk fails it BEFORE the store is touched; it must end the same way (no ack, a nak, the named status), not as an unnamed handler error
     let kept: Awaited<ReturnType<typeof ctx.heads.add>>;
     try { kept = await ctx.heads.add(wire, { lines: b.head.lines, hash: b.head.hash, sig: b.head.sig, spanBytes: span > 0xfffffffe ? UNKNOWN_SPAN : span }); } catch (e) { await storeFailed(ctx, peer, wire, e, b.from); return; }
+    // (review 4) a saved point is written BEFORE its lines are appended, so a kill between the two leaves a point that covers lines this copy never got. When the writer then signs ANOTHER history at that
+    // count, the two points "conflict" although this copy holds neither history: the unbacked point is dropped and the new one kept, instead of the chat staying in `diverged` for good.
+    if (kept === 'conflict') {
+      const old = (await ctx.heads.pointsAfter(wire, b.head.lines - 1)).find((q) => q.lines === b.head.lines);
+      const backed = !!old && old.lines <= head.lines && (await ctx.store.hashAt(v.local, 0, old.lines).catch(() => null /* benign: no chain value at that count: not backed */)) === hex(old.hash);
+      if (old && !backed) { await ctx.heads.dropAbove(wire, Math.min(head.lines, b.head.lines - 1)); ctx.bump('unbacked-signed-point-dropped'); kept = await ctx.heads.add(wire, { lines: b.head.lines, hash: b.head.hash, sig: b.head.sig, spanBytes: span > 0xfffffffe ? UNKNOWN_SPAN : span }); }
+    }
     if (kept === 'conflict') { run.diverged = 'writer-signed-two-histories'; ctx.bump('writer-equivocation'); throw new FrameReject('writer-equivocation'); }
   }
   // 6. append, and every outcome of it

@@ -44,6 +44,14 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
   const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000, bound: true });
   const told = new Set<string>(); const toldBy = new Map<string, string>(); // the ledger: every line the adapter was told `saved` for, and the chat it was told for
+  /** second versions made by self-forks, with the chat they came from (the root in `vs`) */
+  const kidsOf = (): Array<[Buffer, string]> => {
+    const seen = new Map<string, [Buffer, string]>(); const parentOf = new Map<string, string>();
+    for (const n of NAMES) for (const f of world.devs[n].rep.selfForks()) parentOf.set(f.movedTo.toString('hex'), f.version.toString('hex'));
+    const rootOf = (hex: string): string => { let h = hex; for (let i = 0; i < 20 && parentOf.has(h); i++) h = parentOf.get(h) as string; return h; };
+    for (const [kid] of parentOf) { const root = rootOf(kid); if (vs.some((y) => y.toString('hex') === root)) seen.set(kid, [Buffer.from(kid, 'hex'), root]); }
+    return [...seen.values()];
+  };
   const lostIntro = new Set<string>(); // devices whose replicator folder (with the announcements in it) was put back
   const fsnaps: Array<{ dev: string; dir: string }> = []; // review 2: whole-folder snapshots (store, replicator, witness) of any device
   const ops: Record<string, number> = {};
@@ -129,6 +137,12 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         if (all.length) { const f = pick(all); const raw = fs.readFileSync(f); if (raw.length) { raw[Math.floor(rand() * raw.length)] ^= 1 << Math.floor(rand() * 8); fs.writeFileSync(f, raw); } }
         await world.restart(d, { graceful: false }); if (!online.has(d)) world.devs[d].carrier.setOnline(false);
         note('rot-any-file');
+      } else if (r < 34 && x >= 0.19 && rand() < 0.2 && kidsOf().length) { // review 4: the writer chats on in a second version too (so a second version can itself be rolled back and moved)
+        const [kid, root] = pick(kidsOf()); const wr = writer.get(root) as string;
+        const ls = lineSet(1 + Math.floor(rand() * 3), `k${seed}-${counter++}`, 0);
+        const head = await world.devs[wr].store.head(await world.local(wr, kid)).catch(() => null);
+        if (head) await world.append(wr, kid, ls.map((l, i) => lineSet(1, `k${seed}-${counter}-${i}`, head.lines + i)[0])).then(() => { for (let i = 0; i < ls.length; i++) { const l = lineSet(1, `k${seed}-${counter}-${i}`, head.lines + i)[0]; told.add(l.toString()); toldBy.set(l.toString(), root); } counter++; }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version|self-fork/.test(String(e))) throw e; });
+        note('append-second-version');
       } else if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
@@ -267,8 +281,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       return { lines: got === 'unreadable' || got === 'evicted' ? [] : got.map((l) => l.toString()), state: st.state, reason: st.reason };
     };
     for (const [vk, kids] of forks) {
-      const V = vs.find((y) => y.toString('hex') === vk); if (!V) continue;
-      const group = [V, ...kids]; const per = new Map<string, Array<{ lines: string[]; state: string; reason: string | null } | null>>();
+      const V = vs.find((y) => y.toString('hex') === vk); if (!V) continue; // (second versions that were themselves moved are reached through their root)
+      const group: Buffer[] = []; const collect = (x: Buffer): void => { group.push(x); for (const c of forks.get(x.toString('hex')) ?? []) collect(c); }; collect(V); void kids;
+      const per = new Map<string, Array<{ lines: string[]; state: string; reason: string | null } | null>>();
       for (const n of NAMES) per.set(n, await Promise.all(group.map((gv) => linesOf(n, gv))));
       group.forEach((gv, gi) => {
         const calm: string[] = [];

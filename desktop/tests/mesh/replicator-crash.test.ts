@@ -18,7 +18,7 @@ let w: World | null = null;
 afterEach(async () => { await w?.stopAll(); w = null; });
 
 /** `diverges`: the device deliberately STARTS with lines the writer never signed (the retire scenario), so "a true prefix of the writer's history" is only promised once it has been repaired. */
-interface Scenario { diverges?: boolean; name: string; names: string[]; owner: string; versions: Buffer[]; run: (world: World) => Promise<void> }
+interface Scenario { /** devices left cut off after the kill until `after` has run */ keepOffline?: string[]; /** runs after the owner restarted and ran for a minute (the devices in `keepOffline` are still away) */ after?: (world: World) => Promise<void>; diverges?: boolean; name: string; names: string[]; owner: string; versions: Buffer[]; run: (world: World) => Promise<void> }
 
 /** `k` counts from the first operation AFTER the device was set up (`base`): a kill inside ChatStore.open is the store's own crash test's business. */
 async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{ ops: number; base: number }> {
@@ -48,10 +48,11 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
     }
   }
   // a device the scenario had cut off when the owner was killed is reachable again (the owner's restart is the only thing under test)
-  for (const n of sc.names) world.devs[n].carrier.setOnline(true);
+  for (const n of sc.names) if (!sc.keepOffline?.includes(n)) world.devs[n].carrier.setOnline(true);
   // 2. start it and let everything resume
   await dev.rep.start();
   await world.elapse(60_000, 10_000);
+  if (sc.after) { await sc.after(world); for (const n of sc.names) world.devs[n].carrier.setOnline(true); await world.elapse(60_000, 10_000); }
   for (const v of sc.versions) {
     // a writer killed before its own announcement or its copy was ever saved has nothing of that version to check (the chat was never told "saved")
     if (sc.owner === 'A' && !(await world.localOf(sc.owner, v))) continue;
@@ -140,6 +141,41 @@ describe('a kill at any file operation', () => {
       const { selfForkToken } = await import('../../src/main/mesh/replicator/selffork');
       const { splitHistories } = await import('./selffork-helpers');
       await splitHistories(world, V, (id) => versions.push(id), selfForkToken);
+    } });
+  }, 1_800_000);
+  it('while the PEER resolves a self-fork (the peer is the killed device: the second version, then setting its own copy aside and refilling)', async () => {
+    const versions: Buffer[] = [V];
+    await sweep({ diverges: true, name: 'selffork-peer', names: ['A', 'B'], owner: 'B', versions, run: async (world) => {
+      versions.splice(1);
+      await world.create('A', V); await world.settle();
+      const { selfForkToken } = await import('../../src/main/mesh/replicator/selffork');
+      const { headMessage, linesBody, KIND_LINES } = await import('../../src/main/mesh/replicator/wire');
+      const { chainStep, defaultChainSeeds, deriveForkId } = await import('../../src/main/mesh/store');
+      const { signWith } = await import('../../src/main/mesh/crypto/identity');
+      // B takes a history that A signed (A's replicator is stopped meanwhile, so it cannot pull it from B)
+      world.devs.A.rep.stop();
+      const y = lineSet(5, 'yy'); const ch = y.reduce((h, l) => chainStep(h, l), defaultChainSeeds({ chatId: CHAT, version: new Uint8Array(), segment: 0 }).raw);
+      await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: y, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
+      await world.settle();
+      world.devs.B.carrier.setOnline(false);
+      await world.restart('A'); await world.elapse(8_000, 1_000, true);
+      await world.append('A', V, lineSet(5, 'xx'));
+      const local = await world.local('A', V); const h0 = (await world.devs.A.store.hashAt(local, 0, 0)) as string; const hd = await world.devs.A.store.head(local);
+      versions.push(deriveForkId(V, 0, h0, selfForkToken(world.ids.A.deviceId, CHAT, hd.hash.slice(0, 8))));
+      world.devs.B.carrier.setOnline(true);
+      await world.elapse(120_000, 10_000, true);
+    } });
+  }, 1_800_000);
+  it('at every file operation of the FIRST append of a chat with the peer away: the restarted writer needs no peer to go on, and everything agrees once the peer is back', async () => {
+    const versions: Buffer[] = [V];
+    await sweep({ name: 'first-append', names: ['A', 'B'], owner: 'A', versions, keepOffline: ['B'], run: async (world) => {
+      world.devs.B.carrier.setOnline(false);
+      await world.create('A', V); await world.elapse(8_000, 1_000, true);
+      await world.append('A', V, lineSet(3, 'first'));
+    }, after: async (world) => {
+      await world.elapse(8_000, 1_000, true);
+      const local = await world.localOf('A', V);
+      if (local) { const h = await world.devs.A.store.head(local); await world.devs.A.rep.appendLocal(V, lineSet(1, 'again', h.lines), { lines: h.lines, hash: h.hash }); } // with B still away
     } });
   }, 1_800_000);
 });

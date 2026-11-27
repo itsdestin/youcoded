@@ -271,7 +271,7 @@ export class Replicator {
     this.#ctx.bump('self-fork-done');
     this.#o.onSelfFork?.({ version: wire, from: j.p, movedTo: v2 });
   }
-  /** At start: read every note. Finished moves are the list `selfForks()` shows; unfinished ones mark their chat as being moved BEFORE anything else can append to it (review 4, F2c). */
+  /** At start: read every note. Finished moves are the list `selfForks()` shows; unfinished ones are resumed before `start` returns, and the resume marks the chat as being moved (review 4, F2c). */
   private async loadSelfForkNotes(): Promise<void> {
     const fs = this.#o.fs ?? realFs;
     for (const name of await fs.readdir(nodePath.join(this.#o.dir, 'selffork'))) {
@@ -280,7 +280,7 @@ export class Replicator {
         const raw = await fs.readFile(nodePath.join(this.#o.dir, 'selffork', name)); if (!raw) continue;
         const j = JSON.parse(raw.toString('utf8')) as SelfForkJournal; const wire = Buffer.from(name, 'hex');
         if (j.stage === 'done') this.#selfForks.push({ version: wire, from: j.p, movedTo: Buffer.from(j.v2, 'hex') });
-        else { this.#ctx.runOf(wire).selfForking = true; this.#pendingNotes.push({ wire, j }); }
+        else this.#pendingNotes.push({ wire, j }); // (the mark is set by `selfForkNow` itself when it resumes: `start` waits for the resume, so no append can come in between, and a copy that is not ready refuses appends by name anyway)
       } catch (cause) { reportFailure({ what: 'read a note about a chat move', cause, where: 'mesh.replicator' }); }
     }
   }
@@ -879,7 +879,7 @@ export class Replicator {
     const early = (state: VersionStatus['state'], reason: string): VersionStatus => ({ state, reason, lines: run.lastHead.lines, incarnation: run.lastHead.incarnation });
     const conflict = this.#directory.conflict?.(wire);
     if (conflict) return early('faulted', 'directory-conflict');
-    // a chat whose newer lines are being moved into a second version, or whose move is journaled and unfinished, is never calm (review 4, F2d)
+    // a chat whose newer lines are being moved into a second version, or whose move is journaled and unfinished, is never calm and says why, before any other reading of it (review 4, F2d)
     if (run.selfForking) return early('refilling', 'self-fork-in-progress');
     // a copy contradicted by writer-signed lines of another history is KEPT and says what it waits for (the writer's self-fork announcement resolves it, selffork.ts); never a calm label
     if (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') return early('diverged', `writer-two-histories (${run.fault}), waiting for the writer`);

@@ -101,10 +101,11 @@ describe('F2: a long move keeps the chat\'s queue and refuses appends by name', 
     let refused = 0; let saved = 0; const told: string[] = [];
     await vi.waitFor(async () => { const s = await st(world, 'A', V); if (!/self-fork-in-progress/.test(s)) throw new Error(`not moving yet: ${s}`); }, { timeout: 60_000, interval: 25 });
     for (let i = 0; i < 4; i++) { try { const ls = lineSet(1, `LATE${i}`, 5 + i); await world.append('A', V, ls); saved++; told.push(ls[0].toString()); } catch (e) { if (/self-fork-in-progress/.test(String(e))) refused++; else if (!/recopy-not-confirmed|refilling|waiting-for-peers/.test(String(e))) throw e; /* (after the move the chat refills from the peers; also a loud refusal) */ } }
-    store.read = realRead;
-    await world.elapse(200_000, 10_000, true);
+    // a second conflicting batch arrives WHILE the move runs (B's history, signed by A again): it waits behind the move and finds nothing to move afterwards
+    await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: 0, lines: y, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) }); void world.devs.A.link.sync(chatGroup(world.setId, CHAT)); // (not awaited: reading it waits behind the move)
+    await world.elapse(200_000, 10_000, true); store.read = realRead; // (reads stay slow while the second batch waits behind the move)
     expect(refused).toBeGreaterThanOrEqual(1);
-    expect(world.devs.A.rep.counters()['writer-self-fork']).toBe(1); // one move, not several overlapping ones
+    expect(world.devs.A.rep.counters()['writer-self-fork']).toBe(1); // one move, not several overlapping ones (the second conflicting batch waited behind the first)
     const all: string[] = []; for (const n of ['A', 'B']) for (const v of world.devs[n].rep.versions()) all.push(...(await textOf(world, n, v)));
     for (const l of told) expect(all.some((x) => x.includes(l.trim().slice(0, 20)))).toBe(true); // a line that WAS told saved is somewhere
   }, 300_000);
@@ -120,7 +121,7 @@ describe('F3: a replayed batch does not keep a false claim alive', () => {
     await world.create('A', V); await world.append('A', V, lineSet(3)); await world.settle();
     const mine = await world.readAll('A', V); const ch = mine.reduce((h, l) => chainStep(h, l), seed());
     world.devs.B.rep.stop();
-    const replay = async (): Promise<void> => { await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: 0, lines: mine, head: { lines: 3, hash: ch, sig: signWith(world.ids.A, headMessage(V, 3, ch)) } }) }); };
+    const replay = async (): Promise<void> => { await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: 0, lines: mine, head: { lines: 3, hash: ch, sig: signWith(world.ids.A, headMessage(V, 3, ch)) } }) }); await world.devs.A.link.sync(chatGroup(world.setId, CHAT)); /* (A reads what waits for it) */ };
     let firstSaved = -1; let refusedEarly = false;
     for (let m = 0; m <= 72; m += 9) {
       claimFrame(world, 'B', V, 500, Buffer.alloc(32, 9)); await replay(); await world.elapse(9 * 60_000, 60_000, true);
@@ -128,8 +129,31 @@ describe('F3: a replayed batch does not keep a false claim alive', () => {
       if (firstSaved >= 0) break;
     }
     expect(refusedEarly).toBe(true);
-    expect(firstSaved).toBeGreaterThan(0); expect(firstSaved).toBeLessThanOrEqual(45); // the 30-minute cap from the FIRST claim, whatever was replayed
+    expect(firstSaved).toBeGreaterThan(0); expect(firstSaved).toBeLessThanOrEqual(20); // the 10-minute clock keeps running through every replay (a replay resets nothing)
   }, 200_000);
+});
+
+describe('F3: the absolute cap', () => {
+  it('a device that drips REAL new lines to the restored writer, one per 9 minutes, while claiming far more, cannot hold it past the absolute cap from the first claim', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-f3cap');
+    await world.create('A', V); await world.append('A', V, lineSet(5, 'old')); await world.settle();
+    const bk = nodePath.join(world.dirs.A, '..', 'bk-r4-f3cap'); snap(world, 'A', bk);
+    await world.append('A', V, lineSet(15, 'mid', 5)); await world.settle();
+    const all = await world.readAll('B', V);
+    await down(world, 'A'); restore(world, 'A', bk); world.devs.B.rep.stop();
+    await world.restart('A');
+    let saved = -1; let refusedAt18 = false;
+    for (let i = 0; i < 12; i++) {
+      claimFrame(world, 'B', V, 500, Buffer.alloc(32, 9));
+      const have = (await world.devs.A.store.head(await world.local('A', V))).lines; const upto = Math.min(all.length, have + 1);
+      const ch = all.slice(0, upto).reduce((h, l) => chainStep(h, l), seed());
+      if (upto > have) { await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: have, lines: all.slice(have, upto), head: { lines: upto, hash: ch, sig: signWith(world.ids.A, headMessage(V, upto, ch)) } }) }); await world.devs.A.link.sync(chatGroup(world.setId, CHAT)); }
+      await world.elapse(9 * 60_000, 60_000, true);
+      try { const h = await world.devs.A.store.head(await world.local('A', V)); await world.devs.A.rep.appendLocal(V, lineSet(1, `cap-${i}`, h.lines), { lines: h.lines, hash: h.hash }); saved = (i + 1) * 9; break; } catch (e) { if (!/writer-behind-peer-holds-more|writer-diverged-from-peer/.test(String(e))) throw e; if (i === 1) refusedAt18 = true; }
+    }
+    expect(refusedAt18).toBe(true); // not freed by the 10-minute clock, because every drip is real progress
+    expect(saved).toBeGreaterThan(0); expect(saved).toBeLessThanOrEqual(45); // freed by the absolute cap (30 minutes from the first claim)
+  }, 300_000);
 });
 
 describe('F4: a device that is heard but never sends its heads is waited for only a bounded time', () => {
@@ -149,12 +173,13 @@ describe('F4: a device that is heard but never sends its heads is waited for onl
 });
 
 describe('F5: a stale fault clears only when the writer\'s current history extends the copy', () => {
-  async function faulted(): Promise<{ world: World; V: Buffer; keep: string[] }> {
+  async function faulted(forkLen = 5, dropPoints = false): Promise<{ world: World; V: Buffer; keep: string[] }> {
     const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId(`r4-f5-${Math.random()}`);
     await world.create('A', V); await world.append('A', V, lineSet(6)); await world.settle();
+    if (dropPoints) { await down(world, 'B'); fs.rmSync(nodePath.join(world.dirs.B, 'replicator', 'heads'), { recursive: true, force: true }); await world.restart('B'); } // B's saved signed points are gone: nothing says whose history it holds
     world.devs.A.rep.stop(); const keep = await textOf(world, 'B', V);
-    const other = lineSet(5, 'FORK'); const ch = other.reduce((h, l) => chainStep(h, l), seed());
-    await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
+    const other = lineSet(forkLen, 'FORK'); const ch = other.reduce((h, l) => chainStep(h, l), seed());
+    await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: forkLen, hash: ch, sig: signWith(world.ids.A, headMessage(V, forkLen, ch)) } }) });
     await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/));
     return { world, V, keep };
   }
@@ -166,9 +191,10 @@ describe('F5: a stale fault clears only when the writer\'s current history exten
     expect((await textOf(world, 'B', V)).slice(0, 6)).toEqual(keep); expect((await textOf(world, 'B', V)).length).toBe(8);
     expect(world.devs.B.rep.counters()['fault-cleared-by-extension']).toBe(1);
   });
-  it('a signed batch that continues the OTHER history (its chain does not start from the copy) leaves the fault in place', async () => {
-    const { world, V, keep } = await faulted();
-    const more = lineSet(2, 'FORKMORE', 5); const base = lineSet(5, 'FORK').reduce((h, l) => chainStep(h, l), seed()); const ch = more.reduce((h, l) => chainStep(h, l), base);
+  it('a signed batch that continues the OTHER history (its chain does not start from the copy) leaves the fault in place and appends nothing', async () => {
+    const { world, V, keep } = await faulted(6, true); // the other history is exactly as long as the copy and B has no saved points, so a continuation starts at the copy's head and the base the sender names is one it was told
+    const base6 = lineSet(6, 'FORK').reduce((h, l) => chainStep(h, l), seed());
+    const more = lineSet(2, 'FORKMORE', 6); const ch = more.reduce((h, l) => chainStep(h, l), base6);
     await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 6, lines: more, head: { lines: 8, hash: ch, sig: signWith(world.ids.A, headMessage(V, 8, ch)) } }) });
     await world.elapse(30_000, 10_000, true);
     expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);
@@ -290,7 +316,7 @@ describe('guards of the resolution', () => {
     const p = 3; const hp = lineSet(5, 'FORK').slice(0, 3).reduce((h, l) => chainStep(h, l), seed()).toString('hex'); const { deriveForkId } = await import('../../src/main/mesh/store'); // a chain value at 3 that is NOT the peer's own
     const token = selfForkToken(world.ids.A.deviceId, CHAT, 'other-prefix'); const child = deriveForkId(V, p, hp, token);
     await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: p, forkHash: Buffer.from(hp, 'hex'), token });
-    await world.append('A', child, lineSet(2, 'other'));
+    await world.append('A', child, lineSet(5, 'other')); // (long enough that comparing past the parting point WOULD be possible)
     await world.elapse(120_000, 10_000, true);
     expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);
   }, 300_000);
@@ -341,6 +367,55 @@ describe('the gate is never changed by a status read, and the slow-relay path lo
     expect(world.devs.A.rep.selfForks()).toHaveLength(1);
     for (const n of ['A', 'B']) { expect(await textOf(world, n, V)).toEqual(peers); expect((await textOf(world, n, world.devs.A.rep.selfForks()[0].movedTo)).length).toBe(8); }
   }, 600_000);
+});
+
+describe('F2e and F1c: two conflicts at once, and a target id that is already taken', () => {
+  it('three conflicting batches in a row start ONE move', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-f2e');
+    await world.create('A', V); await world.settle();
+    world.devs.B.rep.stop(); world.devs.B.carrier.setOnline(false);
+    await world.restart('A'); await world.elapse(8_000, 1_000, true);
+    await world.append('A', V, lineSet(5, 'xx'));
+    world.devs.B.carrier.setOnline(true);
+    const y = lineSet(5, 'yy'); const ch = y.reduce((h, l) => chainStep(h, l), seed());
+    const send = async (): Promise<void> => { await world.devs.B.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.A.deviceId, body: linesBody({ version: V, from: 0, lines: y, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) }); };
+    await send(); await send(); await send(); await world.devs.A.link.sync(chatGroup(world.setId, CHAT));
+    await world.elapse(60_000, 10_000, true);
+    expect(world.devs.A.rep.selfForks()).toHaveLength(1);
+    // (the guard against a second start while one is marked also covers conflict steps that were queued BEFORE the move by arrivals from two devices at once; one link delivers frames one at a time, so this
+    // test cannot reach it, and the guard is kept as defence in depth)
+  });
+  it('a second version id that is already used here for OTHER lines is skipped: a fresh id is derived and the move still happens', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-f1c');
+    await world.create('A', V); await world.settle();
+    // the id the move would pick first: parting point 0, token with the head the writer will have (the chain over its five "xx" lines)
+    const head = lineSet(5, 'xx').reduce((h, l) => chainStep(h, l), seed()).toString('hex'); const { deriveForkId } = await import('../../src/main/mesh/store');
+    const h0 = (await world.devs.A.store.hashAt(await world.local('A', V), 0, 0)) as string; const token = selfForkToken(world.ids.A.deviceId, CHAT, head.slice(0, 8)); const taken = deriveForkId(V, 0, h0, token);
+    await world.devs.A.rep.createVersion({ version: taken, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 0, forkHash: Buffer.from(h0, 'hex'), token });
+    await world.append('A', taken, lineSet(2, 'OTHER'));
+    await splitHistories(world, V);
+    const forks = world.devs.A.rep.selfForks(); expect(forks).toHaveLength(1);
+    expect(forks[0].movedTo.equals(taken)).toBe(false);
+    expect((await textOf(world, 'A', taken)).every((l) => /OTHER \d/.test(l))).toBe(true); // nothing was appended onto it
+  }, 200_000);
+});
+
+describe('a signed point whose lines this copy never got (a kill between writing the point and appending the lines)', () => {
+  it('does not keep the chat in `diverged` when the writer signs another history at that count: the point is dropped and the lines are taken', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-unbacked');
+    await world.create('A', V); await world.settle();
+    const { SignedHeads } = await import('../../src/main/mesh/replicator/signed-heads'); const { realFs } = await import('../../src/main/mesh/store/fsio');
+    await down(world, 'B'); const dev = await world.restart('B', { graceful: false, start: false });
+    const y = lineSet(5, 'yy'); const hy = y.reduce((h, l) => chainStep(h, l), seed());
+    await new SignedHeads(realFs, nodePath.join(world.dirs.B, 'replicator')).add(V, { lines: 5, hash: hy, sig: signWith(world.ids.A, headMessage(V, 5, hy)), spanBytes: 100 }); // the point is there, the lines are not
+    world.devs.B.carrier.setOnline(false); await dev.rep.start(); await world.elapse(8_000, 1_000, true);
+    await world.append('A', V, lineSet(5, 'xx'));
+    world.devs.B.carrier.setOnline(true);
+    await world.elapse(120_000, 10_000, true);
+    expect(await textOf(world, 'B', V)).toEqual(await textOf(world, 'A', V));
+    expect(await st(world, 'B', V)).not.toMatch(/diverged|faulted/);
+    expect(world.devs.B.rep.counters()['unbacked-signed-point-dropped']).toBeGreaterThanOrEqual(1);
+  }, 200_000);
 });
 
 describe('F6: the same count of lines with different content is chased to where the lines part', () => {
