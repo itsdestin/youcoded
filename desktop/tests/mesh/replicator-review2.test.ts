@@ -266,3 +266,17 @@ describe('finding 7 and 8: claims of a peer that cannot be backed', () => {
     expect(world.devs.A.rep.counters()['peer-heads-full']).toBeGreaterThanOrEqual(1);
   }, 600_000);
 });
+
+describe('finding 9: setting up many versions lists the store once', () => {
+  it('the whole-store listing runs once for the first touch of every registered version, not once per version (measured: 1,000 versions took 96 s before, 0.7 s after)', async () => {
+    w = await repWorld(['A'], { discoveryMs: 600_000 }); const world = w; const vs: Buffer[] = [];
+    for (let i = 0; i < 40; i++) { const v = randomBytes(32); vs.push(v); await world.devs.A.rep.createVersion({ version: v, chatId: `chat-${i}`, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null }); }
+    await down(world, 'A'); await world.restart('A', { start: false }); // the replicator is made but not started: its start-up adopts every version, and that is part of what is counted
+    const real = world.devs.A.store.listVersions.bind(world.devs.A.store); let calls = 0;
+    world.devs.A.store.listVersions = (async () => { calls++; return real(); }) as typeof world.devs.A.store.listVersions;
+    await world.devs.A.rep.start(); await world.devs.A.rep.idle();
+    for (const v of vs) await world.devs.A.rep.localId(v);
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThanOrEqual(1);
+  });
+});

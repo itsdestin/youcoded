@@ -88,7 +88,15 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         } else if (kind.startsWith('restore')) {
           const e = fsnaps.shift();
           // restoring EVERYTHING of a device that is a writer is the documented limit (store inventory limit 4): the model does not do it
-          if (e && !(kind === 'restore-all' && writer.size && vs.some((v) => writer.get(v.toString('hex')) === e.dev))) {
+          // a store put back on a WRITER loses lines for good unless an online peer holds every line it ever acknowledged (store limit 4: the model cannot express that loss), so then the model skips it
+          let lossless = true;
+          if (e && kind !== 'restore-replicator') for (const v of vs) {
+            if (writer.get(v.toString('hex')) !== e.dev) continue;
+            const O = oracle.get(v.toString('hex')) as Buffer[]; if (!O.length) continue;
+            const held = await Promise.all(NAMES.filter((n) => n !== e.dev).map(async (n) => (online.has(n) ? (await world.heads(n, v)).lines : 0)));
+            if (!held.some((n) => n === O.length) || !online.has(e.dev)) lossless = false;
+          }
+          if (e && lossless && !(kind === 'restore-all' && writer.size && vs.some((v) => writer.get(v.toString('hex')) === e.dev))) {
             const parts = kind === 'restore-store' ? ['store'] : kind === 'restore-replicator' ? ['replicator'] : kind === 'restore-both' ? ['store', 'replicator'] : ['store', 'replicator', 'witness'];
             const dd = e.dev; await world.devs[dd].rep.idle(); world.devs[dd].rep.stop(); world.devs[dd].link.stop(); await world.devs[dd].store.close();
             for (const k of parts) { fs.rmSync(nodePath.join(world.dirs[dd], k), { recursive: true, force: true }); if (fs.existsSync(nodePath.join(e.dir, k))) fs.cpSync(nodePath.join(e.dir, k), nodePath.join(world.dirs[dd], k), { recursive: true }); }
@@ -254,7 +262,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           const allDamaged = (st.state === 'retired-recopy' || st.state === 'refilling') && others.every((x) => ['refilling', 'retired-recopy', 'stuck', 'faulted', 'peer-repairing'].includes(x.state));
           const key = allDamaged ? 'state:all-copies-damaged' : `state:${st.state}`; excuses.push(`${n}:${v.toString('hex').slice(0, 6)}:${st.state}:${st.reason ?? ''}`);
           if (!EXCUSE_LIMITS[key] && st.state !== 'stuck') fail(`${n} ends ${st.state} (${st.reason}) with no documented limit that explains it; version #${vs.indexOf(v)} writer ${writer.get(v.toString('hex'))} oracle ${O.length} lines, ${n} holds ${h.lines} (inc ${st.incarnation}) counters ${JSON.stringify(dev.rep.counters())} peers ${JSON.stringify(dev.rep.peerView(v))}`);
-          if (st.state === 'stuck') fail(`${n} ends stuck (${st.reason})`);
+          // review 2: both of a writer's own records rotted is a NAMED, loud stop (it cannot tell what it has signed); the model damages them on purpose, so only that exact reason is excused
+          if (st.state === 'stuck' && /^own-record/.test(st.reason ?? '') && writer.get(v.toString('hex')) === n) excuses.push(`${n}:limit:own-records-damaged-on-purpose`);
+          else if (st.state === 'stuck') fail(`${n} ends stuck (${st.reason})`);
         }
         const parked = await dev.store.parkedList(local);
         if (parked.length) fail(`${n} holds ${parked.length} parked peer lines (P4)`);

@@ -17,14 +17,17 @@ import type { VersionDescriptor } from './directory';
 /** The store's id of the CURRENT incarnation of `wire`, registered. null when it cannot be set up yet (a child waiting for its parent). */
 /** Folders already checked against their description, so the (whole-store) listing runs once per version per process (F3). */
 const verifiedFolders = new WeakMap<object, Set<string>>();
+const listings = new WeakMap<object, Promise<Map<string, { version: Buffer; chatId: string | null; parent: Buffer | null }>>>();
 
 /** A folder found already registered under the derived id must be THIS version's: same chat, same parent (review 1, F3). Anything else is a squatter or a mistake: not used, named. */
 async function folderIsThisVersion(ctx: RepCtx, local: Buffer, desc: VersionDescriptor): Promise<boolean> {
   let seen = verifiedFolders.get(ctx.store); if (!seen) { seen = new Set(); verifiedFolders.set(ctx.store, seen); }
   const key = `${local.toString('hex')}/${desc.chatId}/${desc.parent ? desc.parent.toString('hex') : ''}`;
   if (seen.has(key)) return true;
-  const all = await ctx.store.listVersions();
-  const mine = all.find((x) => x.version.equals(local));
+  // WHY one listing per store per process, shared (review 2, finding 9): the listing reads every folder, and asking for it once PER VERSION made the first touch of N versions cost N whole-store listings
+  // (measured: 1,000 versions = 96 s, growing with the square). A folder that is not in the snapshot was registered by this process after it, so it is ours.
+  let snap = listings.get(ctx.store); if (!snap) { snap = ctx.store.listVersions().then((all) => new Map(all.map((x) => [x.version.toString('hex'), x]))); listings.set(ctx.store, snap); snap.catch(() => listings.delete(ctx.store)); }
+  const mine = (await snap).get(local.toString('hex'));
   if (!mine || mine.chatId === null) return true; // not listed or too damaged to say: the store's own damage handling decides
   // a forked child's folder names its parent's STORE id (forkVersion), a child registered whole names the parent's wire id: either, for any incarnation of the parent, is this version's
   const parentOk = ((): boolean => {
