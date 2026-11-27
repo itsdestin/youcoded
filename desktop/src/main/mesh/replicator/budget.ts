@@ -71,3 +71,7 @@ export const CLAIM_UNBACKED_MS = 10 * 60_000;
 export const CLAIM_ABSOLUTE_MS = 30 * 60_000;
 /** The writer gate waits this long for a device it has heard to send its heads completely, then stops counting it (named, review 4, F4). */
 export const GATE_HEADS_WAIT_MS = 60_000;
+
+/** How many versions ONE other roster device may announce to this device (review 4, F7): each costs store folders, announcement files and table entries here for good, and until the control log exists any roster
+ *  device may announce a new root. Over the budget an announcement is counted (`intro-over-budget`) and ignored; this device's own chats are not counted. */
+export const MAX_ANNOUNCED_PER_DEVICE = 1000;

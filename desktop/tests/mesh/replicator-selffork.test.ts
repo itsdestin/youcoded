@@ -22,7 +22,7 @@ const restore = (world: World, n: string, from: string): void => {
 };
 const v2Of = async (world: World, V: Buffer, p: number): Promise<Buffer> => {
   const h = await world.devs.A.store.hashAt(await world.local('A', V), 0, p);
-  return deriveForkId(V, p, h as string, selfForkToken(world.ids.A.deviceId, CHAT));
+  return deriveForkId(V, p, h as string, selfForkToken(world.ids.A.deviceId, CHAT, 'unused'));
 };
 
 

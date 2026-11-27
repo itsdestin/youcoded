@@ -10,6 +10,7 @@
 //    (who may host which chat) closes this; until then a paired device is trusted not to invent versions, exactly as it is trusted not to flood.
 import * as nodePath from 'node:path';
 import { createHash } from 'node:crypto';
+import { MAX_ANNOUNCED_PER_DEVICE } from './budget';
 import { decode, encode } from '../crypto/cbor';
 import { deriveForkId } from '../store/fork';
 import { mkdirDurable, writeFileAtomic, type Fs } from '../store/fsio';
@@ -39,7 +40,7 @@ export interface VersionDirectory {
   conflict?(wire: Buffer): string | null;
 }
 
-export type AcceptResult = 'new' | 'known' | 'conflict' | 'bad-signature' | 'unknown-writer' | 'bad-fork-id' | 'bad-root-id' | 'bad-token';
+export type AcceptResult = 'new' | 'known' | 'conflict' | 'bad-signature' | 'unknown-writer' | 'bad-fork-id' | 'bad-root-id' | 'bad-token' | 'over-budget';
 
 /** A root version's id: SHA-256 over a label, the set, the chat, the writer's device id and a nonce the writer chose. Anyone can recompute it, so an announcement that names a DIFFERENT writer for an id
  *  cannot be valid (review 2, finding 4); the way `deriveForkId` binds a child to its parent. The writer's device id is itself derived from its signing key, and the announcement is signed by that key. */
@@ -56,8 +57,11 @@ export interface DirectoryOptions {
 export class InterimDirectory implements VersionDirectory {
   readonly #byWire = new Map<string, IntroBody>();
   readonly #conflicts = new Map<string, string>();
+  /** versions announced to me by each OTHER device (hex of the device id), for the per-device budget */
+  readonly #announced = new Map<string, number>();
   #cbs: Array<(wire: Buffer) => void> = [];
   constructor(private readonly fs: Fs, private readonly dir: string, private readonly crypto: ReplicatorCrypto, private readonly opts: DirectoryOptions) {}
+  private count(b: IntroBody): void { if (b.writer.equals(this.crypto.self)) return; const k = b.writer.toString('hex'); this.#announced.set(k, (this.#announced.get(k) ?? 0) + 1); }
   private path(wire: Buffer): string { return nodePath.join(this.dir, 'intro', wire.toString('hex')); }
   /** A second copy of every announcement (review 3, fuzz): the announcement of a version nobody else has yet may exist ONLY here, and one flipped bit in its file would make the writer forget its own chat.
    *  The announcement is authenticated by its signature, so a copy needs no checksum: whichever file still verifies is used, and the other is rewritten. */
@@ -84,7 +88,7 @@ export class InterimDirectory implements VersionDirectory {
           if (this.check(body) === 'ok') { if (!kept) kept = body; } else { bad++; reportFailure({ what: 'trust a saved version announcement (it fails its checks and is ignored)', where: 'mesh.replicator.directory' }); }
         } catch (cause) { bad++; reportFailure({ what: 'read a saved version announcement (it is ignored)', cause, where: 'mesh.replicator.directory' }); }
       }
-      if (kept) { this.#byWire.set(name, kept); if (bad > 0) await this.saveIntro(kept).catch((cause: unknown) => reportFailure({ what: 'rewrite a damaged copy of a version announcement', cause, where: 'mesh.replicator.directory' })); }
+      if (kept) { this.#byWire.set(name, kept); this.count(kept); if (bad > 0) await this.saveIntro(kept).catch((cause: unknown) => reportFailure({ what: 'rewrite a damaged copy of a version announcement', cause, where: 'mesh.replicator.directory' })); }
     }
     for (const name of await this.fs.readdir(nodePath.join(this.dir, 'conflict'))) {
       if (!/^[0-9a-f]{2,128}$/.test(name)) continue;
@@ -136,7 +140,9 @@ export class InterimDirectory implements VersionDirectory {
       }
       return 'conflict';
     }
-    this.#byWire.set(key, b);
+    // the per-device budget (review 4, F7): checked before anything is kept or written, in the same synchronous stretch as the first-wins decision
+    if (!b.writer.equals(this.crypto.self) && (this.#announced.get(b.writer.toString('hex')) ?? 0) >= MAX_ANNOUNCED_PER_DEVICE) return 'over-budget';
+    this.#byWire.set(key, b); this.count(b);
     await this.saveIntro(b);
     for (const cb of this.#cbs) cb(b.version);
     return 'new';

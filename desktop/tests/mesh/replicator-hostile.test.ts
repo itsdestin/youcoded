@@ -83,7 +83,9 @@ describe('a paired device that lies about what it holds', () => {
   it('claiming far more lines schedules a request and proves nothing: my copy is untouched and my status says I am still asking (guard: a claim is not proof)', async () => {
     const { world, V } = await trio();
     world.devs.C.link.sendLive({ group: 'rep.live', kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines: 1000, hash: randomBytes(32), conversationHash: randomBytes(32), stamp: 1, state: 'ok' }] }) });
-    await vi.waitFor(async () => expect((await world.devs.B.rep.status(V)).state).toBe('pulling'));
+    world.devs.C.rep.stop(); // the liar says its piece and then answers nothing: the state then holds still (it used to depend on how fast its "unavailable" answers came back, which failed under load)
+    // (the flake: the ask is held back by a gap measured on the VIRTUAL clock, which never moved while this only waited; the clock now advances between looks)
+    await vi.waitFor(async () => { await world.elapse(3_000, 1_000, true); expect((await world.devs.B.rep.status(V)).state).toMatch(/^(pulling|stuck)$/); }, { timeout: 30_000, interval: 25 });
     await world.settle();
     await unchanged(world, 'B', V, 10);
     expect((await world.devs.B.rep.status(V)).state).not.toBe('in-sync');

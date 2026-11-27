@@ -557,6 +557,7 @@ export class Replicator {
     if (r === undefined) return; // a directory that does not take announcements (the control log) ignores them
     if (r === 'new') { await this.adopt(body.version); void this.resolveSelfFork(body.version).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' })); return; }
     if (r === 'known') return;
+    if (r === 'over-budget') { this.#ctx.bump('intro-over-budget'); return; } // named in the counters; the device has announced more versions than any one device may (review 4, F7)
     if (r === 'unknown-writer') { this.#ctx.bump('intro-unknown-writer'); return; } // the roster has not arrived yet; the next heads ask again
     if (r === 'conflict') { this.#ctx.bump('intro-conflict'); reportFailure({ what: 'accept a version announcement (it contradicts the one already held; the version is marked faulted)', where: 'mesh.replicator' }); return; }
     this.#ctx.bump(`intro-${r}`);
@@ -568,9 +569,10 @@ export class Replicator {
     this.#ctx.bump(`nak-${n.why}`);
     // WHY a nak never changes a copy (invariant 4/5): it is unsigned. `not-a-prefix` only makes me ask this peer for the version from line 0, where every batch is signature-checked and `append` decides.
     if (n.why === 'not-a-prefix') {
-      // an unsigned nak never changes the WRITER's view of its own chat (review 4, F8); the restart-from-zero ask below is all it can cause
+      // an unsigned nak never marks the WRITER's chat `diverged` (review 4, F8): it does not change what the writer believes about its own chat. It still causes the one restart-from-zero ask per peer,
+      // because that is how a writer meets a second history it signed (the peer's signed batches, not the nak, are the evidence).
       const wd = this.#directory.describe(n.version);
-      if (!(wd && wd.writer.equals(this.#ctx.crypto.self))) run.diverged = `peer ${hex8(peer.id)} says my copy is not a prefix of theirs`;
+      if (!(wd && wd.writer.equals(this.#ctx.crypto.self))) run.diverged = `peer ${hex8(peer.id)} says my copy is not a prefix of theirs`; else this.#ctx.bump('nak-not-a-prefix-at-writer');
       if (!run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); await this.want(n.version, peer, { haveLines: 0 }); }
       return;
     }
@@ -738,7 +740,7 @@ export class Replicator {
     const reachable = devs.flatMap((d) => {
       const p = this.#ctx.peers.get(d.toString('hex'));
       if (!p || p.lastSeen < this.#startedAt || now - p.lastSeen > REACH_MS) return [];
-      if ((p.headsComplete === null || p.headsComplete < this.#startedAt) && now - Math.max(p.heardAt, this.#startedAt) > GATE_HEADS_WAIT_MS) { this.#gateDiscounted.add(hex8(p.id)); return []; }
+      if ((p.headsComplete === null || p.headsComplete < this.#startedAt) && now - Math.max(p.heardAt, this.#startedAt) > GATE_HEADS_WAIT_MS) { if (!this.#gateDiscounted.has(hex8(p.id))) { this.#gateDiscounted.add(hex8(p.id)); this.#ctx.bump('gate-device-discounted'); } return []; }
       return [p];
     });
     if (reachable.length === 0) return now - this.#startedAt >= WRITER_ALONE_MS;
@@ -823,6 +825,8 @@ export class Replicator {
   async appendLocal(wire: Buffer, lines: Buffer[], expected: { lines: number; hash: string }): Promise<{ lines: number; hash: string; result: 'saved' | 'already-saved' | 'durable-not-recorded' }> {
     // a line the wire cannot carry is refused BEFORE anything is written (review 1, F5): the store takes 512 MiB, a peer parses 64 MiB; a line only I could ever read is a quiet loss
     for (const l of lines) if (l.length > MAX_LINE_BYTES) throw new Error('line-too-large');
+    // a chat that is being moved into a second version refuses AT ONCE and by name, without waiting in the queue behind the move (review 4, F2a)
+    if (this.#ctx.runOf(wire).selfForking) throw new Error('writer-self-fork-in-progress');
     const out = await this.queue(wire, async () => {
       const desc = this.#directory.describe(wire);
       if (!desc) throw new Error('unknown version');
