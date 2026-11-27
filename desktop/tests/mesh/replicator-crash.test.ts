@@ -28,6 +28,8 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
   // A kill makes every later file operation of the dead device throw. A store read that was already floating somewhere inside that device then rejects with nobody waiting (an unhandled rejection that is the
   // kill itself, not a finding): mark the dead device's head reads as handled; every caller that DOES wait still gets the rejection.
   { const st = world.devs[sc.owner].store; const orig = st.head.bind(st); st.head = ((v: Buffer) => { const p = orig(v); p.catch(() => undefined /* benign (test): the simulated kill */); return p; }) as typeof st.head; }
+  // a killed process stops everything it was doing: the moment the simulated kill fires, the device's replicator and link stop too (nothing keeps running against a dead disk)
+  const killWatch = setInterval(() => { if ((ffs as unknown as { crashed: boolean }).crashed) { clearInterval(killWatch); world.devs[sc.owner].rep.stop(); world.devs[sc.owner].link.stop(); } }, 1);
   const setupOps = ffs.ops;
   await sc.run(world).catch(() => undefined /* benign (test): the owner dies mid-run by design; what matters is checked below */);
   const ops = ffs.ops - setupOps;
@@ -59,6 +61,7 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
     const local = (await world.localOf(sc.owner, v)) as Buffer;
     expect((await dev.store.verify(local)).ok).toBe(true);
   }
+  clearInterval(killWatch);
   await world.stopAll(); w = null;
   return { ops, base: setupOps };
 }
