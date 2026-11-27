@@ -411,7 +411,8 @@ describe('F6/F8 a peer that cannot serve is not asked again in a hot loop (found
     world.devs.A.carrier.setOnline(false);
     const before = world.devs.B.carrier.passed + world.devs.C.carrier.passed;
     world.devs.B.carrier.setOnline(true);
-    await new Promise((r) => setTimeout(r, 3000)); // real seconds; the virtual clock does not move
+    // settle: a NEGATIVE check (nothing more is sent); real seconds, the virtual clock does not move
+    await new Promise((r) => setTimeout(r, 3000));
     const frames = world.devs.B.carrier.passed + world.devs.C.carrier.passed - before;
     expect(frames).toBeLessThan(60);
     expect(world.devs.B.rep.counters()['nak-unavailable']).toBeGreaterThanOrEqual(1);
@@ -427,6 +428,7 @@ describe('F6/F8 a peer that cannot serve is not asked again in a hot loop (found
     await world.settle();
     const total = () => world.devs.B.carrier.passed + world.devs.C.carrier.passed + world.devs.A.carrier.passed;
     const before = total();
+    // settle: a NEGATIVE check (nothing more is sent)
     await new Promise((r) => setTimeout(r, 3000));
     expect(total() - before).toBeLessThan(60);
   }, 60_000);
