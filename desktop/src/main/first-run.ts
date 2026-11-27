@@ -81,9 +81,12 @@ export interface OpenRouterSignInAuth {
 
 // The wizard's ChatGPT sign-in window (design §9.1, review R2-11): a first
 // ChatGPT sign-in on a fresh machine is an email code or 2FA away, and this
-// screen has no Cancel — so 5 minutes, not Claude's 2 and not the Settings
+// screen has no Cancel — so 5 minutes (Claude's too, since 2026-11-25), not the Settings
 // card's 10.
 export const CHATGPT_FIRST_RUN_TIMEOUT_MS = 300_000;
+// WHY Claude's sign-in now gets the same 5 minutes (Destin, 2026-11-25): a brand-new person may have to make an
+// account or wait for an emailed code, and 2 minutes timed them out mid-way ("localhost refused to connect").
+export const CLAUDE_FIRST_RUN_TIMEOUT_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -221,6 +224,7 @@ export class FirstRunManager extends EventEmitter {
     this.updatePrereq('auth', { status: 'waiting' });
     this.updateState({ authMode: 'none', lastError: OFFLINE_SIGN_IN_MESSAGE, lastErrorOffline: true });
     log('INFO', 'first-run', 'Sign-in not started: no internet connection');
+    this.noteSetupFailure('internet');
     return true;
   }
 
@@ -285,6 +289,7 @@ export class FirstRunManager extends EventEmitter {
         this.updateState({
           lastError: `Insufficient disk space: ${disk.availableMB} MB available (need >= 500 MB)`,
         });
+        this.noteSetupFailure('disk');
         this.running = false;
         return;
       }
@@ -311,6 +316,7 @@ export class FirstRunManager extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'Unexpected error in run()', { error: msg });
       this.updateState({ lastError: msg });
+      this.noteSetupFailure('error');
     } finally {
       this.running = false;
     }
@@ -565,7 +571,7 @@ export class FirstRunManager extends EventEmitter {
 
     // Return the URL to the caller so it can open it via shell.openExternal()
     // Then poll in the background for auth completion
-    void pollAuthStatus(120000, 2000).then((success) => {
+    void pollAuthStatus(CLAUDE_FIRST_RUN_TIMEOUT_MS, 2000).then((success) => {
       oauth.kill();
       if (round !== this.authRound) return; // cancelled meanwhile — the buttons are already back
       this.stopOAuth = null;
@@ -642,6 +648,7 @@ export class FirstRunManager extends EventEmitter {
     this.updateState({ authMode: 'apikey', lastError: undefined });
     if (!['anthropic', 'openai', 'google', 'openrouter'].includes(service)) {
       this.updateState({ lastError: 'That kind of key is not supported here.' });
+      this.noteSetupFailure('key');
       return;
     }
     try {
@@ -658,6 +665,7 @@ export class FirstRunManager extends EventEmitter {
         const check = await deps.providers.testConnection(id, key.trim());
         if (check.verdict === 'rejected' || (!check.ok && check.verdict !== 'unchecked')) {
           this.updateState({ lastError: check.message });
+          this.noteSetupFailure('key');
           return;
         }
         await deps.providers.setKey(id, key.trim());
@@ -666,6 +674,7 @@ export class FirstRunManager extends EventEmitter {
         const check = await deps.providers.testConnection(id);
         if (!check.ok) {
           this.updateState({ lastError: `Couldn't verify the key: ${check.message}` });
+          this.noteSetupFailure('key');
           return;
         }
       }
@@ -675,6 +684,7 @@ export class FirstRunManager extends EventEmitter {
       const detail = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'API key setup failed', { service, detail });
       this.updateState({ lastError: `Couldn't save the key: ${detail}` });
+      this.noteSetupFailure('key');
     }
   }
 
@@ -694,6 +704,7 @@ export class FirstRunManager extends EventEmitter {
       const check = await deps.providers.testConnection(id);
       if (!check.ok) {
         if (created) await deps.providers.remove(id).catch(() => { /* best effort */ });
+        this.noteSetupFailure('local');
         return { ok: false, message: `Couldn't connect to ${label}: ${check.message}` };
       }
       log('INFO', 'first-run', 'Connected to a local model app', { label });
@@ -702,6 +713,7 @@ export class FirstRunManager extends EventEmitter {
     } catch (err) {
       if (id && created) await deps.providers.remove(id).catch(() => { /* best effort */ });
       const detail = err instanceof Error ? err.message : String(err);
+      this.noteSetupFailure('local');
       return { ok: false, message: `Couldn't connect to ${label}: ${detail}` };
     }
   }
@@ -811,6 +823,7 @@ export class FirstRunManager extends EventEmitter {
       const detail = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'OpenRouter sign-in could not start', { detail });
       this.updateState({ authMode: 'none', lastError: detail });
+      this.noteSetupFailure('openrouter');
       return;
     }
     this.activeSignIn = auth;
@@ -833,6 +846,7 @@ export class FirstRunManager extends EventEmitter {
       : outcome.error;
     log('WARN', 'first-run', 'OpenRouter sign-in did not complete', { reason: lastError });
     this.updateState({ authMode: 'none', lastError });
+    this.noteSetupFailure(outcome === 'cancelled' ? 'cancelled' : 'openrouter');
   }
 
   /** The wait screen's Cancel: back to the sign-in choices, with no error line. */
@@ -847,6 +861,7 @@ export class FirstRunManager extends EventEmitter {
     this.updateState({ authMode: 'none', lastError: undefined, statusMessage: 'Sign in to continue' });
     this.updatePrereq('auth', { status: 'waiting' });
     log('INFO', 'first-run', 'Sign-in cancelled by the user', { mode });
+    this.noteSetupFailure('cancelled');
     // Frees the browser round's callback port so the next sign-in can start straight away.
     if (signIn) await signIn.cancelSignIn().catch(() => false);
   }
@@ -923,6 +938,15 @@ export class FirstRunManager extends EventEmitter {
     this.emitState();
   }
 
+  /** Which setup step went wrong or was abandoned (analytics deck U-2), by a FIXED word from this file only —
+   *  never the error text, which can hold paths, user names or a key. WHY (2026-11-25): only a prerequisite row
+   *  flipping to 'failed' used to report, so a rejected key, an OpenRouter sign-in that failed, no internet, a full
+   *  disk or a Cancel left the install looking like it simply stopped. Sent at most once per word per device. */
+  // Words used: a prerequisite's name (node, git, claude, auth), disk, internet, key, openrouter, local, cancelled, error.
+  private noteSetupFailure(step: string): void {
+    noteMilestone(`setup_failed_${step}`);
+  }
+
   private updatePrereq(
     name: string,
     updates: Partial<{ status: string; version?: string; error?: string }>,
@@ -933,7 +957,7 @@ export class FirstRunManager extends EventEmitter {
     Object.assign(prereq, updates);
     // Which setup step people get stuck on (deck U-2). Only the step's name is
     // sent — never the error text, which can hold paths and user names.
-    if (updates.status === 'failed') noteMilestone(`setup_failed_${name.toLowerCase().replace(/[^a-z]/g, '')}`);
+    if (updates.status === 'failed') this.noteSetupFailure(name.toLowerCase().replace(/[^a-z]/g, ''));
 
     // Recalculate overall progress: (installed count / total) * 90, capped at 90.
     // WHY skipped rows don't count (2026-10-02): Claude Code and Node are now

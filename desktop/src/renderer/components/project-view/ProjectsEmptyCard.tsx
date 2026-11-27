@@ -15,6 +15,7 @@
 // (ContextIntroBanner has to override its shadow for the same reason).
 import { Button, SectionLabel } from '../ui';
 import { ThemeMascot, WelcomeAppIcon } from '../Icons';
+import { deviceNoun } from '../../platform';
 
 interface ProjectsEmptyCardProps {
   /** Opens the existing add-project flow (ProjectView's AddProjectModal). */
@@ -51,7 +52,7 @@ export function ProjectsEmptyCard({ onAdd }: ProjectsEmptyCardProps) {
           {/* Two plain sentences (Destin, review deck 2026-09-10, E-1: the old
               tagline read as word salad). "Files", never "artifacts". */}
           <p className="text-sm text-fg-2 leading-relaxed">
-            A project is a folder on your computer that you work in often: a class, a client,
+            A project is a folder on your {deviceNoun()} that you work in often: a class, a client,
             a hobby. The assistant remembers what you told it there, keeps those conversations
             together, and lists the files it made.
           </p>

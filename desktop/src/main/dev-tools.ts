@@ -13,6 +13,7 @@ import * as https from 'https';
 // instead of relying on navigator.userAgent from the renderer (Fix 2).
 import { app } from 'electron';
 import { getShell } from './harness/tools/bash';
+import { backendDeviceNoun } from './device-noun'; // WHY: the phone runs this backend too, so "this computer" must say "phone" there
 
 const GH_TOKEN_RE = /gh[opsu]_[A-Za-z0-9]{20,}/g;
 const ANTHROPIC_KEY_RE = /sk-ant-[A-Za-z0-9_-]{20,}/g;
@@ -478,7 +479,7 @@ export async function summarizeIssue(args: SummarizeArgs): Promise<SummaryResult
       assisted: false,
       // Say which thing was not there. Never a guessed cause.
       unavailable: String(e?.message || e).includes('ENOENT')
-        ? 'No assistant is set up on this computer to rewrite it.'
+        ? `No assistant is set up on this ${backendDeviceNoun()} to rewrite it.`
         : `The assistant could not be reached: ${String(e?.message || e).slice(0, 200)}`,
     };
   }

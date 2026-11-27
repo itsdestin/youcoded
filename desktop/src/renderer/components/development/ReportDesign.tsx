@@ -7,6 +7,7 @@ import type { PillTone } from '../ui/Pill';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { networkOnlineNow } from '../../hooks/useNetworkOnline';
+import { deviceNoun } from '../../platform';
 import { ContributionDesign } from './ContributionDesign';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
@@ -328,7 +329,7 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
     </>}>
     {online
       ? <>Your ticket wasn’t sent. {error} Your draft is still here.</>
-      : <>This computer isn’t connected to a network, so your ticket wasn’t sent. Your draft is still here.</>}
+      : <>This {deviceNoun()} isn’t connected to a network, so your ticket wasn’t sent. Your draft is still here.</>}
   </Callout>;
 
   const sendButtons = failure || pair(

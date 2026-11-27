@@ -48,7 +48,7 @@ If you find something in the app that contradicts this list, treat it as a priva
 
 **Two one-time messages:**
 
-- **Setup progress, on a new install only.** Once each, with the same code, version and platform: that the app was opened for the first time, that setup finished, that a first message was sent, and, if a setup step failed, that step's name (for example `node`). Never the error text, file paths or anything you typed. Installs from before this was added never send them.
+- **Setup progress, on a new install only.** Once each, with the same code, version and platform: that the app was opened for the first time, that setup finished, that a first message was sent, and, if a setup step failed or was cancelled, a one-word name for it (for example `node`, `key` or `cancelled`). Never the error text, file paths or anything you typed. Installs from before this was added never send them.
 - **Turning the count off.** When you switch it off, the app sends one last notice saying so, with the version and platform but **without** the device code, and then nothing more.
 
 **What our server adds:** Your country and region (for example, US state), worked out by Cloudflare from your internet address.

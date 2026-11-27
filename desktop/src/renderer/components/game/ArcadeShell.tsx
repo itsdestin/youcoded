@@ -31,6 +31,7 @@ import GameOverlay from './GameOverlay';
 import '../ui/Dialog.css';
 import { Button, CloseButton, ErrorState, LoadingState } from '../ui';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { deviceNoun } from '../../platform';
 
 interface Props {
   connection: GameConnection;
@@ -283,7 +284,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
             {/* A failed online read is said out loud (card #134): the tiles below still show the
                 bests saved on this computer, which is true. Try again re-reads both. */}
             {serverError && (
-              <ErrorState variant="inline" message="Couldn't load your online best scores. The ones saved on this computer are still shown." details={serverError} onRetry={retry} />
+              <ErrorState variant="inline" message={`Couldn't load your online best scores. The ones saved on this ${deviceNoun()} are still shown.`} details={serverError} onRetry={retry} />
             )}
             {statuses === null
               ? <LoadingState what="games" />

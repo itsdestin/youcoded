@@ -47,6 +47,9 @@ vi.mock('os', async (importOriginal) => {
   return { ...real, default: { ...real, homedir: () => home }, homedir: () => home };
 });
 vi.mock('../src/main/logger', () => ({ log: vi.fn() }));
+// The setup staircase's one-time reports: captured so the "fixed word only" block below can read them.
+const noteMilestone = vi.hoisted(() => vi.fn());
+vi.mock('../src/main/analytics-service', () => ({ noteMilestone }));
 // Card #236: every sign-in asks the app's own online check first; these files test what happens AFTER it says yes.
 vi.mock('../src/main/network-check', () => ({ checkInternet: vi.fn(async () => true) }));
 // prerequisite-installer imports 'electron'; nothing in it is exercised here.
@@ -288,6 +291,57 @@ describe('FirstRunManager.handleOpenRouterLogin', () => {
     const m = managerAtAuth();
     await m.handleOpenRouterLogin(auth('cancelled', "YouCoded couldn't open your browser for the sign-in."));
     expect(m.getState().lastError).toBe("YouCoded couldn't open your browser for the sign-in.");
+  });
+});
+
+// Every way setup can go wrong or be abandoned reports ONE fixed word, never the error text (which can hold a key,
+// a path or a user name). Before 2026-11-25 these left an install looking like it had simply stopped.
+describe('FirstRunManager — setup problems are reported by a fixed word only', () => {
+  const sent = () => noteMilestone.mock.calls.map((c) => c[0] as string).filter((n) => n.startsWith('setup_failed_'));
+  const SECRET = 'sk-or-v1-SECRET /home/someone';
+  const deps = (check: { ok: boolean; verdict?: string; message: string }) => ({
+    providers: {
+      list: vi.fn(async () => []), upsert: vi.fn(async () => 'p1'), setKey: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}), testConnection: vi.fn(async () => check),
+    },
+  }) as any;
+  beforeEach(() => noteMilestone.mockClear());
+
+  it('no internet at sign-in → internet', async () => {
+    const m = managerAtAuth(); m.checkInternet = async () => false;
+    await m.handleOpenRouterLogin(fakeAuth('signed-in') as any);
+    expect(sent()).toEqual(['setup_failed_internet']);
+  });
+  it('a refused key → key, and the key itself is never sent', async () => {
+    const m = managerAtAuth();
+    await m.handleNativeApiKey(SECRET, 'openrouter', deps({ ok: false, verdict: 'rejected', message: `refused ${SECRET}` }));
+    expect(sent()).toEqual(['setup_failed_key']);
+  });
+  it('an OpenRouter sign-in that errors → openrouter; one the person cancels → cancelled', async () => {
+    const m = managerAtAuth();
+    await m.handleOpenRouterLogin(fakeAuth({ error: SECRET }) as any);
+    await m.handleOpenRouterLogin(fakeAuth('cancelled') as any);
+    expect(sent()).toEqual(['setup_failed_openrouter', 'setup_failed_cancelled']);
+  });
+  it("the wait screen's Cancel → cancelled", async () => {
+    const m = managerAtAuth();
+    let answer!: (o: Outcome) => void;
+    const a = { signIn: vi.fn(async () => true), waitForSignIn: vi.fn(() => new Promise<Outcome>((r) => (answer = r))), cancelSignIn: vi.fn(async () => { answer('cancelled'); return true; }) };
+    const run = m.handleChatGptLogin(a);
+    await vi.waitFor(() => expect(a.waitForSignIn).toHaveBeenCalled());
+    await m.cancelAuth(); await run;
+    expect(sent()).toEqual(['setup_failed_cancelled']);
+  });
+  it('a local app that does not answer → local', async () => {
+    const m = managerAtAuth();
+    await m.handleConnectLocalApp('http://127.0.0.1:1234', 'LM Studio', deps({ ok: false, message: 'no answer' }));
+    expect(sent()).toEqual(['setup_failed_local']);
+  });
+  it('too little free space → disk', async () => {
+    const { checkDiskSpace } = await import('../src/main/prerequisite-installer');
+    vi.mocked(checkDiskSpace).mockReturnValueOnce({ sufficient: false, availableMB: 120 } as any);
+    await new FirstRunManager().run();
+    expect(sent()).toEqual(['setup_failed_disk']);
   });
 });
 

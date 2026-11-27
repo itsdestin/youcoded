@@ -31,7 +31,7 @@ vi.mock('../src/main/prerequisite-installer', () => ({
 }));
 
 import * as prereq from '../src/main/prerequisite-installer';
-import { FirstRunManager } from '../src/main/first-run';
+import { FirstRunManager, CLAUDE_FIRST_RUN_TIMEOUT_MS } from '../src/main/first-run';
 
 const SCRATCH_HOME = join(tmpdir(), `first-run-node-test-home-${process.pid}`);
 const m = vi.mocked(prereq);
@@ -110,6 +110,20 @@ describe('"Log in with Claude" installs Node.js first', () => {
     expect(fr.getState().authMode).toBe('none');
     // The card must not keep showing "Installing Claude Code…".
     expect(row(fr, 'claude').status).not.toBe('installing');
+  });
+});
+
+describe('"Log in with Claude" waits long enough to make an account', () => {
+  it('watches for the finished sign-in for 5 minutes, not 2', async () => {
+    m.detectNode.mockResolvedValue({ installed: true, version: 'v22' });
+    m.detectClaude.mockResolvedValue({ installed: true, version: '2.1' });
+    m.startOAuthLogin.mockReturnValue({ url: 'https://claude.ai/oauth', kill: vi.fn(), onExit: vi.fn(), waitForUrl: async () => 'https://claude.ai/oauth' } as never);
+    m.pollAuthStatus.mockReturnValue(new Promise<boolean>(() => {})); // still waiting
+    const fr = new FirstRunManager();
+    fr.forceStep('AUTHENTICATE');
+    await expect(fr.handleOAuthLogin()).resolves.toEqual({ url: 'https://claude.ai/oauth' });
+    expect(CLAUDE_FIRST_RUN_TIMEOUT_MS).toBe(300_000);
+    expect(m.pollAuthStatus).toHaveBeenCalledWith(300_000, 2000);
   });
 });
 

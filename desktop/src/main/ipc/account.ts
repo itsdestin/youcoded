@@ -27,6 +27,7 @@ import { reconcileInstalls, type InstalledSkillSource } from '../install-reconci
 import { defineChannel, type MainChannelDef } from './channel-def';
 import { returnToApp } from '../headless/host-bridge';
 import { startSigninListener, type SigninListener } from '../signin-loopback';
+import { backendDeviceNoun } from '../device-noun';
 
 type Client = ReturnType<typeof createMarketplaceApiClient>;
 interface AccountDeps {
@@ -107,7 +108,8 @@ export const accountChannels: MainChannelDef[] = [
         // that has not been updated) and waiting longer cannot help.
         if (res.status !== 'complete' && listener.isClosed()) {
           signinListeners.delete(deviceCode);
-          throw new Error("YouCoded didn't hear back from your web browser. Finish signing in on this computer, then try again.");
+          // WHY backendDeviceNoun(): on the Android app this same backend runs inside the phone, so "this computer" was wrong there.
+          throw new Error(`YouCoded didn't hear back from your web browser. Finish signing in on this ${backendDeviceNoun()}, then try again.`);
         }
       }
       if (res.status === 'complete') {

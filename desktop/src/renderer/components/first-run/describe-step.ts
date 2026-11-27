@@ -1,4 +1,5 @@
 import type { FirstRunState, PrerequisiteState } from '../../../shared/first-run-types';
+import { deviceNoun } from '../../platform';
 
 // WHY: on a Mac, Git arrives with Apple's developer tools, which open their own
 // window that must be answered; setup waits for it (installGit, 2026-10-02).
@@ -56,7 +57,7 @@ export function describeStep(state: FirstRunState, isMac: boolean = onMac()): { 
   if (isStopped(state)) return { heading: '', line: null };
   switch (state.currentStep) {
     case 'DETECT_PREREQUISITES':
-      return { heading: 'Getting things ready', line: "Checking what's already on this computer…" };
+      return { heading: 'Getting things ready', line: `Checking what's already on this ${deviceNoun()}…` }; // WHY deviceNoun(): the Android app runs setup on the phone itself
     case 'INSTALL_PREREQUISITES': {
       const active = activePrerequisite(state.prerequisites);
       return { heading: 'Getting things ready', line: active?.name === 'git' && isMac ? MAC_GIT_LINE : INSTALL_LINE };
