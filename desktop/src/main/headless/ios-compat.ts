@@ -137,9 +137,54 @@ export function installInProcessGuards(): void {
   (process as unknown as { reallyExit: unknown }).reallyExit = hold;
 }
 
+/** Does this Node accept a text decoder that REFUSES bad input (`fatal: true`)? Not when built without ICU. */
+export function fatalTextDecoderWorks(): boolean {
+  try { void new TextDecoder('utf-8', { fatal: true }); return true; } catch { return false; }
+}
+
+/** WHY (found 2026-11-27 by the first run of the built-in shell on the phone's own engine): a Node built without the
+ *  Unicode data library throws on `new TextDecoder('utf-8', { fatal: true })` — "fatal option is not supported". Code
+ *  asks for that form to learn whether bytes are real text (the shell does before every command; three places in the
+ *  backend do too), so on the phone each of them failed outright. This stand-in gives the same answer the real one
+ *  would: decode leniently, turn the text back into bytes, and if they are not the bytes that came in, the input was
+ *  not valid UTF-8 — throw the same TypeError. Only the refusing form is replaced; everything else is the platform's. */
+export function installFatalTextDecoder(force = false): void {
+  const Native = g.TextDecoder as typeof TextDecoder & { __ycPatched?: boolean };
+  if (Native.__ycPatched || (!force && fatalTextDecoderWorks())) return;
+  const utf8 = (label?: string) => label === undefined || /^(utf-?8|unicode-1-1-utf-8)$/i.test(String(label).trim());
+  class Patched extends Native {
+    private readonly strict: boolean;
+    constructor(label?: string, options?: TextDecoderOptions) {
+      const strict = !!options?.fatal && utf8(label);
+      // Other encodings asked to be strict are passed through untouched: the platform's own answer (an error) stands.
+      super(label, strict ? { ...options, fatal: false } : options);
+      this.strict = strict;
+    }
+    get fatal(): boolean { return this.strict || super.fatal; }
+    decode(input?: Parameters<TextDecoder['decode']>[0], options?: TextDecodeOptions): string {
+      const text = super.decode(input, options);
+      // A chunk of a longer stream can end mid-character, so it cannot be judged on its own; whole inputs can.
+      if (!this.strict || options?.stream || input === undefined) return text;
+      const bytes = ArrayBuffer.isView(input) ? Buffer.from(input.buffer, input.byteOffset, input.byteLength) : Buffer.from(input as ArrayBuffer);
+      // The decoder drops a leading byte-order mark (unless told not to); set it aside before comparing.
+      const bom = !this.ignoreBOM && bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
+      if (!Buffer.from(text, 'utf8').equals(bom ? bytes.subarray(3) : bytes)) {
+        throw Object.assign(new TypeError('The encoded data was not valid for encoding utf-8'), { code: 'ERR_ENCODING_INVALID_ENCODED_DATA' });
+      }
+      return text;
+    }
+  }
+  Object.defineProperty(Patched, 'name', { value: 'TextDecoder' });
+  (Patched as unknown as { __ycPatched: boolean }).__ycPatched = true;
+  g.TextDecoder = Patched;
+}
+
 export function installIosCompat(opts: { forceFetch?: boolean } = {}): void {
   // 0. Regular expressions first: modules loaded after this build `\p{…}` expressions as they load.
   installRegExpPropertyFallback(typeof __YC_UNICODE_TABLES__ === 'undefined' ? {} : __YC_UNICODE_TABLES__);
+
+  // 0b. The text decoder's refusing form, which the same Node lacks.
+  installFatalTextDecoder();
 
   // 1. fetch. WHY replaced only when broken: on a runtime where the built-in works, it stays the one in use, so a
   // laptop run of this entry behaves like the desktop.

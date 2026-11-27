@@ -2,7 +2,7 @@
 // and no Unicode data library. Each is tested where it can be FORCED on, on the Node the tests run on, against that
 // Node's own real behaviour.
 import { describe, it, expect, afterEach } from 'vitest';
-import { rewriteUnicodeProperties, installRegExpPropertyFallback, unicodePropertiesWork, installIosCompat, type UnicodeTables } from '../src/main/headless/ios-compat';
+import { rewriteUnicodeProperties, installRegExpPropertyFallback, unicodePropertiesWork, installIosCompat, installFatalTextDecoder, fatalTextDecoderWorks, type UnicodeTables } from '../src/main/headless/ios-compat';
 
 /** The same table the build makes (ios/runtime/build-backend.mjs → unicodeTable), from this Node's own Unicode data. */
 function table(name: string): string {
@@ -94,5 +94,43 @@ describe('the other fills', () => {
     expect(AbortSignal.any).toBe(before.any);
     expect(proto.toSorted).toBe(before.toSorted);
     expect(RegExp).toBe(NativeRegExp);
+  });
+});
+
+describe('a text decoder that refuses bad input, where the platform has none', () => {
+  const NativeTextDecoder = globalThis.TextDecoder;
+  afterEach(() => { globalThis.TextDecoder = NativeTextDecoder; });
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const bad = [new Uint8Array([0xFF]), new Uint8Array([0xC3]), new Uint8Array([0xE2, 0x82]), new Uint8Array([0x61, 0x80, 0x62]), new Uint8Array([0xED, 0xA0, 0x80]), new Uint8Array([0xC0, 0xAF])];
+  const good = [enc(''), enc('plain'), enc('héllo — ✓ 🎉'), new Uint8Array([0xEF, 0xBB, 0xBF, 0x61]), enc('\uFFFD kept')];
+
+  it('gives the same answers as the real one, for good and bad bytes', () => {
+    expect(fatalTextDecoderWorks()).toBe(true); // this Node has the real one to compare against
+    const real = new NativeTextDecoder('utf-8', { fatal: true });
+    installFatalTextDecoder(true);
+    expect(globalThis.TextDecoder).not.toBe(NativeTextDecoder);
+    const ours = new TextDecoder('utf-8', { fatal: true });
+    expect(ours.fatal).toBe(true);
+    for (const b of good) expect(ours.decode(b)).toBe(real.decode(b));
+    for (const b of bad) {
+      expect(() => real.decode(b)).toThrow(TypeError);
+      expect(() => ours.decode(b)).toThrow(TypeError);
+    }
+    // An ArrayBuffer and a view into the middle of one are judged by their own bytes only.
+    expect(ours.decode(enc('abc').buffer as ArrayBuffer)).toBe('abc');
+    expect(ours.decode(new Uint8Array([0xFF, 0x61, 0xFF]).subarray(1, 2))).toBe('a');
+    expect(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x61]))).toBe('\uFEFFa');
+  });
+
+  it('leaves the lenient form and the default alone', () => {
+    installFatalTextDecoder(true);
+    expect(new TextDecoder().decode(new Uint8Array([0xFF]))).toBe('\uFFFD');
+    expect(new TextDecoder('utf-8', { fatal: false }).fatal).toBe(false);
+    expect(new TextDecoder() instanceof NativeTextDecoder).toBe(true);
+  });
+
+  it('is not installed where the platform already has it', () => {
+    installFatalTextDecoder();
+    expect(globalThis.TextDecoder).toBe(NativeTextDecoder);
   });
 });
