@@ -59,20 +59,32 @@ export class InterimDirectory implements VersionDirectory {
   #cbs: Array<(wire: Buffer) => void> = [];
   constructor(private readonly fs: Fs, private readonly dir: string, private readonly crypto: ReplicatorCrypto, private readonly opts: DirectoryOptions) {}
   private path(wire: Buffer): string { return nodePath.join(this.dir, 'intro', wire.toString('hex')); }
+  /** A second copy of every announcement (review 3, fuzz): the announcement of a version nobody else has yet may exist ONLY here, and one flipped bit in its file would make the writer forget its own chat.
+   *  The announcement is authenticated by its signature, so a copy needs no checksum: whichever file still verifies is used, and the other is rewritten. */
+  private copyPath(wire: Buffer): string { return nodePath.join(this.dir, 'intro-copy', wire.toString('hex')); }
+  private async saveIntro(b: IntroBody): Promise<void> {
+    const raw = encode(introBodyOf(b));
+    await mkdirDurable(this.fs, nodePath.join(this.dir, 'intro')); await writeFileAtomic(this.fs, this.path(b.version), raw);
+    try { await mkdirDurable(this.fs, nodePath.join(this.dir, 'intro-copy')); await writeFileAtomic(this.fs, this.copyPath(b.version), raw); } catch (cause) { reportFailure({ what: 'keep a second copy of a version announcement', cause, where: 'mesh.replicator.directory' }); }
+  }
   private conflictPath(wire: Buffer): string { return nodePath.join(this.dir, 'conflict', wire.toString('hex')); }
 
   /** Read every saved announcement and conflict note again. A file that does not parse or whose signature fails is reported and skipped (never believed). */
   async load(): Promise<void> {
-    for (const name of await this.fs.readdir(nodePath.join(this.dir, 'intro'))) {
+    const names = new Set([...await this.fs.readdir(nodePath.join(this.dir, 'intro')), ...await this.fs.readdir(nodePath.join(this.dir, 'intro-copy'))]);
+    for (const name of names) {
       if (!/^[0-9a-f]{2,128}$/.test(name)) continue; // *.tmp-* scratch of an interrupted write
-      try {
-        const raw = await this.fs.readFile(nodePath.join(this.dir, 'intro', name));
-        if (!raw) continue;
-        const body = parseIntroBody(decode(raw));
-        if (body.version.toString('hex') !== name) throw new Error('intro filed under another name');
-        if (this.check(body) === 'ok') this.#byWire.set(name, body);
-        else reportFailure({ what: 'trust a saved version announcement (it fails its checks and is ignored)', where: 'mesh.replicator.directory' });
-      } catch (cause) { reportFailure({ what: 'read a saved version announcement (it is ignored)', cause, where: 'mesh.replicator.directory' }); }
+      let kept: IntroBody | null = null; let bad = 0;
+      for (const path of [nodePath.join(this.dir, 'intro', name), nodePath.join(this.dir, 'intro-copy', name)]) {
+        try {
+          const raw = await this.fs.readFile(path);
+          if (!raw) { bad++; continue; }
+          const body = parseIntroBody(decode(raw));
+          if (body.version.toString('hex') !== name) throw new Error('intro filed under another name');
+          if (this.check(body) === 'ok') { if (!kept) kept = body; } else { bad++; reportFailure({ what: 'trust a saved version announcement (it fails its checks and is ignored)', where: 'mesh.replicator.directory' }); }
+        } catch (cause) { bad++; reportFailure({ what: 'read a saved version announcement (it is ignored)', cause, where: 'mesh.replicator.directory' }); }
+      }
+      if (kept) { this.#byWire.set(name, kept); if (bad > 0) await this.saveIntro(kept).catch((cause: unknown) => reportFailure({ what: 'rewrite a damaged copy of a version announcement', cause, where: 'mesh.replicator.directory' })); }
     }
     for (const name of await this.fs.readdir(nodePath.join(this.dir, 'conflict'))) {
       if (!/^[0-9a-f]{2,128}$/.test(name)) continue;
@@ -125,8 +137,7 @@ export class InterimDirectory implements VersionDirectory {
       return 'conflict';
     }
     this.#byWire.set(key, b);
-    await mkdirDurable(this.fs, nodePath.join(this.dir, 'intro'));
-    await writeFileAtomic(this.fs, this.path(b.version), encode(introBodyOf(b)));
+    await this.saveIntro(b);
     for (const cb of this.#cbs) cb(b.version);
     return 'new';
   }

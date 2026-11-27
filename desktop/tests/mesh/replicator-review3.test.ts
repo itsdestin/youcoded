@@ -162,6 +162,20 @@ describe('signed points and covering points', () => {
   }, 120_000);
 });
 
+describe('the announcement of a version that only this device knows', () => {
+  for (const dirName of ['intro', 'intro-copy']) it(`one flipped bit in the saved announcement (${dirName}): the chat is still known after a restart and the damaged file is rewritten`, async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId(`r3-intro-${dirName}`);
+    world.devs.B.carrier.setOnline(false);
+    await world.create('A', V); await world.append('A', V, lineSet(2)); await down(world, 'A');
+    const f = nodePath.join(world.dirs.A, 'replicator', dirName, V.toString('hex')); const raw = fs.readFileSync(f); raw[Math.floor(raw.length / 2)] ^= 0x04; fs.writeFileSync(f, raw);
+    await world.restart('A');
+    expect(await st(world, 'A', V)).not.toMatch(/^unknown/);
+    expect(world.devs.A.rep.versions().some((x) => x.equals(V))).toBe(true);
+    const other = nodePath.join(world.dirs.A, 'replicator', dirName === 'intro' ? 'intro-copy' : 'intro', V.toString('hex'));
+    expect(fs.readFileSync(f).equals(fs.readFileSync(other))).toBe(true); // both copies are good again
+  });
+});
+
 describe('a record that could not be saved', () => {
   it('the background check saves it again and announces the lines, without another append', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000, scrubEveryMs: 5_000 }); const world = w; const V = wireId('r3-scrub');

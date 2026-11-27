@@ -93,7 +93,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           // a store put back on a WRITER loses lines for good unless an online peer holds every line it ever acknowledged (store limit 4: the model cannot express that loss), so then the model skips it
           let lossless = true;
           if (e && kind !== 'restore-replicator') for (const v of vs) {
-            if (writer.get(v.toString('hex')) !== e.dev) continue;
+            // (writer or not: putting a store back on the LAST device that holds the lines destroys them, store limit 4, which this oracle cannot express)
             const O = oracle.get(v.toString('hex')) as Buffer[]; if (!O.length) continue;
             const held = await Promise.all(NAMES.filter((n) => n !== e.dev).map(async (n) => (online.has(n) ? (await world.heads(n, v)).lines : 0)));
             if (!held.some((n) => n === O.length) || !online.has(e.dev)) lossless = false;
