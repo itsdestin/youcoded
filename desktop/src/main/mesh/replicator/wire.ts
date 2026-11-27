@@ -48,10 +48,15 @@ export interface LinesBody {
 export interface HeadEntry { version: Buffer; lines: number; hash: Buffer; conversationHash: Buffer; stamp: number; state: AdvertisedState }
 export interface HeadsBody { page: number; of: number; ask: boolean; heads: HeadEntry[] }
 export interface IntroBody {
-  version: Buffer; chatId: string; runtime: 'claude-code' | 'native'; parent: Buffer | null; forkLine: number | null; forkHash: Buffer | null; token: string | null; writer: Buffer; sig: Buffer;
+  version: Buffer; chatId: string; runtime: 'claude-code' | 'native'; parent: Buffer | null; forkLine: number | null; forkHash: Buffer | null; token: string | null; writer: Buffer;
+  /** Review 2, finding 4: a ROOT version's id is derived from the set, the chat, its writer and this nonce (directory.ts deriveRootId), so an announcement naming another writer for that id is invalid on its face. Null only in legacy (unbound) tests. */
+  nonce?: Buffer | null;
+  sig: Buffer;
 }
-export interface WantBody { version: Buffer; haveLines: number; haveHash: Buffer; through: number | null; intro: boolean }
-export interface AckBody { version: Buffer; lines: number; hash: Buffer; sig: Buffer }
+/** `round`: 0, or the solicit round an ack should echo (review 2, finding 6). `cover`: a writer-signed point the ASKER holds above its own head; a holder that has the lines but not that signature may serve up to it (finding 3). */
+export interface WantBody { version: Buffer; haveLines: number; haveHash: Buffer; through: number | null; intro: boolean; round: number; cover: SignedHead | null }
+/** `round`: 0 for an ack sent after the holder's own append, else the solicit round it answers (it was signed AFTER the holder received that solicit). */
+export interface AckBody { version: Buffer; lines: number; hash: Buffer; round: number; sig: Buffer }
 export interface NakBody { version: Buffer; at: number; why: NakWhy; hashAtYourCount: Buffer | null }
 /** `ask`: please answer with yours (a hello); the answer carries ask = false, so two devices exchange one pair and never loop. */
 export interface SumBody { count: number; digest: Buffer; ask: boolean }
@@ -123,9 +128,9 @@ export function parseHeadsBody(body: unknown): HeadsBody {
 }
 
 // ---- intro ----
-const INTRO_KEYS = ['v', 'chat', 'rt', 'parent', 'forkLine', 'forkHash', 'token', 'writer', 'sig'] as const;
+const INTRO_KEYS = ['v', 'chat', 'rt', 'parent', 'forkLine', 'forkHash', 'token', 'writer', 'nonce', 'sig'] as const;
 export const introBodyOf = (b: IntroBody): CborValue => ({
-  v: b.version, chat: b.chatId, rt: b.runtime, parent: b.parent, forkLine: b.forkLine, forkHash: b.forkHash, token: b.token, writer: b.writer, sig: b.sig,
+  v: b.version, chat: b.chatId, rt: b.runtime, parent: b.parent, forkLine: b.forkLine, forkHash: b.forkHash, token: b.token, writer: b.writer, nonce: b.nonce ?? null, sig: b.sig,
 });
 export function parseIntroBody(body: unknown): IntroBody {
   return guard(() => {
@@ -139,23 +144,25 @@ export function parseIntroBody(body: unknown): IntroBody {
     if ((parent === null) !== (forkLine === null) || (parent === null) !== (forkHash === null) || (parent === null) !== (token === null)) throw new RangeError('fork fields');
     const chatId = asText(m.chat, 'chat', 256);
     if (chatId.length === 0) throw new RangeError('chat id');
-    return { version: ver(m.v), chatId, runtime: oneOf(m.rt, ['claude-code', 'native'] as const, 'runtime'), parent, forkLine, forkHash, token, writer: asBytes(m.writer, 'writer', 16), sig: asBytes(m.sig, 'sig', 64) };
+    return { version: ver(m.v), chatId, runtime: oneOf(m.rt, ['claude-code', 'native'] as const, 'runtime'), parent, forkLine, forkHash, token, writer: asBytes(m.writer, 'writer', 16), nonce: m.nonce === null || m.nonce === undefined ? null : asBytes(m.nonce, 'nonce', 16), sig: asBytes(m.sig, 'sig', 64) };
   });
 }
 
 // ---- want / ack / nak ----
-export const wantBodyOf = (b: WantBody): CborValue => ({ v: b.version, have: b.haveLines, hash: b.haveHash, through: b.through, intro: b.intro });
+export const wantBodyOf = (b: WantBody): CborValue => ({ v: b.version, have: b.haveLines, hash: b.haveHash, through: b.through, intro: b.intro, round: b.round, ...(b.cover ? { cover: { lines: b.cover.lines, hash: b.cover.hash, sig: b.cover.sig } } : {}) });
 export function parseWantBody(body: unknown): WantBody {
   return guard(() => {
     const m = asMap(body, 'want body');
-    onlyKeys(m, ['v', 'have', 'hash', 'through', 'intro'], 'want body');
+    onlyKeys(m, ['v', 'have', 'hash', 'through', 'intro', 'round', 'cover'], 'want body');
     if (typeof m.intro !== 'boolean') throw new RangeError('intro flag');
-    return { version: ver(m.v), haveLines: asUint(m.have, 'have'), haveHash: hash(m.hash, 'hash'), through: m.through === null ? null : asUint(m.through, 'through'), intro: m.intro };
+    let cover: SignedHead | null = null;
+    if (m.cover !== undefined) { const c = asMap(m.cover, 'cover'); onlyKeys(c, ['lines', 'hash', 'sig'], 'cover'); cover = { lines: asUint(c.lines, 'cover lines'), hash: hash(c.hash, 'cover hash'), sig: asBytes(c.sig, 'cover sig', 64) }; }
+    return { version: ver(m.v), haveLines: asUint(m.have, 'have'), haveHash: hash(m.hash, 'hash'), through: m.through === null ? null : asUint(m.through, 'through'), intro: m.intro, round: m.round === undefined ? 0 : asUint(m.round, 'round', 0xffffffff), cover };
   });
 }
-export const ackBodyOf = (b: AckBody): CborValue => ({ v: b.version, lines: b.lines, hash: b.hash, sig: b.sig });
+export const ackBodyOf = (b: AckBody): CborValue => ({ v: b.version, lines: b.lines, hash: b.hash, round: b.round, sig: b.sig });
 export function parseAckBody(body: unknown): AckBody {
-  return guard(() => { const m = asMap(body, 'ack body'); onlyKeys(m, ['v', 'lines', 'hash', 'sig'], 'ack body'); return { version: ver(m.v), lines: asUint(m.lines, 'lines'), hash: hash(m.hash, 'hash'), sig: asBytes(m.sig, 'sig', 64) }; });
+  return guard(() => { const m = asMap(body, 'ack body'); onlyKeys(m, ['v', 'lines', 'hash', 'round', 'sig'], 'ack body'); return { version: ver(m.v), lines: asUint(m.lines, 'lines'), hash: hash(m.hash, 'hash'), round: m.round === undefined ? 0 : asUint(m.round, 'round', 0xffffffff), sig: asBytes(m.sig, 'sig', 64) }; });
 }
 export const nakBodyOf = (b: NakBody): CborValue => ({ v: b.version, at: b.at, why: b.why, mine: b.hashAtYourCount });
 export function parseNakBody(body: unknown): NakBody {
@@ -173,10 +180,10 @@ const lenPrefixed = (b: Buffer): Buffer => Buffer.concat([Buffer.from([b.length]
 /** The writer's statement "version `v` has `lines` lines and the chain value there is `hash`". */
 export const headMessage = (version: Buffer, lines: number, hashRaw: Buffer): Buffer => Buffer.concat([Buffer.from(LABEL + 'head\0'), lenPrefixed(version), u64(lines), hashRaw]);
 /** A holder's statement "I hold `lines` lines of `version`, chain value `hash`" (the shape of an eviction proof ack). The holder is part of what is signed. */
-export const ackMessage = (holder: Buffer, version: Buffer, lines: number, hashRaw: Buffer): Buffer => Buffer.concat([Buffer.from(LABEL + 'ack\0'), lenPrefixed(holder), lenPrefixed(version), u64(lines), hashRaw]);
+export const ackMessage = (holder: Buffer, version: Buffer, lines: number, hashRaw: Buffer, round = 0): Buffer => Buffer.concat([Buffer.from(LABEL + 'ack\0'), lenPrefixed(holder), lenPrefixed(version), u64(lines), hashRaw, u64(round)]);
 /** What the writer signs in an intro. Every field is covered, so a relayed intro cannot be altered by the relaying peer. */
 export function introMessage(b: Omit<IntroBody, 'sig'>): Buffer {
   const t = (s: string | null): Buffer => (s === null ? Buffer.from([0]) : Buffer.concat([Buffer.from([1]), u64(Buffer.byteLength(s)), Buffer.from(s)]));
   const bytes = (x: Buffer | null): Buffer => (x === null ? Buffer.from([0]) : Buffer.concat([Buffer.from([1]), lenPrefixed(x)]));
-  return Buffer.concat([Buffer.from(LABEL + 'intro\0'), lenPrefixed(b.version), t(b.chatId), t(b.runtime), bytes(b.parent), b.forkLine === null ? Buffer.from([0]) : Buffer.concat([Buffer.from([1]), u64(b.forkLine)]), bytes(b.forkHash), t(b.token), lenPrefixed(b.writer)]);
+  return Buffer.concat([Buffer.from(LABEL + 'intro\0'), lenPrefixed(b.version), t(b.chatId), t(b.runtime), bytes(b.parent), b.forkLine === null ? Buffer.from([0]) : Buffer.concat([Buffer.from([1]), u64(b.forkLine)]), bytes(b.forkHash), t(b.token), lenPrefixed(b.writer), bytes(b.nonce ?? null)]);
 }

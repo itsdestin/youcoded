@@ -24,13 +24,15 @@ import { createHash } from 'node:crypto';
 import { StoreError } from '../store';
 import { MAX_LINE_BYTES } from './wire';
 import { mkdirDurable, writeFileAtomic } from '../store/fsio';
+import { OwnRecords } from './own-record';
+import { vouchLines } from './ctx';
 import * as nodePath from 'node:path';
 import type { ChatStore, Head } from '../store';
 import { unhex } from '../store/chain';
 import { realFs, type Fs } from '../store/fsio';
 import { FrameReject, type LinkFrame } from '../link';
 import { reportFailure } from '../../report-failure';
-import { ByteBudget, INTRO_PERIOD_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
+import { ByteBudget, INTRO_PERIOD_MS, WRITER_ALONE_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
 import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
@@ -40,7 +42,7 @@ import { askIntro, dropReassembly, receiveLines, sendNak } from './receive';
 import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
 import { onAck, onWant, pushNew } from './serve';
 import { SignedHeads } from './signed-heads';
-import { GROUP_LIVE, headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, parseAckBody, parseHeadsBody, parseIntroBody, parseLinesBody, parseNakBody, parseSumBody, parseWantBody, REPLICATOR_KINDS, sumBody, wantBodyOf, type AdvertisedState, type HeadEntry, type NakBody, type HeadsBody } from './wire';
+import { GROUP_LIVE, headMessage, headsBodyOf, introBodyOf, KIND_ACK, KIND_HEADS, KIND_INTRO, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, parseAckBody, parseHeadsBody, parseIntroBody, parseLinesBody, parseNakBody, parseSumBody, parseWantBody, REPLICATOR_KINDS, sumBody, wantBodyOf, type AdvertisedState, type HeadEntry, type NakBody, type HeadsBody } from './wire';
 
 const HEADS_PER_PAGE = 500;
 const DEFAULT_DISCOVERY_MS = 60_000;
@@ -62,6 +64,10 @@ export interface ReplicatorOptions {
   /** The OTHER devices of the set (the roster minus this device). */
   devices: () => Buffer[];
   fs?: Fs;
+  /** Where the writer's second copy of its highest-head record lives: a folder outside both the store and the replicator folder (default: `witness` next to the replicator folder). */
+  witnessDir?: string;
+  /** Root version ids and takeover tokens must be bound to the announcing writer (review 2, finding 4). Default ON; a few older tests and the rig's hand-named ids switch it off. */
+  bindIds?: boolean;
   clock?: Clock;
   directory?: VersionDirectory;
   sourceRefill?: SourceRefill;
@@ -73,7 +79,7 @@ export interface ReplicatorOptions {
   stepLimitMs?: number;
 }
 
-const newRun = (): VRun => ({ stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null });
+const newRun = (): VRun => ({ stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null, unavailable: new Set(), unavailableRounds: 0, solicitRound: 0, ownPending: null, evidence: false });
 
 export class Replicator {
   readonly #o: ReplicatorOptions;
@@ -87,6 +93,9 @@ export class Replicator {
   readonly #directory: VersionDirectory;
   #discovery: { cancel(): void } | null = null;
   #stopped = false;
+  readonly #own: OwnRecords;
+  /** When this process's replicator started (virtual clock): evidence must be newer than this. */
+  readonly #startedAt: number;
 
   private constructor(o: ReplicatorOptions, directory: VersionDirectory, savedFaults: Map<string, string>) {
     for (const [k, v] of savedFaults) this.#savedFaults.set(k, v);
@@ -94,6 +103,8 @@ export class Replicator {
     this.#directory = directory;
     const clock = o.clock ?? realClock;
     const fs = o.fs ?? realFs;
+    this.#startedAt = clock.now();
+    this.#own = new OwnRecords(fs, nodePath.join(o.dir, 'own'), o.witnessDir ?? nodePath.join(nodePath.dirname(o.dir), 'witness'));
     const probe: Probe = async (local) => {
       try { await o.store.head(local); return 'live'; } catch (e) {
         if (e instanceof StoreError && e.code === 'unknown-version') return 'absent';
@@ -122,7 +133,7 @@ export class Replicator {
   /** Make a replicator over `o`. Reads nothing from disk except the saved announcements (a missing folder is an empty one). */
   static async create(o: ReplicatorOptions): Promise<Replicator> {
     let directory = o.directory;
-    if (!directory) { const d = new InterimDirectory(o.fs ?? realFs, o.dir, o.crypto); await d.load(); directory = d; }
+    if (!directory) { const d = new InterimDirectory(o.fs ?? realFs, o.dir, o.crypto, { setId: o.setId, bind: o.bindIds ?? true }); await d.load(); directory = d; }
     // sticky faults saved by an earlier run (F1): read back before anything else can touch a version
     const faults = new Map<string, string>();
     const fs = o.fs ?? realFs;
@@ -181,7 +192,7 @@ export class Replicator {
   private peerOf(id: Buffer): PeerInfo {
     const k = id.toString('hex');
     let p = this.#ctx.peers.get(k);
-    if (!p) { p = { hex: k, id, lastSeen: this.#ctx.clock.now(), heads: new Map(), acks: new Map(), introAsks: 0, introPeriodStart: this.#ctx.clock.now(), answers: new RateLimiter(0.5, () => this.#ctx.clock.now(), 6) }; this.#ctx.peers.set(k, p); }
+    if (!p) { p = { hex: k, id, lastSeen: this.#ctx.clock.now(), heads: new Map(), acks: new Map(), headsComplete: null, introAsks: 0, introPeriodStart: this.#ctx.clock.now(), answers: new RateLimiter(0.5, () => this.#ctx.clock.now(), 6) }; this.#ctx.peers.set(k, p); }
     return p;
   }
 
@@ -307,13 +318,14 @@ export class Replicator {
     if (!peer.answers.take()) { this.#ctx.bump('sum-rate-limited'); return; }
     const entries = await this.myEntries();
     if (ask) this.#ctx.sendLive(KIND_SUM, sumBody({ count: entries.length, digest: digestOf(entries), ask: false }), peer.id); // answer a hello with mine, once
-    if (digestOf(entries).equals(digest)) {
+    // WHY equal digests do not end the exchange until this peer has sent its heads once in this process: a digest can be echoed by a hostile device and proves nothing about what it HOLDS (review 2, finding 1)
+    if (digestOf(entries).equals(digest) && peer.headsComplete !== null) {
       // the digest covers every (version, count, chain value, state): equal means this peer holds exactly what I hold, for every version
       this.#ctx.bump('sum-equal');
       const now = this.#ctx.clock.now();
       for (const e of entries) {
         const k = e.version.toString('hex');
-        peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
+        peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now, echo: true });
         // a version still marked diverged or pulling is looked at again now that this peer holds exactly what I hold (a stale or forged claim no longer stands)
         const r = this.#ctx.runs.get(k);
         if (r && (r.diverged || r.pull || r.retiredRecopy || !r.caughtUp)) void this.reconsider(e.version);
@@ -332,6 +344,7 @@ export class Replicator {
       if (!this.#directory.describe(e.version)) {
         // F6: a version nobody announced to me costs at most an intro request (capped per frame and per period) and no stored claim beyond a small allowance
         const ik = `${peer.hex}/${k}`;
+        if (peer.heads.size >= MAX_PEER_HEADS && !peer.heads.has(k)) { this.#ctx.bump('peer-heads-full'); continue; } // finding 8: claims about versions nobody announced count against the same cap
         if (!this.#introAsked.has(ik) && askedInFrame < MAX_INTRO_ASKS_PER_FRAME && peer.introAsks < MAX_INTRO_ASKS_PER_PERIOD) {
           this.#introAsked.add(ik); askedInFrame++; peer.introAsks++; askIntro(this.#ctx, peer, e.version);
           peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now }); // kept so the announcement, when it comes, can be acted on at once
@@ -345,6 +358,7 @@ export class Replicator {
       peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
       await this.reconsider(e.version);
     }
+    if (b.page === b.of - 1) peer.headsComplete = now; // every page of this peer's list has now been seen in this process
   }
   private async onIntro(peer: PeerInfo, body: ReturnType<typeof parseIntroBody>): Promise<void> {
     const r = await (this.#directory as InterimDirectory).accept?.(body);
@@ -366,12 +380,13 @@ export class Replicator {
       if (!run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); await this.want(n.version, peer, { haveLines: 0 }); }
       return;
     }
+    if (n.why === 'unavailable' || n.why === 'evicted') { run.unavailable.add(peer.hex); run.unavailableRounds++; }
     run.skip.add(peer.hex);
     await this.reconsider(n.version);
   }
 
   // ------------------------------------------------------------------ comparing and asking
-  private async want(wire: Buffer, peer: PeerInfo, opts: { haveLines?: number; through?: number | null; solicit?: boolean } = {}): Promise<void> {
+  private async want(wire: Buffer, peer: PeerInfo, opts: { haveLines?: number; through?: number | null; solicit?: boolean; round?: number } = {}): Promise<void> {
     const v = await this.localOf(wire);
     if (!v) return;
     const run = this.#ctx.runOf(wire);
@@ -387,7 +402,17 @@ export class Replicator {
     let hash: string | null = null;
     try { hash = await this.#o.store.hashAt(v.local, 0, have); } catch (e) { if (!(e instanceof StoreError && e.code === 'evicted')) throw e; }
     if (hash === null) { have = 0; hash = await this.#o.store.hashAt(v.local, 0, 0); } // a chain value I cannot give is replaced by the public start
-    this.#ctx.sendLive(KIND_WANT, wantBodyOf({ version: wire, haveLines: have, haveHash: unhex(hash as string), through: opts.through ?? null, intro: false }), peer.id);
+    // finding 3: the newest writer-signed point I hold ABOVE what I am asking from, so a holder that has the lines but not that signature may serve up to it (I check every byte against the signature I hold)
+    const newest = await this.#ctx.heads.newest(wire);
+    let cover = newest && newest.lines > have ? { lines: newest.lines, hash: newest.hash, sig: newest.sig } : null;
+    // the WRITER keeps no saved points of its own (it signs on demand): when its own record says it signed more than it holds, it signs that record again and offers it as the cover
+    const wd = this.#directory.describe(wire);
+    if (!cover && wd && wd.writer.equals(this.#ctx.crypto.self)) {
+      const ev = await this.#own.read(wire);
+      if (ev.effective && ev.effective.lines > have) { const raw = unhex(ev.effective.hash); cover = { lines: ev.effective.lines, hash: raw, sig: this.#ctx.crypto.sign(headMessage(wire, ev.effective.lines, raw)) }; }
+    }
+    if (opts.solicit && opts.round !== undefined) run.solicitRound = Math.max(run.solicitRound, opts.round);
+    this.#ctx.sendLive(KIND_WANT, wantBodyOf({ version: wire, haveLines: have, haveHash: unhex(hash as string), through: opts.through ?? null, intro: false, round: opts.solicit ? (opts.round ?? run.solicitRound) : 0, cover: opts.solicit ? null : cover }), peer.id);
     if (opts.solicit) return; // asking a peer to confirm what it holds is not a pull
     run.pull = { peer: peer.hex, haveLines: have, at: this.#ctx.clock.now() };
     run.stall?.cancel();
@@ -434,7 +459,7 @@ export class Replicator {
         if (ph.lines <= head.lines) { try { at = await this.#o.store.hashAt(v.local, 0, ph.lines); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') at = 'unknown'; else throw e; } }
         const verdict = compareHeads(mine, { lines: ph.lines, hash: ph.hash, state: ph.state }, at);
         if (verdict.do !== 'in-sync') allSync = false;
-        if (verdict.do === 'in-sync' && ph.state === 'ok') inSyncPeers++;
+        if (verdict.do === 'in-sync' && ph.state === 'ok' && !ph.echo) inSyncPeers++; // an echoed digest is not evidence (review 2, finding 1)
         if (verdict.do === 'ignore-theirs') unsureHolders++; // a peer that is repairing may hold more than it can vouch for: it proves nothing either way
         if (verdict.do === 'pull') pulls.push(p);
         if (verdict.do === 'diverged' && !diverged) diverged = p;
@@ -487,31 +512,47 @@ export class Replicator {
   /** The writer announces a new version (a chat's first, or a takeover's child) and registers it. */
   async createVersion(d: Omit<VersionDescriptor, 'writer'>): Promise<void> {
     const dir = this.#directory as InterimDirectory;
+    this.#ctx.runOf(d.version).evidence = true; // a version this device is creating now has no lost tail to find
     if (!dir.announce) throw new Error('this directory does not take announcements');
     const intro = await dir.announce({ ...d, writer: this.#ctx.crypto.self });
     await this.adopt(d.version);
     this.#ctx.sendLive(KIND_INTRO, introBodyOf(intro));
   }
-  /** The highest head this device (as the writer) has ever signed or acknowledged to its adapter, kept in the replicator's OWN folder, apart from the store (review 1, F1; fuzz 400382). With it the writer
-   *  knows what "my own latest signed head" is even when its store lost lines (set aside, or the folder put back) and no peer is reachable to say so. */
-  private async ownHead(wire: Buffer): Promise<{ lines: number; hash: string } | null> {
+  /** For tests: drop the in-memory state of the writer's evidence (its files are changed by the test). */
+  forgetOwnHeadForTests(wire: Buffer): void { this.#ctx.runOf(wire).evidence = false; }
+  /** Does this process have evidence that the writer of `wire` is at its own latest head? (review 2, finding 1)
+   *  Yes when: it is the only device of the set; or a peer has sent ALL its heads in this process (an equal summary digest does not count, a hostile device can echo one) and none of the fresh claims says it
+   *  holds more, or something else, than I do (that is the append gate's own loop); or, as the NAMED, BOUNDED fallback, no peer has been heard at all for WRITER_ALONE_MS since start and this device's own two
+   *  records are both present and agree with the store (`writing-alone`, counted). Peer evidence is what a holder of the lines would say; what NO device can detect is a peer that holds the lost tail and
+   *  withholds it, which is the same as that peer not existing. */
+  private evidenceNow(wire: Buffer, haveRecord: boolean): boolean {
     const run = this.#ctx.runOf(wire);
-    if (run.ownHead !== undefined) return run.ownHead;
-    const raw = await (this.#o.fs ?? realFs).readFile(nodePath.join(this.#o.dir, 'own', wire.toString('hex')));
-    run.ownHead = raw && raw.length === 40 ? { lines: Number(raw.readBigUInt64BE(0)), hash: raw.subarray(8, 40).toString('hex') } : null;
-    return run.ownHead;
+    if (run.evidence) return true;
+    if (this.#o.devices().length === 0) { run.evidence = true; return true; }
+    const now = this.#ctx.clock.now();
+    for (const p of this.#ctx.peers.values()) if (p.headsComplete !== null && p.headsComplete >= this.#startedAt && now - p.headsComplete <= PEER_FRESH_MS) { run.evidence = true; return true; }
+    const heard = [...this.#ctx.peers.values()].some((p) => p.lastSeen >= this.#startedAt);
+    if (!heard && haveRecord && now - this.#startedAt >= WRITER_ALONE_MS) { run.evidence = true; this.#ctx.bump('writing-alone'); return true; }
+    return false;
   }
-  /** For tests: drop the in-memory copy of the writer's own record (its file is removed by the test). */
-  forgetOwnHeadForTests(wire: Buffer): void { this.#ctx.runOf(wire).ownHead = undefined; }
-  private async saveOwnHead(wire: Buffer, lines: number, hash: string): Promise<void> {
-    const b = Buffer.alloc(40); b.writeBigUInt64BE(BigInt(lines), 0); Buffer.from(hash, 'hex').copy(b, 8);
-    const fs = this.#o.fs ?? realFs; const dir = nodePath.join(this.#o.dir, 'own');
-    await mkdirDurable(fs, dir);
-    await writeFileAtomic(fs, nodePath.join(dir, wire.toString('hex')), b);
-    this.#ctx.runOf(wire).ownHead = { lines, hash };
+  /** Save the writer's record of its highest head to both places. A failed save keeps the head pending (retried) and is reported by the caller as `durable-not-recorded`. */
+  private async saveOwnHead(wire: Buffer, lines: number, hash: string): Promise<boolean> {
+    const r = await this.#own.save(wire, { lines, hash });
+    for (const f of r.failed) reportFailure({ what: `save the writer's own record of its highest head (${f.where})`, cause: f.cause, where: 'mesh.replicator' });
+    const run = this.#ctx.runOf(wire);
+    if (r.ok === 2) { run.ownPending = null; return true; }
+    run.ownPending = { lines, hash };
+    return false;
   }
-  /** Adapter entry point: append lines to a version this device is the writer of. Refuses otherwise (invariant 7). The new lines are pushed to every device. */
-  async appendLocal(wire: Buffer, lines: Buffer[]): Promise<{ lines: number; hash: string }> {
+  private async retryOwnPending(wire: Buffer): Promise<void> {
+    const p = this.#ctx.runOf(wire).ownPending;
+    if (p) await this.saveOwnHead(wire, p.lines, p.hash);
+  }
+  /** Adapter entry point: append lines to a version this device is the writer of. Refuses otherwise (invariant 7). The new lines are pushed to every device.
+   *  `expected` (review 2, finding 7): the head the caller last saw (lines and chain value). With it, a retry after a failure that left the lines durable cannot append them twice: if the store already holds
+   *  exactly these lines on top of that head the answer is `already-saved`, and any other head is refused as `writer-head-moved`. Results: `saved`; `already-saved`; `durable-not-recorded` (the lines
+   *  are in the store but the writer's own record of its highest head could not be written to both places; nothing is announced until it can be, and the next call retries). */
+  async appendLocal(wire: Buffer, lines: Buffer[], expected?: { lines: number; hash: string }): Promise<{ lines: number; hash: string; result: 'saved' | 'already-saved' | 'durable-not-recorded' }> {
     // a line the wire cannot carry is refused BEFORE anything is written (review 1, F5): the store takes 512 MiB, a peer parses 64 MiB; a line only I could ever read is a quiet loss
     for (const l of lines) if (l.length > MAX_LINE_BYTES) throw new Error('line-too-large');
     const out = await this.queue(wire, async () => {
@@ -526,15 +567,20 @@ export class Replicator {
       if (!v) throw new Error('version-not-ready');
       const head = await this.#o.store.head(v.local);
       if (repairFrom(head) !== null) throw new Error('refilling');
-      // WRITER-SIDE (review 1, F1): the writer appends only while it is provably at its own latest signed head. A fresh incarnation that has not been refilled, or any fresh peer claim of more lines
-      // of this version (or of the same count with another chain value), means this device lost lines it signed; a new line now would start a second history at the same position. Loud refusal.
-      const own = await this.ownHead(wire);
-      if (own) {
-        // what this writer itself has signed and acknowledged: the store must hold at least that, on the same chain (a loss of lines it signed is not something a peer's silence can excuse)
-        if (head.lines < own.lines) throw new Error('writer-behind-own-signed-head');
-        let mine: string | null = null;
-        try { mine = await this.#o.store.hashAt(v.local, 0, own.lines); } catch (e) { if (!(e instanceof StoreError && e.code === 'evicted')) throw e; mine = own.hash; /* evicted: the chain value was lost with the index, cannot be compared here */ }
-        if (mine !== own.hash) throw new Error('writer-diverged-from-own-signed-head');
+      if (run.ownPending) { await this.retryOwnPending(wire); if (run.ownPending) throw new Error('writer-own-record-not-saved'); void Promise.resolve().then(() => pushNew(this.#ctx, wire)).catch((e: unknown) => reportFailure({ what: 'push new chat lines to the other devices', cause: e, where: 'mesh.replicator' })); }
+      // WRITER-SIDE (review 1, F1; review 2, finding 1): the writer appends only while it is provably at its own latest signed head.
+      // (1) its two records (replicator folder and the witness folder, outside both the store and the replicator folder) say what it has signed; the store must hold at least that, on the same chain;
+      // (2) a record that is present but unreadable is a NAMED fault, never "no record"; (3) after every start, evidence from the peers (or the bounded alone-fallback) before the first append.
+      const ev = await this.#own.read(wire);
+      const eff = ev.effective;
+      if (ev.problem === 'own-records-disagree' || (ev.problem && !eff)) { this.#ctx.bump(`writer-${ev.problem}`); throw new Error(`writer-${ev.problem}`); }
+      if (eff) {
+        if (head.lines < eff.lines) throw new Error('writer-behind-own-signed-head');
+        for (const rec of ev.lower ? [eff, ev.lower] : [eff]) {
+          let mine: string | null = null;
+          try { mine = await this.#o.store.hashAt(v.local, 0, rec.lines); } catch (e) { if (!(e instanceof StoreError && e.code === 'evicted')) throw e; mine = rec.hash; /* evicted: the chain value was lost with the index, cannot be compared here */ }
+          if (mine !== rec.hash) throw new Error('writer-diverged-from-own-signed-head');
+        }
       } else if (v.incarnation > 0 && !run.caughtUp) throw new Error('writer-recopy-not-confirmed'); // no record of its own: only a level peer can say it is not behind
       const wk = wire.toString('hex'); const now = this.#ctx.clock.now();
       for (const p of this.#ctx.peers.values()) {
@@ -543,15 +589,29 @@ export class Replicator {
         if (h.lines > head.lines) throw new Error('writer-behind-peer-holds-more');
         if (h.lines === head.lines && h.hash !== head.hash) throw new Error('writer-diverged-from-peer');
       }
+      if (!this.evidenceNow(wire, eff !== null && ev.own.kind === 'ok' && ev.witness.kind === 'ok')) throw new Error('writer-waiting-for-peers');
+      if (expected) {
+        if (head.lines !== expected.lines || head.hash !== expected.hash) {
+          // the lines may already be there (an earlier call made them durable and then failed before answering): the same bytes, at exactly this place, on exactly that head
+          let same = false;
+          if (head.lines === expected.lines + lines.length && (await this.#o.store.hashAt(v.local, 0, expected.lines).catch(() => null /* benign: a chain value that is gone cannot match; refused below */)) === expected.hash) {
+            const got = await this.#o.store.read(v.local, 0, expected.lines, head.lines);
+            same = got !== 'evicted' && got.length === lines.length && got.every((l, i) => l.equals(lines[i]));
+          }
+          if (!same) throw new Error('writer-head-moved');
+          const recorded = await this.saveOwnHead(wire, head.lines, head.hash);
+          return { lines: head.lines, hash: head.hash, result: recorded ? 'already-saved' as const : 'durable-not-recorded' as const };
+        }
+      }
       const res = await this.#o.store.append(v.local, 0, head.lines, lines);
       if (res !== 'ok') throw new Error(`append answered ${res}`);
       if (run.pushedThrough === null) run.pushedThrough = head.lines;
       const h = await this.#o.store.head(v.local);
-      await this.saveOwnHead(wire, h.lines, h.hash); // AFTER the store has the lines and BEFORE anything is signed or pushed from them
-      return { lines: h.lines, hash: h.hash };
+      const recorded = await this.saveOwnHead(wire, h.lines, h.hash); // AFTER the store has the lines and BEFORE anything is signed or pushed from them
+      return { lines: h.lines, hash: h.hash, result: recorded ? 'saved' as const : 'durable-not-recorded' as const };
     });
-    // WHY a microtask: calls made in the same turn become one batch
-    void Promise.resolve().then(() => pushNew(this.#ctx, wire)).catch((e: unknown) => reportFailure({ what: 'push new chat lines to the other devices', cause: e, where: 'mesh.replicator' }));
+    // WHY a microtask: calls made in the same turn become one batch. Nothing is pushed while the record is not saved (the next append, or the scrub tick, retries and then pushes).
+    if (out.result !== 'durable-not-recorded') void Promise.resolve().then(() => pushNew(this.#ctx, wire)).catch((e: unknown) => reportFailure({ what: 'push new chat lines to the other devices', cause: e, where: 'mesh.replicator' }));
     return out;
   }
 
@@ -580,8 +640,24 @@ export class Replicator {
     if (run.retiredRecopy) return mk('retired-recopy');
     // the writer's own record says it signed more lines than this copy holds (review 1 / fuzz 505206): never `in-sync`, whatever the peers claim (they may have lost the lines too)
     const desc = this.#directory.describe(wire);
-    if (desc && desc.writer.equals(ctx.crypto.self)) { const own = await this.ownHead(wire); if (own && lines < own.lines) return mk('refilling', 'behind-own-signed-head'); }
-    if (run.pull) return mk('pulling', run.skip.size > 0 ? 'peers-not-answering' : null);
+    if (desc && desc.writer.equals(ctx.crypto.self)) {
+      const ev = await this.#own.read(wire);
+      if (ev.problem && !ev.effective) return mk('stuck', ev.problem);
+      if (ev.effective && lines < ev.effective.lines) return mk('refilling', 'behind-own-signed-head');
+      if (ctx.runOf(wire).ownPending) return mk('stuck', 'own-record-not-saved');
+      if (this.#o.devices().length > 0 && !this.evidenceNow(wire, ev.effective !== null && ev.own.kind === 'ok' && ev.witness.kind === 'ok')) return mk('comparing', 'writer-waiting-for-peers');
+    }
+    if (desc && !desc.writer.equals(ctx.crypto.self) && cur?.registered) {
+      // holding lines no writer signature covers is said plainly, not shown as a calm picture (review 2, finding 3)
+      const h2 = await this.#o.store.head(cur.local).catch(() => null /* benign: no head means no lines to speak of */);
+      if (h2 && (await vouchLines(ctx, wire, cur.local, desc, h2)).unsignable) return mk('comparing', 'holds-lines-without-signature');
+    }
+    if (run.pull) {
+      // every device that claims more lines has answered "unavailable" more than once: nothing will arrive without something changing (review 2, finding 3)
+      const cands = [...ctx.peers.values()].filter((p) => { const h = p.heads.get(wire.toString('hex')); return h && h.lines > lines && ctx.clock.now() - h.at <= PEER_FRESH_MS; });
+      if (cands.length > 0 && run.unavailableRounds >= 2 * cands.length && cands.every((p) => run.unavailable.has(p.hex))) return mk('stuck', 'no-peer-can-serve');
+      return mk('pulling', run.skip.size > 0 ? 'peers-not-answering' : null);
+    }
     if ([...ctx.sessions.values()].some((s) => s.wire.equals(wire))) return mk('serving', run.serveWait ? 'waiting-for-read-memory' : null);
     // no copy is registered at the current incarnation (the announcement is known but the store has not been set up for it yet): nothing can be in sync with anything
     if (!cur?.registered) return mk('comparing', 'copy not set up yet');
@@ -602,21 +678,25 @@ export class Replicator {
   }
 
   /** Signed statements by other devices that they hold the first `lines` lines of `wire`, in the shape of an eviction proof's acks.
-   *  CONTRACT (review 1, F2): an ack is listed only while that device's own latest heads agree with it (fresh, `ok`, at least as many lines, and the same chain value where the counts are equal), so a
-   *  listed ack means "this device held exactly those lines at a time no earlier than its last heads". It is a statement SIGNED BY THAT DEVICE: another device of the set can sign anything for itself. */
+   *  EXACT GUARANTEE (review 2, finding 6). An ack is a statement signed by that device ("I hold the first `lines` lines, chain value `hash`"), and it is checked to lie on MY chain. It is listed only while
+   *  that device's OWN heads (a separate message; an ack never refreshes them) are fresh, `ok`, at least as many lines, and the same chain value where the counts are equal. `round` says WHEN it held them:
+   *  round n > 0: it answers my solicit number n, so it held them at a time no earlier than that device received that solicit (it signed the round); round 0: sent after its own append, so only "at some time
+   *  no later than `receivedAt`" (my clock). It is NOT proof the lines are still readable now, and another device of the set can sign anything for itself. WHAT EVICTION MUST ADD: require acks with round > 0
+   *  from a solicit sent after the decision to evict began (`solicitAcks`, then wait), plus a readable check of the holder (a fresh pull of a sample line); round 0 acks never suffice. */
   peerAcks(wire: Buffer): PeerAck[] {
     const wk = wire.toString('hex'); const out: PeerAck[] = []; const now = this.#ctx.clock.now();
     for (const p of this.#ctx.peers.values()) {
       const a = p.acks.get(wk); const h = p.heads.get(wk);
       if (!a || !h || h.state !== 'ok' || now - h.at > PEER_FRESH_MS) continue;
       if (h.lines < a.lines || (h.lines === a.lines && h.hash !== a.hash)) continue;
-      out.push({ holder: p.hex, version: wk, lines: a.lines, hash: a.hash, signature: a.sig.toString('hex') });
+      out.push({ holder: p.hex, version: wk, lines: a.lines, hash: a.hash, signature: a.sig.toString('hex'), round: a.round, receivedAt: a.at });
     }
     return out;
   }
   /** Ask every peer to confirm what it holds of `wire` (each answers with a signed ack of its head when it is level with me). Answers arrive through the normal ack path. */
   async solicitAcks(wire: Buffer): Promise<void> {
-    for (const p of this.#ctx.peers.values()) await this.want(wire, p, { solicit: true });
+    // one round for all peers: the same number goes to each, and an answer is credited only when it names it
+    for (const p of this.#ctx.peers.values()) await this.want(wire, p, { solicit: true, round: this.#ctx.runOf(wire).solicitRound + 1 });
   }
   /** Seam S9 (design): make sure the bodies of this version are present. NOT BUILT: restoring evicted bodies belongs to the storage policy; this only says whether they are readable. */
   async ensureBody(wire: Buffer): Promise<'present' | 'evicted'> {

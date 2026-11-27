@@ -11,6 +11,7 @@ import { StoreError } from '../store';
 import type { Head } from '../store';
 import { reportFailure } from '../../report-failure';
 import { MAX_SESSIONS, MAX_SESSIONS_PER_PEER, WINDOW_FRAMES } from './budget';
+import { UNKNOWN_SPAN } from './signed-heads';
 import { chatGroup, repairFrom, type PeerInfo, type RepCtx, type ServeSession } from './ctx';
 import { sendAck, sendNak } from './receive';
 import { onCorruptRead } from './repair';
@@ -24,14 +25,14 @@ interface Batch { lines: Buffer[]; end: number; head: SignedHead }
 const keyOf = (peerHex: string, wire: Buffer): string => `${peerHex}/${wire.toString('hex')}`;
 
 /** Build one batch starting at `from`, ending at a signed point and at or below `cap` (the writer's end is free; a non-writer's is its next held point). */
-async function buildBatch(ctx: RepCtx, wire: Buffer, local: Buffer, writer: Buffer, from: number, cap: number, head: Head): Promise<Batch | { nak: NakWhy }> {
-  try { return await buildBatchOnce(ctx, wire, local, writer, from, cap, head); } catch (e) {
+async function buildBatch(ctx: RepCtx, wire: Buffer, local: Buffer, writer: Buffer, from: number, cap: number, head: Head, cover: { lines: number; hash: Buffer; sig: Buffer } | null): Promise<Batch | { nak: NakWhy }> {
+  try { return await buildBatchOnce(ctx, wire, local, writer, from, cap, head, cover); } catch (e) {
     // a corrupt read is the damage signal: this copy cannot serve (say so), and it starts repairing itself (plan: "read throws corrupt: enter refilling and send nak unavailable")
     if (e instanceof StoreError && e.code === 'corrupt') { await onCorruptRead(ctx, wire, local); return { nak: 'unavailable' }; }
     throw e;
   }
 }
-async function buildBatchOnce(ctx: RepCtx, wire: Buffer, local: Buffer, writer: Buffer, from: number, cap: number, head: Head): Promise<Batch | { nak: NakWhy }> {
+async function buildBatchOnce(ctx: RepCtx, wire: Buffer, local: Buffer, writer: Buffer, from: number, cap: number, head: Head, cover: { lines: number; hash: Buffer; sig: Buffer } | null): Promise<Batch | { nak: NakWhy }> {
   const me = writer.equals(ctx.crypto.self);
   if (me) {
     const lines: Buffer[] = []; let bytes = 0; let end = from;
@@ -57,6 +58,11 @@ async function buildBatchOnce(ctx: RepCtx, wire: Buffer, local: Buffer, writer: 
     if (!ctx.crypto.verify(writer, headMessage(wire, c.lines, c.hash), c.sig)) { ctx.bump('saved-point-bad-signature'); continue; }
     if ((await ctx.store.hashAt(local, 0, c.lines)) !== hex(c.hash)) { ctx.bump('saved-point-not-on-my-chain'); continue; }
     pt = c; break;
+  }
+  // finding 3: no saved point of mine reaches past `from`, but the ASKER holds a writer-signed point above its head and I hold the very lines it covers (same chain value there): serve up to it. The
+  // asker checks the lines against that signature; I vouch for nothing, and no one appends a line that no writer signature covers.
+  if (!pt && cover && cover.lines > from && cover.lines <= head.lines && cover.lines <= cap && ctx.crypto.verify(writer, headMessage(wire, cover.lines, cover.hash), cover.sig) && (await ctx.store.hashAt(local, 0, cover.lines)) === hex(cover.hash)) {
+    pt = { lines: cover.lines, hash: cover.hash, sig: cover.sig, spanBytes: UNKNOWN_SPAN }; ctx.bump('served-to-cover');
   }
   if (!pt) return { nak: 'unavailable' };
   if (pt.lines - from > MAX_LINES_PER_FRAME) return { nak: 'unavailable' };
@@ -103,7 +109,7 @@ export async function onWant(ctx: RepCtx, peer: PeerInfo, w: WantBody): Promise<
     // (no clamp to my newest signed point here: review 1 showed it redundant. buildBatch serves only up to a signed point on my chain and answers `unavailable` otherwise, so the clamp could only repeat that.)
     if (w.haveLines >= through) {
       // level with me: say so with a signed ack of my head (this is how a device asks "do you still hold these lines?", F2); behind my signed points: say I cannot help
-      if (w.haveLines >= head.lines) { await sendAck(ctx, peer, wire, v.local); return; }
+      if (w.haveLines >= head.lines) { await sendAck(ctx, peer, wire, v.local, w.round); return; }
       sendNak(ctx, peer, wire, w.haveLines, 'unavailable'); return;
     }
     const key = keyOf(peer.hex, wire);
@@ -111,7 +117,7 @@ export async function onWant(ctx: RepCtx, peer: PeerInfo, w: WantBody): Promise<
     const ofPeer = [...ctx.sessions.values()].filter((x) => x.peer === peer.hex).length; // F6: one device cannot fill every session
     if (!old && (ctx.sessions.size >= MAX_SESSIONS || ofPeer >= MAX_SESSIONS_PER_PEER)) { ctx.bump('serve-session-limit'); sendNak(ctx, peer, wire, w.haveLines, 'unavailable'); return; }
     old?.timer?.cancel();
-    const s: ServeSession = { peer: peer.hex, wire, next: w.haveLines, acked: w.haveLines, through, inFlight: [], lastProgress: ctx.clock.now(), timer: null, pumping: false };
+    const s: ServeSession = { cover: w.cover, peer: peer.hex, wire, next: w.haveLines, acked: w.haveLines, through, inFlight: [], lastProgress: ctx.clock.now(), timer: null, pumping: false };
     ctx.sessions.set(key, s);
     armSession(ctx, key);
   });
@@ -141,7 +147,7 @@ async function pump(ctx: RepCtx, key: string): Promise<void> {
         const v = await ctx.localOf(s.wire);
         if (!v || !peer) return null;
         const head = await ctx.store.head(v.local);
-        return { v, r: await buildBatch(ctx, s.wire, v.local, v.desc.writer, s.next, s.through, head) };
+        return { v, r: await buildBatch(ctx, s.wire, v.local, v.desc.writer, s.next, s.through, head, s.cover ?? null) };
       }).catch((e: unknown) => { reportFailure({ what: 'read chat lines to send to another device', cause: e, where: 'mesh.replicator' }); return null; });
       if (!batch || !peer) { ctx.sessions.delete(key); return; }
       if ('nak' in batch.r) { sendNak(ctx, peer, s.wire, s.next, batch.r.nak); ctx.sessions.delete(key); return; }
@@ -159,7 +165,7 @@ async function pump(ctx: RepCtx, key: string): Promise<void> {
 /** A peer's signed ack. Recorded only when it verifies AND matches my chain; the value may fall as well as rise (a peer can roll back). */
 export async function onAck(ctx: RepCtx, peer: PeerInfo, a: AckBody): Promise<void> {
   if (!ctx.directory.describe(a.version)) { ctx.bump('ack-unknown-version-ignored'); return; } // F6
-  if (!ctx.crypto.verify(peer.id, ackMessage(peer.id, a.version, a.lines, a.hash), a.sig)) { ctx.bump('ack-bad-signature'); return; }
+  if (!ctx.crypto.verify(peer.id, ackMessage(peer.id, a.version, a.lines, a.hash, a.round), a.sig)) { ctx.bump('ack-bad-signature'); return; }
   const wireHex = a.version.toString('hex');
   const v = await ctx.run(a.version, async () => {
     const x = await ctx.localOf(a.version);
@@ -172,9 +178,11 @@ export async function onAck(ctx: RepCtx, peer: PeerInfo, a: AckBody): Promise<vo
   // WHY the chain check: an ack by count alone would credit a peer holding DIFFERENT lines (invariant 4); an evicted value cannot be checked, so it is not credited either
   if (v.mine !== a.hash.toString('hex')) { ctx.bump('ack-not-on-my-chain'); peer.acks.delete(wireHex); return; }
   const now = ctx.clock.now();
-  peer.acks.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), sig: a.sig, at: now }); // set, never max(): it may be lower than before
-  // a signed ack is also the freshest word of that device about what it holds: its entry follows it (F2: acks are listed only while the holder's heads agree)
-  peer.heads.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), state: 'ok', at: now });
+  // WHY the round is checked: an ack that names a solicit round I never sent is not credited as an answer to one (it cannot be older than that solicit; a number I did not send proves nothing)
+  const run = ctx.runOf(a.version);
+  if (a.round > run.solicitRound) { ctx.bump('ack-round-unknown'); return; }
+  peer.acks.set(wireHex, { lines: a.lines, hash: a.hash.toString('hex'), sig: a.sig, at: now, round: a.round }); // set, never max(): it may be lower than before
+  // (review 2, findings 2 and 6: an ack no longer refreshes the sender's heads. A repairing device acks only what it can vouch for, and a refresh made BY the ack made the ack its own proof.)
   const key = keyOf(peer.hex, a.version);
   const s = ctx.sessions.get(key);
   if (s) {
@@ -201,7 +209,7 @@ export async function pushNew(ctx: RepCtx, wire: Buffer): Promise<void> {
         const head = await ctx.store.head(v.local);
         const from = Math.min(run.pushedThrough ?? head.lines, head.lines); // after a refill the head may be below what was pushed before
         if (from >= head.lines || repairFrom(head) !== null) { run.pushedThrough = Math.max(from, run.pushedThrough ?? 0); return null; }
-        const r = await buildBatch(ctx, wire, v.local, v.desc.writer, from, head.lines, head);
+        const r = await buildBatch(ctx, wire, v.local, v.desc.writer, from, head.lines, head, null);
         return { v, from, r };
       });
       if (!step || 'nak' in step.r) return;

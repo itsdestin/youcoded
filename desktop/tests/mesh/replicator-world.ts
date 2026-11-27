@@ -47,7 +47,7 @@ export class VirtualClock implements Clock {
 }
 
 export interface WDev { name: string; id: DeviceIdentity; dir: string; carrier: MemoryCarrier; link: Link; store: ChatStore; rep: Replicator; roster: RosterStore }
-export interface WorldOptions { scrubEveryMs?: number; stepLimitMs?: number; fsFor?: (name: string) => Fs | undefined; storeOpts?: StoreOptions; discoveryMs?: number; stallMs?: number; autoStart?: boolean }
+export interface WorldOptions { scrubEveryMs?: number; stepLimitMs?: number; fsFor?: (name: string) => Fs | undefined; storeOpts?: StoreOptions; discoveryMs?: number; stallMs?: number; autoStart?: boolean; bindIds?: boolean }
 
 const secret = newSetSecret();
 
@@ -79,7 +79,7 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
     });
     await link.start([]);
     rep = await Replicator.create({
-      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs, scrubEveryMs: o.scrubEveryMs ?? 0, stepLimitMs: o.stepLimitMs,
+      store, link, dir: path.join(dirs[n], 'replicator'), setId, clock, ...(fsx ? { fs: fsx } : {}), discoveryMs: o.discoveryMs, stallMs: o.stallMs, scrubEveryMs: o.scrubEveryMs ?? 0, stepLimitMs: o.stepLimitMs, bindIds: o.bindIds ?? false,
       crypto: {
         self: ids[n].deviceId, sign: (m) => signWith(ids[n], m), knows: (d) => roster.signKeyFor(d) !== undefined && !roster.isRemoved(d),
         verify: (d, m, s) => { const k = roster.signKeyFor(d); return !!k && verifySig(k, m, s); },

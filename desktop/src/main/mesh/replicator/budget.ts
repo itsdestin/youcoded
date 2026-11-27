@@ -60,3 +60,6 @@ export class RateLimiter {
 }
 /** The same peer is not sent another `want` for the same version sooner than this, and a child asks for its parent at most this often (a peer that cannot serve answers at once, and an immediate re-ask made two devices ping-pong at full speed, fuzz seed 815612). */
 export const WANT_GAP_MS = 2_000;
+
+/** How long after start a writer that has heard from NO peer waits before it may write alone (named `writing-alone`; review 2, finding 1). */
+export const WRITER_ALONE_MS = 20_000;

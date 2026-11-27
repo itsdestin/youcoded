@@ -20,7 +20,7 @@ import { FrameReject, FrameWait } from '../link';
 import { reportFailure } from '../../report-failure';
 import { ackBodyOf, ackMessage, headMessage, KIND_ACK, KIND_NAK, KIND_WANT, nakBodyOf, wantBodyOf, type LinesBody, type NakWhy } from './wire';
 import { UNKNOWN_SPAN } from './signed-heads';
-import { repairFrom, type PeerInfo, type RepCtx } from './ctx';
+import { repairFrom, vouchLines, type PeerInfo, type RepCtx } from './ctx';
 import { checkRepair, retireAndRecopy, scrubAll } from './repair';
 import { REASSEMBLY_IDLE_MS } from './budget';
 
@@ -31,15 +31,22 @@ export function sendNak(ctx: RepCtx, peer: PeerInfo, wire: Buffer, at: number, w
   ctx.sendLive(KIND_NAK, nakBodyOf({ version: wire, at, why, hashAtYourCount: mine ? unhex(mine) : null }), peer.id);
 }
 
-export async function sendAck(ctx: RepCtx, peer: PeerInfo, wire: Buffer, local: Buffer): Promise<void> {
+/** Acknowledge what this device can VOUCH for, no more (review 2, finding 2): its head cut back to the first line the store reports damaged and, for a device that is not the writer, to the newest line
+ *  a writer signature covers (`vouchLines`; the same cut `myEntries` makes for heads). `round` is 0, or the solicit round being answered (it is part of what is signed). */
+export async function sendAck(ctx: RepCtx, peer: PeerInfo, wire: Buffer, local: Buffer, round = 0): Promise<void> {
+  const desc = ctx.directory.describe(wire);
+  if (!desc) return;
   const h = await ctx.store.head(local);
-  const raw = unhex(h.hash);
-  ctx.sendLive(KIND_ACK, ackBodyOf({ version: wire, lines: h.lines, hash: raw, sig: ctx.crypto.sign(ackMessage(ctx.crypto.self, wire, h.lines, raw)) }), peer.id);
+  const v = await vouchLines(ctx, wire, local, desc, h);
+  const hash = v.lines === h.lines ? h.hash : await ctx.store.hashAt(local, 0, v.lines);
+  if (hash === null) return;
+  const raw = unhex(hash);
+  ctx.sendLive(KIND_ACK, ackBodyOf({ version: wire, lines: v.lines, hash: raw, round, sig: ctx.crypto.sign(ackMessage(ctx.crypto.self, wire, v.lines, raw, round)) }), peer.id);
 }
 
 /** Ask the peer for the announcement of a version this device has not been told about (it answers with `rep.intro`, then I ask for the lines). */
 export function askIntro(ctx: RepCtx, peer: PeerInfo, wire: Buffer): void {
-  ctx.sendLive(KIND_WANT, wantBodyOf({ version: wire, haveLines: 0, haveHash: Buffer.alloc(32), through: null, intro: true }), peer.id);
+  ctx.sendLive(KIND_WANT, wantBodyOf({ version: wire, haveLines: 0, haveHash: Buffer.alloc(32), through: null, intro: true, round: 0, cover: null }), peer.id);
 }
 
 /** A part of a line too large for one frame. Returns the whole line when the last part arrives, else null. Parts must come in order from part 0; anything else restarts.
@@ -135,7 +142,7 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   let res: AppendResult;
   try { res = await ctx.store.append(v.local, 0, b.from, lines); } catch (e) { await storeFailed(ctx, peer, wire, e, b.from); return; }
   if (res === 'ok') {
-    run.diverged = null; run.stuck = null; run.retiredRecopy = false;
+    run.diverged = null; run.stuck = null; run.retiredRecopy = false; run.unavailable.clear(); run.unavailableRounds = 0;
     // the sender holds at least what the writer signed in this batch (a signed statement, not a bare claim), so its entry is at least that
     const sk = wire.toString('hex'); const prev = peer.heads.get(sk);
     if (!prev || prev.lines <= b.head.lines) peer.heads.set(sk, { lines: b.head.lines, hash: b.head.hash.toString('hex'), state: 'ok', at: ctx.clock.now() });
@@ -163,6 +170,15 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   //  * my lines at the point of conflict were ENDORSED by an earlier writer signature I hold (or I AM the writer): the writer signed two histories. Neither is mine to discard: the copy is kept as it
   //    is, the version goes to the sticky named fault, and the copy keeps being served (that is how it is "offered back").
   //  * they were never covered by any writer signature (foreign bytes): nothing endorsed them, so they are set aside and recopied.
+  // A copy whose lines run past its newest saved signed point (the replicator folder is older than the store, or those lines never had a signature) cannot be judged here: it is KEPT and the version
+  // goes to a named fault, never set aside on a guess (review 2, finding 5). Only a copy whose points reach its head can be shown to be unendorsed.
+  const unsignable = !iAmWriter && (await vouchLines(ctx, wire, v.local, desc, head)).unsignable;
+  if (unsignable) {
+    await ctx.fault(wire, 'unsigned-lines-contradicted');
+    sendNak(ctx, peer, wire, head.lines, 'not-a-prefix', head.hash);
+    ctx.advertise();
+    return;
+  }
   if (iAmWriter || (await endorsedByWriter(ctx, wire, v.local, b.from, lines, head.lines, desc.writer))) {
     await ctx.fault(wire, 'writer-signed-two-histories');
     sendNak(ctx, peer, wire, head.lines, 'not-a-prefix', head.hash);

@@ -318,7 +318,7 @@ export class MeshService {
     this.#rep = await Replicator.create({
       store, link, dir: path.join(this.dir, 'replicator'), setId,
       crypto: { self: id.deviceId, sign: (m) => signWith(id, m), knows: (d) => this.roster.signKeyFor(d) !== undefined, verify: (d, m, sig) => { const k = this.roster.signKeyFor(d); return !!k && verifySig(k, m, sig); } },
-      devices: () => [],
+      devices: () => this.roster.activeDevices().map((d) => d.deviceId).filter((d) => !d.equals(id.deviceId)), bindIds: false, // WHY: the rig names root ids by hand; adapters will use deriveRootId (review 2, finding 4)
       discoveryMs: this.o.headsEveryMs,
     });
     await this.#rep.start();

@@ -30,10 +30,12 @@ type VState = 'unknown' | 'comparing' | 'in-sync' | 'pulling' | 'serving' | 'ref
 export interface VersionStatus { state: VState; reason: string | null; lines: number; incarnation: number }
 
 /** A signed statement a holder made about a version, in the shape of an eviction proof's ack (the store's `EvictionProof.acks`). */
-export interface PeerAck { holder: string; version: string; lines: number; hash: string; signature: string }
+/** A signed statement a holder made about a version (the shape of an eviction proof's ack), with what this device knows about WHEN.
+ *  `round` 0: the holder sent it after its own append. `round` n > 0: it answers MY solicit number n, so it was signed after the holder received that solicit. `receivedAt`: my clock when it arrived. */
+export interface PeerAck { holder: string; version: string; lines: number; hash: string; signature: string; round: number; receivedAt: number }
 
-interface PeerHead { lines: number; hash: string; state: AdvertisedState; at: number }
-export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number }>; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
+interface PeerHead { lines: number; hash: string; state: AdvertisedState; at: number; /** came from an equal summary digest, which a hostile device can echo: never evidence for the writer's own gate (review 2, finding 1) */ echo?: boolean }
+export interface PeerInfo { hex: string; id: Buffer; lastSeen: number; heads: Map<string, PeerHead>; acks: Map<string, { lines: number; hash: string; sig: Buffer; at: number; round: number }>; /** when this peer last finished sending ALL its head pages in this process (null = not yet); the writer's start-up evidence (review 2, finding 1) */ headsComplete: number | null; /** unknown-version intro requests sent in the current period (F6) */ introAsks: number; introPeriodStart: number; /** sum and heads frames of this peer that ask for work are answered at a bounded rate (F6) */ answers: RateLimiter }
 
 /** The source of lines no peer holds (the writer's own chat file, via an adapter): `resupply(wire, from, to)` gives raw lines [from, to) or null. */
 export type SourceRefill = (wire: Buffer, from: number, to: number) => Promise<Buffer[] | null>;
@@ -71,14 +73,21 @@ export interface VRun {
   wantAt: Map<string, number>;
   parentAskAt: number | null;
   parentAskLines: number | null;
-  /** The writer's own record of the highest head it signed (undefined = not read yet, null = none). */
-  ownHead?: { lines: number; hash: string } | null;
+  /** Peers that answered `unavailable` since this version last progressed (finding 3), and how many such answers. */
+  unavailable: Set<string>;
+  unavailableRounds: number;
+  /** My newest solicit round for this version (finding 6). */
+  solicitRound: number;
+  /** The writer's last own-record save did not reach both places: retried at the next append and scrub tick. */
+  ownPending: { lines: number; hash: string } | null;
+  /** This process has seen evidence the writer is at its own latest head (review 2, finding 1). Set only by `Replicator.evidence`. */
+  evidence: boolean;
 }
 
 /** A line larger than one frame, arriving in parts from one peer (receive.ts). Held in memory under `reassemblyBytes`, one per (peer, version). */
 interface Reasm { from: number; of: number; total: number; chunks: Buffer[]; bytes: number; at: number; peer: string; timer: { cancel(): void } | null }
 /** One peer's catch-up of one version that this device is serving (serve.ts). */
-export interface ServeSession { peer: string; wire: Buffer; next: number; acked: number; through: number; inFlight: Array<{ end: number; bytes: number }>; lastProgress: number; timer: { cancel(): void } | null; pumping: boolean }
+export interface ServeSession { cover?: { lines: number; hash: Buffer; sig: Buffer } | null; peer: string; wire: Buffer; next: number; acked: number; through: number; inFlight: Array<{ end: number; bytes: number }>; lastProgress: number; timer: { cancel(): void } | null; pumping: boolean }
 
 export interface RepCtx {
   store: ChatStore;
@@ -130,3 +139,20 @@ export function repairFrom(h: Head): number | null {
   return from;
 }
 
+
+/** What this device can VOUCH for in a version: its head, cut back to the first line the store reports damaged, and (for a device that is not the writer) to the newest line a writer signature
+ *  covers (a forked child's copied prefix counts as covered by its parent's signatures). Acks and adverts say this and no more (review 2, findings 2 and 3). */
+export async function vouchLines(ctx: RepCtx, wire: Buffer, local: Buffer, desc: { writer: Buffer; forkLine: number | null }, head: Head): Promise<{ lines: number; unsignable: boolean }> {
+  let lines = repairFrom(head) ?? head.lines;
+  if (desc.writer.equals(ctx.crypto.self)) return { lines, unsignable: false };
+  // the newest saved writer-signed point that is NOT beyond my head and lies on MY chain (a point beyond my head covers nothing I hold; one on another chain covers other lines)
+  let cap = desc.forkLine ?? 0;
+  const pts = await ctx.heads.pointsAfter(wire, cap);
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    if (p.lines > lines) continue;
+    if ((await ctx.store.hashAt(local, 0, p.lines).catch(() => null /* benign: no chain value at that count (evicted); this point cannot cover it */)) === p.hash.toString('hex')) { cap = Math.max(cap, p.lines); break; }
+  }
+  if (lines > cap) return { lines: cap, unsignable: true };
+  return { lines, unsignable: false };
+}
