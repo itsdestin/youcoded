@@ -47,6 +47,14 @@ describe('F1: the writer never says "saved" for an append past a lost tail', () 
     const { result } = await restoredWriter(['store'], (world) => { const d = nodePath.join(world.dirs.A, 'replicator', 'own'); for (const f of fs.readdirSync(d)) { const p = nodePath.join(d, f); fs.writeFileSync(p, fs.readFileSync(p).subarray(0, 39)); } });
     expect(result).toMatch(/refused .*writer-/);
   });
+  it('both own records cut short by rot, the store intact: refused by name (own-record-unreadable), never read as "no record" or as a smaller head', async () => {
+    w = await repWorld(['A'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r2-trunc-both');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await down(world, 'A');
+    for (const d of [nodePath.join(world.dirs.A, 'replicator', 'own'), nodePath.join(world.dirs.A, 'witness')]) for (const f of fs.readdirSync(d)) { const p2 = nodePath.join(d, f); fs.writeFileSync(p2, fs.readFileSync(p2).subarray(0, 39)); }
+    await world.restart('A');
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 4))).rejects.toThrow(/writer-own-record-unreadable/);
+    expect(await st(world, 'A', V)).toBe('stuck(own-record-unreadable)');
+  });
   it('everything on the writer put back (store, replicator and witness) while a peer is reachable: the first seconds are a named wait, then a named refusal, then the lines come back and writing resumes', async () => {
     const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId('r2-whole');
     await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(5, 'old')); await world.settle();
@@ -78,9 +86,13 @@ describe('F2: a device that knows its copy is damaged acknowledges only what it 
     const raw = fs.readFileSync(body); raw[Math.floor(raw.length / 2)] ^= 0xff; fs.writeFileSync(body, raw);
     await world.restart('B');
     await world.devs.B.rep.reportCorrupt(V);
-    world.devs.B.carrier.passFilter = () => 'drop'; // B's own heads cannot reach A: only an ack (if any) could tell A anything
-    await world.devs.A.rep.appendLocal(V, lineSet(5, 'push', 40)); await world.settle();
-    const acks = world.devs.A.rep.peerAcks(V).filter((a) => a.holder === world.ids.B.deviceId.toString('hex'));
+    let allow = 0; world.devs.B.carrier.passFilter = () => (allow-- > 0 ? 'deliver' : 'drop'); // B's own heads cannot reach A: exactly one frame (its ack, if it sends one) may
+    allow = 1; await world.devs.A.rep.appendLocal(V, lineSet(5, 'push', 40)); await world.settle();
+    const bhex = world.ids.B.deviceId.toString('hex');
+    const said = world.devs.A.rep.rawAcksForTests(V).filter((a) => a.holder === bhex); // what B SAID, before any listing rule hides it
+    expect(said.length).toBeGreaterThan(0); // B did answer the push
+    expect(said.every((a) => a.lines < 40)).toBe(true); // B's head is 40 lines but its bytes are damaged from the middle: it may vouch for less than 40
+    const acks = world.devs.A.rep.peerAcks(V).filter((a) => a.holder === bhex);
     expect(acks.every((a) => a.lines < 45)).toBe(true);
     expect(await st(world, 'A', V)).not.toBe('in-sync');
   });
@@ -243,11 +255,14 @@ describe('finding 7 and 8: claims of a peer that cannot be backed', () => {
     expect(world.devs.A.rep.counters()['claim-discounted']).toBeGreaterThanOrEqual(1);
     expect(await st(world, 'A', V)).toMatch(/peer-claim-discounted/);
   });
-  it('claims about versions nobody announced share the per-peer cap (they are never kept without bound)', async () => {
-    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w;
+  it('claims about versions nobody announced share the per-peer cap, however many periods pass (they are never kept without bound)', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 6_000_000 }); const world = w;
     world.devs.B.rep.stop();
-    for (let p = 0; p < 6; p++) world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_HEADS, body: headsBodyOf({ page: p, of: 6, ask: false, heads: Array.from({ length: 64 }, () => ({ version: randomBytes(32), lines: 1, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 1, state: 'ok' as const })) }) });
-    await world.settle(); await world.elapse(200_000, 20_000);
+    for (let i = 0; i < 700; i++) {
+      for (let p = 0; p < 2; p++) world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: Array.from({ length: 16 }, () => ({ version: randomBytes(32), lines: 1, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 1, state: 'ok' as const })) }) });
+      await world.elapse(61_000, 61_000);
+    }
     expect(world.devs.A.rep.stateSizes().peerHeads).toBeLessThanOrEqual(MAX_PEER_HEADS);
-  });
+    expect(world.devs.A.rep.counters()['peer-heads-full']).toBeGreaterThanOrEqual(1);
+  }, 600_000);
 });

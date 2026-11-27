@@ -10,7 +10,8 @@
 // excuse must map to a documented store limit (see `EXCUSE_LIMITS`); an unmapped one fails the seed.
 import * as fs from 'node:fs';
 import * as nodePath from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { deriveRootId } from '../../src/main/mesh/replicator/directory';
 import { repWorld, wireId, lineSet, line, CHAT, type World } from './replicator-world';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
 import { incarnationId } from '../../src/main/mesh/replicator/idmap';
@@ -41,7 +42,8 @@ const NAMES = ['A', 'B', 'C'];
 export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const rand = rng(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
-  const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000 });
+  const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000, bindIds: true });
+  const fsnaps: Array<{ dev: string; dir: string }> = []; // review 2: whole-folder snapshots (store, replicator, witness) of any device
   const ops: Record<string, number> = {};
   const excuses: string[] = [];
   const oracle = new Map<string, Buffer[]>();
@@ -57,8 +59,10 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   try {
     try {
     for (const [i, wr] of ['A', 'B'].entries()) {
-      const v = wireId(`fuzz-${seed}-${i}`);
-      await world.devs[wr].rep.createVersion({ version: v, chatId: i === 0 ? CHAT : `${CHAT}-2`, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null });
+      // review 2, finding 4: a root id is bound to its writer, so a hijacking announcement below can never take effect
+      const chatId = i === 0 ? CHAT : `${CHAT}-2`; const nonce = createHash('sha256').update(`fuzz-${seed}-${i}`).digest().subarray(0, 16);
+      const v = deriveRootId(world.setId, chatId, world.ids[wr].deviceId, nonce);
+      await world.devs[wr].rep.createVersion({ version: v, chatId, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null, nonce });
       vs.push(v); oracle.set(v.toString('hex'), []); writer.set(v.toString('hex'), wr);
     }
     const watchAcks = (): void => { for (const d of NAMES) for (const v of vs) for (const a of world.devs[d].rep.peerAcks(v)) { const holder = NAMES.find((n) => world.ids[n].deviceId.toString('hex') === a.holder); if (holder) acked.push({ holder, v, lines: a.lines }); } };
@@ -69,7 +73,38 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     };
     for (let s = 0; s < steps; s++) {
       const r = rand() * 100;
-      if (r < 34) { // the writer appends one to four lines
+      const x = rand();
+      if (x < 0.12) { // review 2: whole-folder rollbacks of any device, own-record rot and truncation
+        const kinds = ['fsnap', 'fsnap', 'restore-store', 'restore-replicator', 'restore-both', 'restore-all', 'rot-own', 'trunc-own', 'trunc-witness'] as const;
+        const kind = pick(kinds); const d = pick(NAMES);
+        const writesSomething = vs.some((v) => writer.get(v.toString('hex')) === d);
+        const stopDev = async (): Promise<void> => { await world.devs[d].rep.idle(); world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close(); };
+        const files = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).map((f) => nodePath.join(dir, f)) : []);
+        if (kind === 'fsnap') {
+          const dir = `${world.dirs[d]}-fsnap-${counter++}`; await stopDev();
+          fs.mkdirSync(dir, { recursive: true }); for (const k of ['store', 'replicator', 'witness']) if (fs.existsSync(nodePath.join(world.dirs[d], k))) fs.cpSync(nodePath.join(world.dirs[d], k), nodePath.join(dir, k), { recursive: true });
+          await world.restart(d, { graceful: true }); if (!online.has(d)) world.devs[d].carrier.setOnline(false);
+          fsnaps.push({ dev: d, dir }); note('fsnap');
+        } else if (kind.startsWith('restore')) {
+          const e = fsnaps.shift();
+          // restoring EVERYTHING of a device that is a writer is the documented limit (store inventory limit 4): the model does not do it
+          if (e && !(kind === 'restore-all' && writer.size && vs.some((v) => writer.get(v.toString('hex')) === e.dev))) {
+            const parts = kind === 'restore-store' ? ['store'] : kind === 'restore-replicator' ? ['replicator'] : kind === 'restore-both' ? ['store', 'replicator'] : ['store', 'replicator', 'witness'];
+            const dd = e.dev; await world.devs[dd].rep.idle(); world.devs[dd].rep.stop(); world.devs[dd].link.stop(); await world.devs[dd].store.close();
+            for (const k of parts) { fs.rmSync(nodePath.join(world.dirs[dd], k), { recursive: true, force: true }); if (fs.existsSync(nodePath.join(e.dir, k))) fs.cpSync(nodePath.join(e.dir, k), nodePath.join(world.dirs[dd], k), { recursive: true }); }
+            const lp = nodePath.join(world.dirs[dd], 'store', 'LOCK'); if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' }));
+            fs.rmSync(e.dir, { recursive: true, force: true });
+            await world.restart(dd, { graceful: false }); if (!online.has(dd)) world.devs[dd].carrier.setOnline(false);
+            note(kind);
+          } else if (e) { fs.rmSync(e.dir, { recursive: true, force: true }); note('restore-skipped'); }
+        } else if (writesSomething) {
+          await stopDev();
+          const targets = kind === 'trunc-witness' ? files(nodePath.join(world.dirs[d], 'witness')) : kind === 'trunc-own' ? files(nodePath.join(world.dirs[d], 'replicator', 'own')) : [...files(nodePath.join(world.dirs[d], 'replicator', 'own')), ...files(nodePath.join(world.dirs[d], 'witness'))];
+          for (const f of targets) { const raw = fs.readFileSync(f); if (kind === 'rot-own') { raw[Math.floor(rand() * raw.length)] ^= 0xff; fs.writeFileSync(f, raw); } else fs.writeFileSync(f, raw.subarray(0, 39)); }
+          await world.restart(d, { graceful: false }); if (!online.has(d)) world.devs[d].carrier.setOnline(false);
+          note(kind);
+        }
+      } else if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
         await world.devs[wr].rep.appendLocal(v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-/.test(String(e))) throw e; });
@@ -115,7 +150,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         if (local) {
           const h = await world.devs.B.store.head(local);
           if (h.lines > 0 && h.lines <= (oracle.get(v.toString('hex'))?.length ?? 0)) {
-            const token = `fz-${seed}`; const child = deriveForkId(v, h.lines, h.hash, token);
+            const token = `${world.ids.B.deviceId.toString('hex')}:fz-${seed}`; const child = deriveForkId(v, h.lines, h.hash, token);
             await world.devs.B.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: v, forkLine: h.lines, forkHash: Buffer.from(h.hash, 'hex'), token });
             vs.push(child); oracle.set(child.toString('hex'), (oracle.get(v.toString('hex')) as Buffer[]).slice(0, h.lines)); writer.set(child.toString('hex'), 'B'); forked = true; note('takeover');
           }
