@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { repWorld, wireId, lineSet, CHAT, type World } from './replicator-world';
 import { splitHistories } from './selffork-helpers';
 import { selfForkToken } from '../../src/main/mesh/replicator/selffork';
-import { GROUP_LIVE, headMessage, headsBodyOf, KIND_HEADS, KIND_LINES, KIND_NAK, KIND_SUM, linesBody, nakBodyOf, sumBody } from '../../src/main/mesh/replicator/wire';
+import { GROUP_LIVE, headMessage, headsBodyOf, KIND_HEADS, KIND_LINES, KIND_NAK, KIND_SUM, KIND_WANT, linesBody, nakBodyOf, sumBody } from '../../src/main/mesh/replicator/wire';
 import { chainStep, defaultChainSeeds } from '../../src/main/mesh/store';
 import { chatGroup } from '../../src/main/mesh/replicator/ctx';
 import { signWith } from '../../src/main/mesh/crypto/identity';
@@ -423,6 +423,38 @@ describe('a signed point whose lines this copy never got (a kill between writing
     expect(await textOf(world, 'B', V)).toEqual(await textOf(world, 'A', V));
     expect(await st(world, 'B', V)).not.toMatch(/diverged|faulted/);
     expect(world.devs.B.rep.counters()['unbacked-signed-point-dropped']).toBeGreaterThanOrEqual(1);
+  }, 200_000);
+});
+
+describe('status reads and naks cannot change what the writer does', () => {
+  async function run(poll: boolean): Promise<string[]> {
+    const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId('r4-poll');
+    await world.create('A', V); await world.append('A', V, lineSet(2)); await world.settle();
+    world.devs.B.rep.stop(); await down(world, 'A'); await world.restart('A');
+    const out: string[] = [];
+    for (let t = 1; t <= 9; t++) {
+      sumFrame(world, 'B'); await world.settle(); // a reachable device that sends summaries and never heads
+      for (let k = 0; k < 4; k++) { await world.elapse(2_500, 2_500, true); if (poll) await st(world, 'A', V); }
+      const h = await world.devs.A.store.head(await world.local('A', V));
+      out.push(await world.devs.A.rep.appendLocal(V, lineSet(1, `p${t}`, h.lines), { lines: h.lines, hash: h.hash }).then((r) => r.result, (e) => String(e).replace(/^Error: /, '')));
+    }
+    await world.stopAll(); world.cleanup(); w = null;
+    return out;
+  }
+  it('polling status in a loop across the bounded wait (a silent reachable device) changes nothing about when appendLocal refuses and when it saves', async () => {
+    const quiet = await run(false); const polled = await run(true);
+    expect(polled).toEqual(quiet);
+    expect(quiet[0]).toMatch(/writer-waiting-for-peers/); expect(quiet.at(-1)).toBe('saved'); // it refused while waiting and saved after the wait
+  }, 300_000);
+  it('a flood of forged naks causes at most one restart-from-zero ask per device and leaves the writer in-sync afterwards', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-nakflood');
+    await world.create('A', V); await world.append('A', V, lineSet(4)); await world.settle();
+    const asks: number[] = []; const link = world.devs.A.link; const orig = link.sendLive.bind(link);
+    link.sendLive = ((f: Parameters<typeof orig>[0]) => { if (f.kind === KIND_WANT && (f.body as { have: number }).have === 0) asks.push(1); return orig(f); }) as typeof orig;
+    for (let i = 0; i < 200; i++) world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_NAK, body: nakBodyOf({ version: V, at: 2, why: 'not-a-prefix', hashAtYourCount: randomBytes(32) }) });
+    await world.settle(); await world.elapse(120_000, 10_000, true);
+    expect(asks.length).toBeLessThanOrEqual(1);
+    expect(await st(world, 'A', V)).toBe('in-sync');
   }, 200_000);
 });
 

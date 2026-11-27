@@ -186,7 +186,7 @@ export class Replicator {
    *  (it must not wait for it). From the mark until the move is finished, appends refuse by name, status is never calm, and a second move cannot start (review 4, F2). */
   private startSelfFork(wire: Buffer, p: number): void {
     const run = this.#ctx.runOf(wire);
-    if (run.selfForking) { this.#ctx.bump('self-fork-reentry-blocked'); return; }
+    // (no re-entry guard: one link hands over frames one at a time and a move is a `hold` step, so a second conflict step can only run AFTER the first move; if it still conflicts then, it is a new move of its own)
     run.selfForking = true;
     void this.queue(wire, () => this.selfForkNow(wire, p), { hold: true }).catch((e: unknown) => { reportFailure({ what: 'move this chat\'s newer lines into a second version (it is tried again)', cause: e, where: 'mesh.replicator' }); this.armSelfForkRetry(wire); });
   }
