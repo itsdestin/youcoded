@@ -10,7 +10,7 @@
 // token carries the writer's id and the domain word below. A non-writer cannot sign it; a replay in another version, chat or incarnation changes the derived id or the signed text.
 import { createHash } from 'node:crypto';
 
-export const SELF_FORK = 'selffork';
+const SELF_FORK = 'selffork';
 
 /** The token of a self-fork announcement: the writer's id, the domain word, then the chat id (so the same divergence point in another chat derives another version). */
 export const selfForkToken = (writer: Buffer, chatId: string): string => `${writer.toString('hex')}:${SELF_FORK}:${createHash('sha256').update(chatId).digest('hex').slice(0, 16)}`;

@@ -731,7 +731,8 @@ export class Replicator {
     for (const p of this.#ctx.peers.values()) {
       const h = p.heads.get(wk);
       if (!h || now - h.at > PEER_FRESH_MS || h.state !== 'ok' || h.echo) continue;
-      const against = h.lines > head.lines || (h.lines === head.lines && h.hash !== head.hash);
+      // (a claim of ZERO lines with another chain value holds no history that could contradict mine: it is only another chat's empty start, e.g. a squatter folder)
+      const against = h.lines > head.lines || (h.lines === head.lines && h.lines > 0 && h.hash !== head.hash);
       if (!against) continue;
       // a claim holds appends only while it could still be backed: the clock starts at the first such claim and is reset ONLY by a batch from that device, never by the device changing its claim (finding 6)
       let since = p.claimSince.get(wk);
