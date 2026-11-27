@@ -1,0 +1,45 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": "chat/files/open/a-launch-brief",
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": ""
+  },
+  "steps": [
+    {
+      "do": "check",
+      "file": "comment-box.select.check.js"
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "menuitem",
+        "label": "Add comment",
+        "nth": 1
+      }
+    },
+    {
+      "do": "check",
+      "file": "comment-box.measure.check.js"
+    },
+    {
+      "do": "check",
+      "file": "comment-box.select.check.js"
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "menuitem",
+        "label": "Add comment",
+        "nth": 1
+      }
+    },
+    {
+      "do": "check",
+      "file": "comment-box.measure.check.js"
+    }
+  ]
+}

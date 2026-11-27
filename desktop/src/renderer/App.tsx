@@ -6,6 +6,7 @@ import { useModelModes } from './hooks/useModelModes';
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { applyCloseChoices } from './state/close-prompt-writes';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
@@ -75,6 +76,7 @@ import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
 import { markBootReady } from './boot-ready';
+import { decideFirstRun } from './state/first-run-launch';
 import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePresence } from './hooks/usePresence';
 import { usePartyGame } from './hooks/usePartyGame';
@@ -678,22 +680,14 @@ function AppInner() {
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
-  // Check first-run state with a 3-second safety timeout — never hang the app
+  // Setup screen or app? WHY decideFirstRun (2026-11-25): the old 3-second guess opened a slow phone's app with no
+  // account — setup skipped, first message failed. It now waits longer, re-asks, and lets a late "setup needed" win.
   useEffect(() => {
-    let resolved = false;
-    const resolve = (value: boolean) => {
-      if (!resolved) { resolved = true; setIsFirstRun(value); markBootReady(); } // markBootReady: the Android app's loading screen gives way (boot-ready.ts)
-    };
-    const timeout = setTimeout(() => resolve(false), 3000);
-
-    (window as any).claude?.firstRun?.getState?.()
-      .then((state: any) => {
-        clearTimeout(timeout);
-        resolve(!!(state && state.currentStep !== 'COMPLETE'));
-      })
-      .catch(() => { clearTimeout(timeout); resolve(false); });
-
-    return () => clearTimeout(timeout);
+    const fr = (window as any).claude?.firstRun;
+    return decideFirstRun(fr?.getState ? () => fr.getState() : undefined, (needsSetup) => {
+      setIsFirstRun(needsSetup);
+      markBootReady(); // the Android app's loading screen gives way (boot-ready.ts); a second call is harmless
+    });
   }, []);
 
   // The saved new-session defaults. Re-read around Settings, after a remote reconnect, and
@@ -4266,31 +4260,30 @@ function AppInner() {
         sessionName={sessions.find((s) => s.id === closePromptFor)?.name ?? closePromptName /* WHY live first: the prompt renames now (close-session-1); a peer window's session keeps its captured name */}
         sessionId={closePromptFor}
         onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
-        onConfirm={(result) => {
+        onCloseAnyway={() => {
+          // WHY (W-2): after a failed save, the person may close without the choices that would not land.
           const id = closePromptFor;
-          if (!id) return;
+          if (id) closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
+          setClosePromptFor(null);
+          setClosePromptName(undefined);
+        }}
+        onConfirm={async (result) => {
+          const id = closePromptFor;
+          if (!id) return [];
           // Every field is a DELTA vs. what the prompt loaded on open — reserved
           // flags whose value moved, tags toggled on/off, the note if it changed.
-          // Each write is fire-and-forget; main resolves the desktop id to the
-          // Claude id. The .catch() swallows an IPC rejection (remote timeout) so
-          // it can't become an unhandled rejection.
-          //
           // `flags` carries a VALUE per entry, not just a list to set true — a
           // Priority the user un-toggled has to be cleared, the same way an
           // un-toggled tag is (see CloseSessionPrompt's onConfirm doc comment).
-          for (const [flag, value] of Object.entries(result.flags)) {
-            try { Promise.resolve((window as any).claude.session.setFlag(id, flag, value)).catch(() => {}); } catch {}
-          }
-          for (const tagId of result.addTagIds) {
-            try { Promise.resolve((window as any).claude.session.setTag(id, tagId, true)).catch(() => {}); } catch {}
-          }
-          for (const tagId of result.removeTagIds) {
-            try { Promise.resolve((window as any).claude.session.setTag(id, tagId, false)).catch(() => {}); } catch {}
-          }
-          if (result.noteChanged) { try { Promise.resolve((window as any).claude.session.setNote(id, result.note)).catch(() => {}); } catch {} }
+          // WHY awaited, and the chat stays open when a write fails (R-1, code review 2026-11-18): these were
+          // fire-and-forget with the failure swallowed, so a tag, pin or note the person chose vanished
+          // when the chat closed. The prompt shows which parts failed and offers Try again.
+          const failed = await applyCloseChoices(id, result);
+          if (failed.length > 0) return failed;
           closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
           setClosePromptFor(null);
           setClosePromptName(undefined);
+          return [];
         }}
       />
       <PreferencesPopup

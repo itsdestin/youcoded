@@ -29,61 +29,36 @@
 
        #030712 is gray-950 — the same color App.tsx's own loading gate paints,
        so this hands off to the app without a flash. -->
-  <style>
-    html { background: #030712; color-scheme: dark; }
-    body { margin: 0; }
-    #boot { position: fixed; inset: 0; display: flex; align-items: center;
-            justify-content: center; }
-    #boot > div { width: 28px; height: 28px; border-radius: 50%;
-                  border: 2px solid rgba(255, 255, 255, 0.15);
-                  border-top-color: rgba(255, 255, 255, 0.7);
-                  animation: boot-spin 0.7s linear infinite; }
-    /* Respect reduced-motion: show a static ring rather than a spinner. */
-    @media (prefers-reduced-motion: reduce) { #boot > div { animation: none; } }
-    @keyframes boot-spin { to { transform: rotate(360deg); } }
-  </style>
-  <script type="module" crossorigin src="./assets/index-BHNv7di6.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-DkW27tQK.js">
-  <link rel="modulepreload" crossorigin href="./assets/react-BZJXY1be.js">
-  <link rel="modulepreload" crossorigin href="./assets/capabilities-0Mra8kzM.js">
-  <link rel="modulepreload" crossorigin href="./assets/platform-B2AGoazR.js">
-  <link rel="modulepreload" crossorigin href="./assets/jsx-runtime-DeHZSEgm.js">
-  <link rel="modulepreload" crossorigin href="./assets/use-esc-close-Bt0DAM5G.js">
-  <link rel="modulepreload" crossorigin href="./assets/Select-Bjn_gKmT.js">
-  <link rel="modulepreload" crossorigin href="./assets/look-overrides-BQzm8WFI.js">
-  <link rel="modulepreload" crossorigin href="./assets/preload-helper-Bjyeg7is.js">
-  <link rel="modulepreload" crossorigin href="./assets/theme-context-BWTyEXAW.js">
-  <link rel="modulepreload" crossorigin href="./assets/tips-DW_yUUJm.js">
-  <link rel="modulepreload" crossorigin href="./assets/ui-BBxCB9zO.js">
-  <link rel="modulepreload" crossorigin href="./assets/model-ids-BS8on_DQ.js">
-  <link rel="modulepreload" crossorigin href="./assets/chat-reducer-Bdx1syns.js">
-  <link rel="modulepreload" crossorigin href="./assets/chat-context-BzMC4Fcn.js">
-  <link rel="modulepreload" crossorigin href="./assets/announce-O4shcQYo.js">
-  <link rel="modulepreload" crossorigin href="./assets/ArtifactContext-BpVcrFoX.js">
-  <link rel="modulepreload" crossorigin href="./assets/permission-types-CbsRahSi.js">
-  <link rel="modulepreload" crossorigin href="./assets/remote-unsupported-i6C9JDV_.js">
-  <link rel="modulepreload" crossorigin href="./assets/ipc-error-CSde5fOS.js">
-  <link rel="modulepreload" crossorigin href="./assets/use-narrow-viewport-DqHMkboL.js">
-  <link rel="modulepreload" crossorigin href="./assets/glyphs-B-5GPZaJ.js">
-  <link rel="modulepreload" crossorigin href="./assets/default-mascot-paint-DixkWrwo.js">
-  <link rel="modulepreload" crossorigin href="./assets/on-screen-context-BizY9s4E.js">
-  <link rel="modulepreload" crossorigin href="./assets/ModelPicker-CLbd_bss.js">
-  <link rel="modulepreload" crossorigin href="./assets/useTagRegistry-D1JwKlnD.js">
-  <link rel="modulepreload" crossorigin href="./assets/TagChip-DKKiYriN.js">
-  <link rel="modulepreload" crossorigin href="./assets/anchor-skip-CXWqPEok.js">
-  <link rel="modulepreload" crossorigin href="./assets/HeadPreview-DGwUWz8I.js">
-  <link rel="modulepreload" crossorigin href="./assets/no-folder-DaT4ujKq.js">
-  <link rel="modulepreload" crossorigin href="./assets/FolderSwitcher-C9uy4NwU.js">
-  <link rel="modulepreload" crossorigin href="./assets/takeover-dialog-copy-D5IDVx0O.js">
-  <link rel="modulepreload" crossorigin href="./assets/chatgpt-types-Dtur24Z8.js">
-  <link rel="modulepreload" crossorigin href="./assets/AssistantTurnBubble-g_EqLW9S.js">
-  <link rel="modulepreload" crossorigin href="./assets/compose-ref-B8SSQOkx.js">
-  <link rel="modulepreload" crossorigin href="./assets/use-ref-source-highlight-CSFAcN_k.js">
-  <link rel="stylesheet" crossorigin href="./assets/ui-CTFx8GPy.css">
-  <link rel="stylesheet" crossorigin href="./assets/default-mascot-paint-DGhKePoC.css">
-  <link rel="stylesheet" crossorigin href="./assets/TagChip-C8lYvloR.css">
-  <link rel="stylesheet" crossorigin href="./assets/AssistantTurnBubble-CUmIjaT4.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-CyPsatRl.css">
+  <style>html{--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark;background:#030712}body{margin:0}#boot{justify-content:center;align-items:center;display:flex;position:fixed;inset:0}#boot>div{border:2px solid #ffffff26;border-top-color:#ffffffb3;border-radius:50%;width:28px;height:28px;animation:.7s linear infinite boot-spin}@media (prefers-reduced-motion:reduce){#boot>div{animation:none}}@keyframes boot-spin{to{transform:rotate(360deg)}}</style>
+  <!-- WHY (2026-10-22 phone speed): a phone keeps this page for a week (remote-static-policy cacheControlFor) instead of asking
+       the computer for it on every open, which cost a round trip (~0.5 s) before anything ran. So a page that came from that
+       copy asks in the background, once it has loaded, whether the computer still serves this version, and loads the new one
+       if not (after an app update). Plain script, here, so it works whatever the app code does, even if it no longer loads.
+       Only over the network: the desktop and Android apps load this file from disk. Once per new version, so it cannot loop. -->
+  <script>
+    (function () {
+      if (!/^https?:$/.test(location.protocol)) return;
+      // The Android app serves its own bundled page over https too (appassets.androidplatform.net): it is not a copy a computer served.
+      if (location.hostname === 'appassets.androidplatform.net') return;
+      addEventListener('load', function () {
+        try {
+          var nav = performance.getEntriesByType('navigation')[0];
+          if (nav && nav.transferSize > 0) return;   // fetched from the computer just now: already current
+          var entry = function (doc) { var s = doc.querySelector('script[type="module"][src]'); return s && s.getAttribute('src'); };
+          fetch(location.href.split('#')[0], { cache: 'no-cache' }).then(function (r) { return r.ok ? r.text() : null; }).then(function (html) {
+            var served = html && entry(new DOMParser().parseFromString(html, 'text/html'));
+            if (!served || served === entry(document) || sessionStorage.getItem('yc-page-reloaded') === served) return;
+            sessionStorage.setItem('yc-page-reloaded', served);
+            location.reload();
+          }).catch(function () {});
+        } catch (e) {}
+      });
+    })();
+  </script>
+  <script type="module" crossorigin src="./assets/index-DgtrPR6m.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-sJBDdmOt.js">
+  <link rel="modulepreload" crossorigin href="./assets/startup-WUGHK39s.js">
+  <link rel="stylesheet" crossorigin href="./assets/startup-NswRH-MV.css">
 </head>
 <body>
   <!-- Lives inside #root so React's first commit clears it — createRoot()

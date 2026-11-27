@@ -31,7 +31,7 @@ function mockWindowClaude(getMeta: ReturnType<typeof vi.fn>) {
 
 function mount() {
   const onConfirm = vi.fn();
-  render(<CloseSessionPrompt open sessionName="fix chat scroll" sessionId="sess-1" onCancel={() => {}} onConfirm={onConfirm} />);
+  render(<CloseSessionPrompt open sessionName="fix chat scroll" sessionId="sess-1" onCancel={() => {}} onCloseAnyway={() => {}} onConfirm={onConfirm} />);
   return onConfirm;
 }
 

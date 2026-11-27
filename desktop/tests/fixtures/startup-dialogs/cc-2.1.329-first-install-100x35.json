@@ -1,0 +1,146 @@
+{
+ "ccVersion": "2.1.329",
+ "scenario": "first-install",
+ "key": "first-install-100x35",
+ "folder": "plain",
+ "trusted": false,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-11-20T04:07:09.342Z",
+ "chunks": [
+  {
+   "t": 822,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 862,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 863,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 876,
+   "b64": "G1szODsyOzIxNTsxMTk7ODdtV2VsY29tZRtbOUd0bxtbMTJHQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzM4OzI7MTUzOzE1MzsxNTNtdjIuMS4zMjkbWzM5bQ0NCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4NDQoNDQobWzZHKhtbNDZH4paI4paI4paI4paI4paI4paT4paT4paRDQ0KG1szNEcqG1s0NEfilojilojilojilpPilpEbWzU0R+KWkeKWkQ0NChtbMTNH4paR4paR4paR4paR4paR4paRG1s0M0filojilojilojilpPilpENDQobWzVH4paR4paR4paRG1sxMUfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzQzR+KWiOKWiOKWiOKWk+KWkQ0NChtbNEfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzI3RxtbMW0qG1s0NEcbWzIybeKWiOKWiOKWk+KWkeKWkRtbNTVH4paTDQ0KG1s0NkfilpHilpPilpPilojilojilojilpPilpPilpENDQobWzM4OzI7MTUzOzE1MzsxNTNtICobWzM2R+KWkeKWkeKWkeKWkRtbMzltDQ0KG1szODsyOzE1MzsxNTM7MTUzbSAbWzM0R+KWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkRtbMzltDQ0KG1szODsyOzE1MzsxNTM7MTUzbSAbWzMyR+KWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkeKWkRtbMzltDQ0KG1s3RxtbMzg7MjsyMTU7MTE5Ozg3bSDilojilojilojilojilojilojilojilojilogbWzU3RxtbMzg7MjsxNTM7MTUzOzE1M20qG1szOW0NDQobWzdHG1szODsyOzIxNTsxMTk7ODdt4paI4paI4paE4paI4paI4paI4paI4paI4paE4paI4paIG1s0MkcbWzM5bRtbMW0qG1syMm0NDQobWzdHG1szODsyOzIxNTsxMTk7ODdtIOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiBtbMjNHG1szOW0qDQ0KLi4uLi4uLhtbMzg7MjsyMTU7MTE5Ozg3beKWiBtbMTBH4paIG1sxNEfilogbWzE2R+KWiBtbMzltLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQ0KDQ0K"
+  },
+  {
+   "t": 884,
+   "b64": "G10xMTs/BxtbYw=="
+  },
+  {
+   "t": 886,
+   "b64": "G1s+MHEbWz91G103NTAxOz8HG1tj"
+  },
+  {
+   "t": 1414,
+   "b64": "G1syR0xldCdzG1s4R2dldBtbMTJHc3RhcnRlZC4NDQoNDQobWzJHG1sxbUNob29zZRtbOUd0aGUbWzEzR3RleHQbWzE4R3N0eWxlG1syNEd0aGF0G1syOUdsb29rcxtbMzVHYmVzdBtbNDBHd2l0aBtbNDVHeW91chtbNTBHdGVybWluYWwbWzIybQ0NChtbMkcbWzM4OzI7MTUzOzE1MzsxNTNtVG8bWzVHY2hhbmdlG1sxMkd0aGlzG1sxN0dsYXRlciwbWzI0R3J1bhtbMjhHL3RoZW1lG1szOW0NDQoNDQobWzJHG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEcbWzM4OzI7Nzg7MTg2OzEwMW3inJQbWzZHG1szODsyOzE3NzsxODU7MjQ5bUF1dG8bWzExRyhtYXRjaBtbMThHdGVybWluYWwpG1szOW0NDQobWzZHRGFyaxtbMTFHbW9kZQ0NChtbNkdMaWdodBtbMTJHbW9kZQ0NChtbNkdEYXJrG1sxMUdtb2RlG1sxNkcoY29sb3JibGluZC1mcmllbmRseSkNDQobWzZHTGlnaHQbWzEyR21vZGUbWzE3Ryhjb2xvcmJsaW5kLWZyaWVuZGx5KQ0NChtbNkdEYXJrG1sxMUdtb2RlG1sxNkcoQU5TSRtbMjJHY29sb3JzG1syOUdvbmx5KQ0NChtbNkdMaWdodBtbMTJHbW9kZRtbMTdHKEFOU0kbWzIzR2NvbG9ycxtbMzBHb25seSkNDQoNDQobWzJHG1szODsyOzgwOzgwOzgwbeKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjOKVjBtbMzltDQ0KG1syRxtbMm0gMRtbNkcbWzIybRtbMzg7MjsxMDI7MjE3OzIzOW1mdW5jdGlvbhtbMTVHG1szODsyOzE2NjsyMjY7NDZtZ3JlZXQbWzM5bSgpG1syM0d7DQ0KG1syRxtbMzg7MjsyMjA7OTA7OTBtG1s0ODsyOzYxOzE7MG0gMiAtG1szODsyOzI0ODsyNDg7MjQybSAgY29uc29sZS5sb2coIkhlbGxvLCAbWzQ4OzI7OTI7MjswbVdvcmxkG1s0ODsyOzYxOzE7MG0hIik7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIBtbNDltG1szOW0NDQobWzJHG1szODsyOzgwOzIwMDs4MG0bWzQ4OzI7Mjs0MDswbSAyICsbWzM4OzI7MjQ4OzI0ODsyNDJtICBjb25zb2xlLhtbMzg7MjsxNjY7MjI2OzQ2bWxvZxtbMzg7MjsyNDg7MjQ4OzI0Mm0oG1szODsyOzIzMDsyMTk7MTE2bSJIZWxsbywgG1s0ODsyOzQ7NzE7MG1DbGF1ZGUbWzQ4OzI7Mjs0MDswbSEiG1szODsyOzI0ODsyNDg7MjQybSk7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgG1szOW0bWzQ5bQ0NChtbMkcbWzJtIDMbWzZHG1syMm19DQ0KG1syRxtbMzg7Mjs4MDs4MDs4MG3ilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYzilYwbWzM5bQ0NChtbMkcbWzM4OzI7MTUzOzE1MzsxNTNtIFN5bnRheBtbMTBHdGhlbWU6G1sxN0dNb25va2FpG1syNUdFeHRlbmRlZBtbMzRHKGN0cmwrdBtbNDJHdG8bWzQ1R2Rpc2FibGUpG1szOW0NDQobWzFDG1sxNUE="
+  },
+  {
+   "t": 2253,
+   "b64": "G1sxRBtbMTVCG1tIG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbSBtbMzg7MjsyMTU7MTE5Ozg3bVdlbGNvbWUbWzlHdG8bWzEyR0NsYXVkZRtbMTlHQ29kZRtbMjRHG1szODsyOzE1MzsxNTM7MTUzbXYyLjEuMzI5G1szOW0NDQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQ0KDQ0KG1s2RyobWzQ2R+KWiOKWiOKWiOKWiOKWiOKWk+KWk+KWkQ0NChtbMzRHKhtbNDRH4paI4paI4paI4paT4paRG1s1NEfilpHilpENDQobWzEzR+KWkeKWkeKWkeKWkeKWkeKWkRtbNDNH4paI4paI4paI4paT4paRDQ0KG1s1R+KWkeKWkeKWkRtbMTFH4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRG1s0M0filojilojilojilpPilpENDQobWzRH4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRG1syN0cbWzFtKhtbNDRHG1syMm3ilojilojilpPilpHilpEbWzU1R+KWkw0NChtbNDZH4paR4paT4paT4paI4paI4paI4paT4paT4paRDQ0KG1szODsyOzE1MzsxNTM7MTUzbSAqG1szNkfilpHilpHilpHilpEbWzM5bQ0NChtbMzg7MjsxNTM7MTUzOzE1M20gG1szNEfilpHilpHilpHilpHilpHilpHilpHilpEbWzM5bQ0NChtbMzg7MjsxNTM7MTUzOzE1M20gG1szMkfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzM5bQ0NChtbN0cbWzM4OzI7MjE1OzExOTs4N20g4paI4paI4paI4paI4paI4paI4paI4paI4paIG1s1N0cbWzM4OzI7MTUzOzE1MzsxNTNtKhtbMzltDQ0KG1s3RxtbMzg7MjsyMTU7MTE5Ozg3beKWiOKWiOKWhOKWiOKWiOKWiOKWiOKWiOKWhOKWiOKWiBtbNDJHG1szOW0bWzFtKhtbMjJtDQ0KG1s3RxtbMzg7MjsyMTU7MTE5Ozg3bSDilojilojilojilojilojilojilojilojilogbWzIzRxtbMzltKg0NCi4uLi4uLi4bWzM4OzI7MjE1OzExOTs4N23ilogbWzEwR+KWiBtbMTRH4paIG1sxNkfilogbWzM5bS4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLg0NCg0NChtbMkcbWzFtQ2xhdWRlG1s5R0NvZGUbWzE0R2NhbhtbMThHYmUbWzIxR3VzZWQbWzI2R3dpdGgbWzMxR3lvdXIbWzM2R0NsYXVkZRtbNDNHc3Vic2NyaXB0aW9uG1s1NkdvchtbNTlHYmlsbGVkG1s2NkdiYXNlZBtbNzJHb24bWzc1R0FQSRtbNzlHdXNhZ2UbWzg1R3Rocm91Z2gbWzkzR3lvdXIbWzIybQ0NChtbMkcbWzFtQ29uc29sZRtbMTBHYWNjb3VudC4bWzIybQ0NCg0NChtbMkdTZWxlY3QbWzlHbG9naW4bWzE1R21ldGhvZDoNDQoNDQobWzJHG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEcbWzM4OzI7MTUzOzE1MzsxNTNtMS4bWzdHG1szODsyOzE3NzsxODU7MjQ5bUNsYXVkZRtbMTRHYWNjb3VudBtbMjJHd2l0aBtbMjdHc3Vic2NyaXB0aW9uG1s0MEfCtxtbNDJHG1szODsyOzE1MzsxNTM7MTUzbUluZGl2aWR1YWwsG1s1NEdUZWFtLBtbNjBHb3IbWzYzR0VudGVycHJpc2UbWzM5bQ0NChtbNEcbWzM4OzI7MTUzOzE1MzsxNTNtMi4bWzdHG1szOW1BbnRocm9waWMbWzE3R0NvbnNvbGUbWzI1R2FjY291bnQbWzMzR8K3G1szNUcbWzM4OzI7MTUzOzE1MzsxNTNtQVBJG1szOUd1c2FnZRtbNDVHYmlsbGluZxtbMzltDQ0KG1s0RxtbMzg7MjsxNTM7MTUzOzE1M20zLhtbN0cbWzM5bTNyZC1wYXJ0eRtbMTdHcGxhdGZvcm0bWzI2R8K3G1syOEcbWzM4OzI7MTUzOzE1MzsxNTNtQmVkcm9jaywbWzM3R01pY3Jvc29mdBtbNDdHRm91bmRyeSwbWzU2R0dvb2dsZRtbNjNHVmVydGV4G1s3MEdBSRtbMzltDQ0KG1sxQxtbM0E="
+  },
+  {
+   "t": 3543,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 3794,
+   "b64": "G1sxRBtbM0IbWz8xMDA0bBtbPjRtG1s8dRtbPzIwMzFsG1s/MjAwNGwbKEIPG1s/MTAxNmwbWz8xMDA2bBtbPzEwMDNsG1s/MTAwMmwbWz8xMDAwbBtbPzdoG1s/MjVoGzcbW3IbOBtdMDsH"
+  }
+ ],
+ "marks": [
+  {
+   "t": 2201,
+   "label": "dialog-1-visible",
+   "chunkIndex": 7
+  },
+  {
+   "t": 2201,
+   "label": "send",
+   "chunkIndex": 7,
+   "data": "\r"
+  },
+  {
+   "t": 3035,
+   "label": "dialog-2-visible",
+   "chunkIndex": 8
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "screen",
+   "heading": "Choose the text style that looks best with your terminal",
+   "options": [
+    "Auto (match terminal)",
+    "Dark mode",
+    "Light mode",
+    "Dark mode (colorblind-friendly)",
+    "Light mode (colorblind-friendly)",
+    "Dark mode (ANSI colors only)",
+    "Light mode (ANSI colors only)"
+   ],
+   "numbers": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "",
+   "body": [
+    "To change this later, run /theme"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "screen",
+   "heading": "Select login method:",
+   "options": [
+    "Claude account with subscription · Individual, Team, or Enterprise",
+    "Anthropic Console account · API usage billing",
+    "3rd-party platform · Bedrock, Microsoft Foundry, Google Vertex AI"
+   ],
+   "numbers": [
+    1,
+    2,
+    3
+   ],
+   "defaultCursor": 0,
+   "selection": "numbered-digits",
+   "footer": "",
+   "body": []
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "screen": true,
+    "answered": "\"\\r\""
+   },
+   {
+    "dialog": 2,
+    "screen": true,
+    "answered": null
+   }
+  ],
+  "exitCode": null,
+  "folderTrusted": false,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks",
+   "theme"
+  ],
+  "credentialsWritten": false,
+  "sessionStartHookAt": []
+ }
+}

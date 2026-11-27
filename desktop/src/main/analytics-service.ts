@@ -24,6 +24,7 @@ import { randomUUID, createHmac } from "node:crypto";
 import { machineIdSync } from "node-machine-id";
 import { ANALYTICS_SALT } from "./analytics-salt";
 import { OFFICIAL_BUILD } from "./official-build";
+import { log } from "./logger";
 
 // WHY: Moved to its own domain so Cloudflare's cache and rate limiter apply; the old workers.dev address still answers for older app versions.
 const API_BASE = "https://api.youcoded.ai";
@@ -100,7 +101,9 @@ function readState(): AnalyticsState | null {
     // Drop legacy installId / installReported silently — they're meaningless
     // post-cutover. The on-disk file gets rewritten on the next writeState().
     return {
-      optIn: typeof parsed.optIn === "boolean" ? parsed.optIn : true,
+      // WHY false when optIn is missing or not true/false (R-1, Destin 2026-11-18): a damaged file must
+      // never silently turn "opted out" into "opted in". Analytics stays OFF until the person turns it on.
+      optIn: typeof parsed.optIn === "boolean" ? parsed.optIn : false,
       lastPingedDate: typeof parsed.lastPingedDate === "string" ? parsed.lastPingedDate : "",
       fallbackDeviceId: typeof parsed.fallbackDeviceId === "string" ? parsed.fallbackDeviceId : undefined,
       milestones: parsed.milestones && typeof parsed.milestones === "object" ? { ...parsed.milestones } : undefined,
@@ -111,7 +114,10 @@ function readState(): AnalyticsState | null {
     // below). A file that exists but cannot be read or parsed is an existing
     // install with a damaged file: it must never be mistaken for a new one.
     if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
-    return { ...defaultState(), milestones: { baseline: true } };
+    // WHY optIn false (R-1, Destin 2026-11-18, "damaged = analytics OFF"): if the file that records the
+    // person's choice cannot be read, we cannot know they said yes, so nothing is sent. The log says why.
+    log("WARN", "analytics", "analytics state file unreadable; treating analytics as OFF", { code: (e as NodeJS.ErrnoException)?.code });
+    return { ...defaultState(), optIn: false, milestones: { baseline: true } };
   }
 }
 

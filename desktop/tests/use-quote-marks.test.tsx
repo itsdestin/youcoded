@@ -88,6 +88,50 @@ describe('use-quote-marks — real anchoring (resolveSelector)', () => {
     expect(commentsForPath(path)[0].status).toBe('detached');
   });
 
+  // Comment-box fix (2026-11-22): positions are read before any drawing, and
+  // drawing a highlight cuts its run of text in two — so a second comment on the
+  // words right AFTER an existing highlight in the same run pointed into the
+  // shortened piece and silently got no highlight (and its new-comment box had
+  // nothing to sit under). `locate` now follows each position into its piece.
+  it('two comments in one run of text both get highlights, whatever order they were made in', () => {
+    const path = 'test-fixtures/same-run.md';
+    const fullText = 'Beta opens on March 10, with the public launch on April 7.';
+    addComment(path, 'Beta opens on March 10', 'label', { prefix: '', suffix: '', occurrence: 0 });
+    addComment(path, ', with the public launch on April 7.', 'label', { prefix: '', suffix: '', occurrence: 0 });
+
+    const root = mountRoot('rendered', (r) => { r.textContent = fullText; });
+    const containerRef = { current: root };
+    const { result } = renderHook(() => useQuoteMarks(containerRef, commentsForPath(path)));
+
+    const texts = commentsForPath(path).map((c) => result.current.get(c.id)?.map((m) => m.textContent).join(''));
+    expect(texts).toEqual(['Beta opens on March 10', ', with the public launch on April 7.']);
+    // The returned map keeps the comments' own order.
+    expect([...result.current.keys()]).toEqual(commentsForPath(path).map((c) => c.id));
+  });
+
+  it('a comment inside another keeps both highlights whole, in either order', () => {
+    for (const [first, second] of [['outer', 'inner'], ['inner', 'outer']]) {
+      __resetDocCommentsStoreForTest();
+      const path = `test-fixtures/nested-${first}.md`;
+      const fullText = 'The launch moves to April 21 if the beta finds problems.';
+      const quotes: Record<string, string> = { outer: 'moves to April 21 if the beta', inner: 'April 21' };
+      addComment(path, quotes[first], 'label', { prefix: '', suffix: '', occurrence: 0 });
+      addComment(path, quotes[second], 'label', { prefix: '', suffix: '', occurrence: 0 });
+
+      const root = mountRoot('rendered', (r) => { r.textContent = fullText; });
+      const containerRef = { current: root };
+      const { result, unmount } = renderHook(() => useQuoteMarks(containerRef, commentsForPath(path)));
+
+      const texts = commentsForPath(path).map((c) => result.current.get(c.id)?.map((m) => m.textContent).join(''));
+      expect(texts).toEqual([quotes[first], quotes[second]]);
+      // Taking the highlights away puts the page back exactly as it was.
+      unmount();
+      expect(root.textContent).toBe(fullText);
+      expect(root.querySelector('mark')).toBeNull();
+      root.remove();
+    }
+  });
+
   it('a "raw" plain-text viewer resolves against the <pre>, the same root build-menu.ts captured context from', () => {
     const path = 'test-fixtures/plain.txt';
     const fullText = 'alpha beta GAMMA delta';

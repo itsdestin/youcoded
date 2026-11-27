@@ -53,6 +53,7 @@ import { reconcileInstalls } from '../install-reconcile';
 import { startSocial } from '../social-handlers';
 import { initArcadeOps } from '../arcade-handlers';
 import { startDailyHeartbeat, setAndroidId } from '../analytics-service';
+import { markBackendAsPhone } from '../device-noun';
 import { safeStorage } from 'electron';
 import type { Platform } from '../platform';
 import { hasHost, hostNotify, onHostEvent, returnToApp } from './host-bridge';
@@ -134,6 +135,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   // only ever runs inside the Android app, which checked in as "desktop" from
   // 1.3.1 to 1.3.3 and minted a new random ID on every reinstall. The ID is
   // read once and removed so programs this backend starts never inherit it.
+  markBackendAsPhone(); // WHY: so backend messages say "phone", not "this computer" (device-noun.ts)
   setAndroidId(process.env.YOUCODED_ANDROID_ID);
   delete process.env.YOUCODED_ANDROID_ID;
   startDailyHeartbeat({ platform: 'android' });

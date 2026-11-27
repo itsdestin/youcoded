@@ -1,0 +1,148 @@
+{
+ "fps": 24,
+ "width": 1440,
+ "height": 900,
+ "duration": 17.247,
+ "actions": [
+  {
+   "i": 0,
+   "kind": "hold",
+   "mark": null,
+   "start": 0.028,
+   "end": 0.328
+  },
+  {
+   "i": 1,
+   "kind": "click",
+   "mark": null,
+   "start": 0.328,
+   "end": 1.367
+  },
+  {
+   "i": 2,
+   "kind": "hold",
+   "mark": null,
+   "start": 1.967,
+   "end": 2.267
+  },
+  {
+   "i": 3,
+   "kind": "click",
+   "mark": null,
+   "start": 2.267,
+   "end": 3.24
+  },
+  {
+   "i": 4,
+   "kind": "click",
+   "mark": null,
+   "start": 3.64,
+   "end": 4.651
+  },
+  {
+   "i": 5,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 4.851,
+   "end": 5.081
+  },
+  {
+   "i": 6,
+   "kind": "key",
+   "mark": null,
+   "start": 5.481,
+   "end": 5.493
+  },
+  {
+   "i": 7,
+   "kind": "key",
+   "mark": null,
+   "start": 5.892,
+   "end": 5.902
+  },
+  {
+   "i": 8,
+   "kind": "click",
+   "mark": null,
+   "start": 6.302,
+   "end": 7.235
+  },
+  {
+   "i": 9,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 7.436,
+   "end": 7.651
+  },
+  {
+   "i": 10,
+   "kind": "key",
+   "mark": null,
+   "start": 8.051,
+   "end": 8.077
+  },
+  {
+   "i": 11,
+   "kind": "hold",
+   "mark": null,
+   "start": 8.778,
+   "end": 9.177
+  },
+  {
+   "i": 12,
+   "kind": "click",
+   "mark": null,
+   "start": 9.177,
+   "end": 10.217
+  },
+  {
+   "i": 13,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 10.418,
+   "end": 10.606
+  },
+  {
+   "i": 14,
+   "kind": "hold",
+   "mark": null,
+   "start": 11.007,
+   "end": 11.307
+  },
+  {
+   "i": 15,
+   "kind": "click",
+   "mark": null,
+   "start": 11.307,
+   "end": 12.381
+  },
+  {
+   "i": 16,
+   "kind": "hold",
+   "mark": null,
+   "start": 12.68,
+   "end": 13.681
+  },
+  {
+   "i": 17,
+   "kind": "key",
+   "mark": null,
+   "start": 13.681,
+   "end": 13.705
+  },
+  {
+   "i": 18,
+   "kind": "clickText",
+   "mark": null,
+   "start": 14.105,
+   "end": 14.953
+  },
+  {
+   "i": 19,
+   "kind": "hold",
+   "mark": null,
+   "start": 15.453,
+   "end": 16.953
+  }
+ ]
+}
