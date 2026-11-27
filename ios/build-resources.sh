@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # build-resources.sh — everything the Xcode project needs that is not Swift, then the project itself:
 #   build/Resources/web        the shared page (desktop renderer, `npm run build:web`)
-#   build/Resources/backend    the desktop backend as one bundle (runtime/build-backend.mjs)
+#   build/Resources/backend    the desktop backend as one bundle (runtime/build-backend.mjs), plus the built-in command
+#                              line's worker and the licence texts of the packages it carries
+#                              (YOUCODED_IOS_SHELL_SELFTEST=1 also bundles the simulator-only self-test)
 #   build/Frameworks/…         Node for iOS (runtime/fetch-node.sh)
 #   YouCoded.xcodeproj         generated from project.yml (needs xcodegen; skipped with a note when absent)
 #
@@ -41,7 +43,12 @@ if [ "$SKIP_WEB" = 0 ] || [ ! -f "$BUILD/Resources/web/index.html" ]; then
 fi
 
 say "bundling the backend"
-[ -d "$HERE/runtime/node_modules/esbuild" ] || (cd "$HERE/runtime" && npm ci --no-audit --no-fund)
+# WHY --ignore-scripts: just-bash lists two optional native compressors (one is LGPL-licensed) with install scripts. The
+# build never bundles them (build-backend.mjs leaves them out) and nothing here needs their scripts to run. `--omit=optional`
+# is NOT used: esbuild itself ships its compiler as an "optional" per-platform package, so omitting them breaks the build.
+for pkg in esbuild just-bash just-git; do
+  [ -d "$HERE/runtime/node_modules/$pkg" ] || { (cd "$HERE/runtime" && npm ci --ignore-scripts --no-audit --no-fund); break; }
+done
 node "$HERE/runtime/build-backend.mjs" "$BUILD/Resources/backend"
 
 say "fetching Node for iOS"

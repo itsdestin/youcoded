@@ -18,7 +18,9 @@
 //   <outDir>/dist/renderer/data/skill-registry.json
 //   <outDir>/hook-scripts/ , <outDir>/scripts/install-hooks.js
 //
-// Needs: `npm ci` in this folder (esbuild) and in desktop/ (the backend's dependencies).
+//   <outDir>/dist/ios-shell/worker.js             the built-in command line, one worker thread per command (ios/runtime/shell/)
+//
+// Needs: `npm ci` in this folder (esbuild, just-bash, just-git) and in desktop/ (the backend's dependencies).
 import { build } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,9 +42,24 @@ export const WORKER_ENTRIES = [
 ];
 const MAIN_ENTRY = 'main/headless/ios-main.ts';
 
+/** The built-in command line (design: docs/active/specs/2026-11-26-iphone-in-app-command-line.md). Its worker thread and
+ *  its start-up registration live in ios/runtime/shell/, NOT under desktop/src: the packages it needs (just-bash,
+ *  just-git) are installed only here, so desktop and Android can never pull them in. */
+const SHELL_DIR = path.join(HERE, 'shell');
+const SHELL_WORKER = { file: path.join(SHELL_DIR, 'worker.ts'), out: 'ios-shell/worker.js' };
+const SHELL_REGISTER = path.join(SHELL_DIR, 'register.ts');
+/** Test-only: with YOUCODED_IOS_SHELL_SELFTEST=1 the simulator build also carries a start-up self-test (shell/selftest.ts),
+ *  so CI can run the conformance list inside the real app. Never set for a release build. */
+const SELFTEST = process.env.YOUCODED_IOS_SHELL_SELFTEST === '1' ? path.join(SHELL_DIR, 'selftest.ts') : null;
+
 /** Modules that cannot exist on an iPhone (native add-ons built per platform, or a browser driver). Left as
  *  `require()` calls that throw only if a code path that cannot run on a phone is actually reached. */
 const EXTERNAL = ['node-pty', 'koffi', 'fsevents', 'playwright-core', '*.node'];
+/** Extra, for the built-in shell's worker only: just-bash's own optional pieces, which it loads only inside a try — the two
+ *  native compressors (one is LGPL-licensed: never bundled), SQLite (needs WebAssembly, which an iPhone's Node lacks; the
+ *  sqlite3 command is left out), the TypeScript compiler (only for its JavaScript runtime, which is off) and the network
+ *  guard (the shell is handed the app's own fetch instead). Left as require() calls that throw only if reached. */
+const SHELL_EXTERNAL = ['@mongodb-js/zstd', 'node-liblzma', 'sql.js', 'typescript', 'guarded-fetch'];
 
 /** Rewrites `__dirname` / `__filename` in the backend's own sources to the compiled-tree path of that file. */
 const virtualPaths = {
@@ -111,12 +128,24 @@ function lowerPropertyLiterals(file, text) {
   return out;
 }
 
-async function bundle(entry, unicodeTables = {}) {
-  const outfile = path.join(OUT, 'dist', entry.replace(/\.ts$/, '.js'));
+/** Everything this build produces: [{ file, out, external?, inject? }] — the source file, where its bundle goes under
+ *  <outDir>/dist, extra modules left out of just that bundle, and extra files run first in just that bundle. */
+function targets() {
+  return [
+    // WHY the registration is injected here and not imported by ios-main.ts: that is desktop source, which must never
+    // know about the iPhone-only shell (and its packages).
+    { file: path.join(SRC, MAIN_ENTRY), out: MAIN_ENTRY.replace(/\.ts$/, '.js'), inject: [SHELL_REGISTER, ...(SELFTEST ? [SELFTEST] : [])] },
+    ...WORKER_ENTRIES.map((entry) => ({ file: path.join(SRC, entry), out: entry.replace(/\.ts$/, '.js') })),
+    { file: SHELL_WORKER.file, out: SHELL_WORKER.out, external: SHELL_EXTERNAL },
+  ];
+}
+
+async function bundle(target, unicodeTables = {}) {
+  const outfile = path.join(OUT, 'dist', target.out);
   // How many folders up from this bundle's own folder the layout root is ("dist/main/headless" → 3).
-  const up = path.posix.dirname('dist/' + entry).split('/').map(() => '..').join('/');
+  const up = path.posix.dirname('dist/' + target.out).split('/').map(() => '..').join('/');
   const result = await build({
-    entryPoints: [path.join(SRC, entry)],
+    entryPoints: [target.file],
     outfile,
     bundle: true,
     platform: 'node',
@@ -128,11 +157,16 @@ async function bundle(entry, unicodeTables = {}) {
       electron: path.join(SRC, 'main/headless/electron-headless.ts'),
       // undici needs WebAssembly, which the iPhone's Node lacks: see ios-undici.ts.
       undici: path.join(SRC, 'main/headless/ios-undici.ts'),
+      // just-bash's ES-module build imports `undici` by name, which the line above would break; its CommonJS build is one
+      // self-contained file, so the shell uses that.
+      'just-bash': path.join(HERE, 'node_modules/just-bash/dist/bundle/index.cjs'),
     },
-    external: EXTERNAL,
+    external: [...EXTERNAL, ...(target.external ?? [])],
     plugins: [virtualPaths],
     // The fills (ios-compat.ts) run before any module of the bundle: see ios-prelude.ts.
-    inject: [path.join(SRC, 'main/headless/ios-prelude.ts')],
+    inject: [path.join(SRC, 'main/headless/ios-prelude.ts'), ...(target.inject ?? [])],
+    // The shell's .json test list (self-test build only) and nothing else needs a loader beyond the defaults.
+    loader: { '.json': 'json' },
     define: { __YC_UNICODE_TABLES__: JSON.stringify(unicodeTables) },
     banner: { js: `const __ycRoot = require('path').resolve(__dirname, ${JSON.stringify(up)});\nconst __ycPath = (rel) => require('path').join(__ycRoot, rel);` },
     legalComments: 'none',
@@ -145,7 +179,35 @@ async function bundle(entry, unicodeTables = {}) {
   const built = await fs.promises.readFile(outfile, 'utf8');
   const text = lowerPropertyLiterals(outfile, built);
   if (text !== built) await fs.promises.writeFile(outfile, text);
-  return { outfile, inputs: Object.keys(result.metafile.inputs).length, text };
+  return { outfile, inputs: Object.keys(result.metafile.inputs).length, metafile: result.metafile, text };
+}
+
+/** Ship the licence and notice files of every npm package built into `metafile`'s bundle, under <outDir>/legal/<name>/.
+ *  WHY (iPhone app, card #89): esbuild writes the code of a package into the bundle but drops its licence text
+ *  (`legalComments: 'none'`), and just-bash (Apache-2.0) and just-git (MIT) both require theirs to travel with the app.
+ *  Used for the built-in shell's bundle, which holds those two and their dependencies. */
+async function shipLicenses(metafile) {
+  const roots = new Set();
+  for (const input of Object.keys(metafile.inputs)) {
+    const m = /^(.*\/node_modules\/(?:@[^/]+\/)?[^/]+)\//.exec(input.split(path.sep).join('/'));
+    if (m) roots.add(m[1]);
+  }
+  // just-bash's own file is one pre-built bundle with most of its dependencies already inside it, so the metafile cannot
+  // see them: add every package it declares (except the ones left out of our bundle) by name.
+  const jb = JSON.parse(await fs.promises.readFile(path.join(HERE, 'node_modules/just-bash/package.json'), 'utf8'));
+  for (const dep of Object.keys(jb.dependencies ?? {})) {
+    if (!SHELL_EXTERNAL.includes(dep) && fs.existsSync(path.join(HERE, 'node_modules', dep))) roots.add(path.join(HERE, 'node_modules', dep));
+  }
+  for (const root of [...roots].sort()) {
+    // The metafile names inputs relative to the folder esbuild ran in (the current one).
+    const dir = path.resolve(root);
+    const pkgName = JSON.parse(await fs.promises.readFile(path.join(dir, 'package.json'), 'utf8')).name ?? path.basename(dir);
+    for (const file of await fs.promises.readdir(dir)) {
+      if (!/^(licen[sc]e|notice|copying)/i.test(file)) continue;
+      await fs.promises.mkdir(path.join(OUT, 'legal', pkgName), { recursive: true });
+      await fs.promises.copyFile(path.join(dir, file), path.join(OUT, 'legal', pkgName, file));
+    }
+  }
 }
 
 async function main() {
@@ -156,8 +218,8 @@ async function main() {
 
   // Two passes: the first finds which Unicode properties the code names, the second bakes their tables in.
   const names = new Set();
-  for (const entry of [MAIN_ENTRY, ...WORKER_ENTRIES]) {
-    for (const n of propertiesNamedIn((await bundle(entry)).text)) names.add(n);
+  for (const target of targets()) {
+    for (const n of propertiesNamedIn((await bundle(target)).text)) names.add(n);
   }
   const tables = {};
   for (const name of [...names].sort()) {
@@ -165,8 +227,9 @@ async function main() {
   }
   console.log(`[ios-backend] Unicode properties baked in: ${Object.keys(tables).join(', ') || '(none)'}`);
 
-  for (const entry of [MAIN_ENTRY, ...WORKER_ENTRIES]) {
-    const { outfile, inputs } = await bundle(entry, tables);
+  for (const target of targets()) {
+    const { outfile, inputs, metafile } = await bundle(target, tables);
+    if (target.out === SHELL_WORKER.out) await shipLicenses(metafile);
     const size = (await fs.promises.stat(outfile)).size;
     console.log(`[ios-backend] ${path.relative(OUT, outfile)}  ${(size / 1e6).toFixed(1)} MB  (${inputs} modules)`);
   }

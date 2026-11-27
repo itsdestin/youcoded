@@ -28,7 +28,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": ".",
+    // WHY "..": the iPhone command line's package-free pieces (ios/runtime/shell/adapter.ts and friends) are tested from
+    // here and live beside the iPhone build, one folder up. Nothing is emitted (noEmit), so the root only has to contain them.
+    "rootDir": "..",
     "module": "esnext",
     "moduleResolution": "bundler",
     "allowJs": true,

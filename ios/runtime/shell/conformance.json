@@ -1,0 +1,188 @@
+[
+ {
+  "cmd": "echo hello",
+  "out": "hello\n",
+  "errEmpty": true
+ },
+ {
+  "cmd": "printf 'b\\na\\nc\\n' > s.txt; sort s.txt | head -2",
+  "out": "a\nb\n"
+ },
+ {
+  "cmd": "printf 'b\\na\\nc\\n' > s2.txt; wc -l < s2.txt",
+  "out": "3\n"
+ },
+ {
+  "cmd": "printf 'b\\na\\nc\\n' > s3.txt; grep -c a s3.txt; sed -n '2p' s3.txt; awk '{print toupper($0)}' s3.txt | tail -1",
+  "out": "1\na\nC\n"
+ },
+ {
+  "cmd": "echo '{\"a\":[1,2,3]}' | jq '.a | add'",
+  "out": "6\n"
+ },
+ {
+  "cmd": "mkdir -p d/e && touch d/e/f && find d -type f",
+  "out": "d/e/f\n"
+ },
+ {
+  "cmd": "mkdir -p cd1 && cd cd1 && pwd",
+  "outRe": "/work/cd1\\n$"
+ },
+ {
+  "cmd": "echo x > c1.txt; cp c1.txt c2.txt && diff c1.txt c2.txt; echo rc=$?",
+  "out": "rc=0\n"
+ },
+ {
+  "cmd": "echo x > tarme.txt; tar czf a.tgz tarme.txt && tar tzf a.tgz",
+  "out": "tarme.txt\n"
+ },
+ {
+  "cmd": "echo abc | base64",
+  "out": "YWJjCg==\n"
+ },
+ {
+  "cmd": "echo -n abc | sha256sum | cut -d' ' -f1",
+  "out": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+ },
+ {
+  "cmd": "echo $((2+3*4))",
+  "out": "14\n"
+ },
+ {
+  "cmd": "x=5; [ $x -gt 3 ] && echo big",
+  "out": "big\n"
+ },
+ {
+  "cmd": "seq 1 5 | xargs echo",
+  "out": "1 2 3 4 5\n"
+ },
+ {
+  "cmd": "false || echo recovered",
+  "out": "recovered\n"
+ },
+ {
+  "cmd": "cd /nonexistent; echo rc=$?",
+  "out": "rc=1\n",
+  "errRe": "No such file or directory"
+ },
+ {
+  "cmd": "ls -1 d",
+  "out": "e\n"
+ },
+ {
+  "cmd": "printf 'a,b\\n1,2\\n' > t.csv; cut -d, -f2 t.csv | tail -1",
+  "out": "2\n"
+ },
+ {
+  "cmd": "mkdir -p lnk && echo y > lnk/real && ln -s real lnk/alias && cat lnk/alias",
+  "out": "y\n"
+ },
+ {
+  "cmd": "test -d \"$HOME\" && echo home-ok; test -d \"$TMPDIR\" && echo tmp-ok; echo $USER",
+  "out": "home-ok\ntmp-ok\nmobile\n"
+ },
+ {
+  "cmd": "echo n=$(env | grep -c -e TOKEN -e SECRET -e API_KEY)",
+  "out": "n=0\n"
+ },
+ {
+  "cmd": "python3 -c 'print(1)'; echo rc=$?",
+  "out": "rc=127\n",
+  "errRe": "python3 is not available on this iPhone"
+ },
+ {
+  "cmd": "npm install; echo rc=$?",
+  "out": "rc=127\n",
+  "errRe": "npm is not available on this iPhone"
+ },
+ {
+  "cmd": "sudo ls; echo rc=$?",
+  "out": "rc=127\n",
+  "errRe": "cannot be used here"
+ },
+ {
+  "cmd": "command -v python python3 node npm npx pip sqlite3 sudo js-exec; echo rc=$?",
+  "out": "rc=1\n"
+ },
+ {
+  "cmd": "which node || echo none; which sqlite3 || echo none",
+  "out": "none\nnone\n"
+ },
+ {
+  "cmd": "type -t python3 || echo absent",
+  "out": "absent\n"
+ },
+ {
+  "cmd": "command -v ls cat grep jq tar curl git | wc -l",
+  "out": "7\n"
+ },
+ {
+  "cmd": "cat .netrc; echo rc=$?",
+  "out": "rc=1\n",
+  "errRe": "No such file or directory"
+ },
+ {
+  "cmd": "cat sub/id_rsa; echo rc=$?",
+  "out": "rc=1\n"
+ },
+ {
+  "cmd": "ls -a | grep -c netrc; ls sub | wc -l",
+  "out": "0\n0\n"
+ },
+ {
+  "cmd": "[ -e .netrc ] && echo yes || echo no",
+  "out": "no\n"
+ },
+ {
+  "cmd": "ln -s .netrc cred-link; cat cred-link; echo rc=$?",
+  "out": "rc=1\n"
+ },
+ {
+  "cmd": "cp .netrc stolen; echo rc=$?; ls stolen 2>&1 | grep -c stolen",
+  "outRe": "^rc=1\\n",
+  "errRe": "No such file or directory"
+ },
+ {
+  "cmd": "cp -r . ../work-copy; ls -a ../work-copy | grep -c -e netrc -e stolen; ls ../work-copy/sub | wc -l",
+  "out": "0\n0\n"
+ },
+ {
+  "cmd": "grep -r TOPSECRET . | wc -l",
+  "out": "0\n"
+ },
+ {
+  "cmd": "echo overwritten > .netrc; echo rc=$?",
+  "out": "rc=1\n"
+ },
+ {
+  "cmd": "git init -q g1 && cd g1 && echo a > a && git add a && git commit -qm one && git log --oneline | wc -l",
+  "out": "1\n"
+ },
+ {
+  "cmd": "git init -q g2; cd g2; echo a > a; git add a; git commit -qm one; git branch -q b; git checkout -q b; echo c >> a; git commit -qam two; git checkout -q main; git merge -q b; git log --oneline | wc -l",
+  "out": "2\n"
+ },
+ {
+  "cmd": "git init -q g3; cd g3; echo a > a; git add a; git commit -qm one; echo d >> a; git status -s; git diff --stat | tail -1",
+  "out": " M a\n 1 file changed, 1 insertion(+)\n"
+ },
+ {
+  "cmd": "git init -q g4; cd g4; echo a > a; git add a; git commit -qm one; touch .git/sharedindex.deadbeef; git status; echo rc=$?; cd ..; git -C g4 log; echo rc=$?",
+  "out": "rc=1\nrc=1\n",
+  "errRe": "index file is in a format"
+ },
+ {
+  "cmd": "git init -q g5; cd g5; echo a > a; git add a; git commit -qm one; head -c 4 .git/index > ../g5.idx; printf '\\000\\000\\000\\003' >> ../g5.idx; tail -c +9 .git/index >> ../g5.idx; cp ../g5.idx .git/index; git status; echo rc=$?; cd ..; git -C g5 -C . log; echo rc=$?",
+  "out": "rc=1\nrc=1\n",
+  "errRe": "index file is in a format"
+ },
+ {
+  "cmd": "git foo; echo rc=$?",
+  "out": "rc=1\n",
+  "errRe": "not"
+ },
+ {
+  "cmd": "i=0; while [ $i -lt 110000 ]; do i=$((i+1)); done; echo $i",
+  "out": "110000\n"
+ }
+]

@@ -41,13 +41,17 @@ const DESKTOP_LIBS: { lib: string; license: string; source: string }[] = [
   { lib: 'Cascadia Code', license: 'SIL OFL', source: 'github.com/microsoft/cascadia-code' },
 ];
 
-// The iPhone app's own pieces (2026-11-25): the page and backend are the desktop's; the shell adds only Node for iOS.
+// The iPhone app's own pieces (2026-11-25): the page and backend are the desktop's; the shell adds Node for iOS, and the built-in command line below.
 const IOS_LIBS: { lib: string; license: string; source: string }[] = [
   { lib: 'Node.js for Mobile Apps (nodejs-mobile)', license: 'MIT', source: 'github.com/nodejs-mobile/nodejs-mobile' },
   { lib: 'Node.js, V8, OpenSSL and their bundled libraries', license: 'MIT / BSD / Apache 2.0', source: 'nodejs.org' },
   { lib: 'React', license: 'MIT', source: 'github.com/facebook/react' },
   { lib: 'Tailwind CSS', license: 'MIT', source: 'github.com/tailwindlabs/tailwindcss' },
   { lib: 'highlight.js', license: 'BSD 3-Clause', source: 'github.com/highlightjs/highlight.js' },
+  // The built-in command line (2026-11-26): a shell and a git, both written in JavaScript, so the assistant can run commands
+  // where an iPhone cannot start programs. Their licence texts ship inside the app (legal/ in the backend bundle).
+  { lib: 'just-bash', license: 'Apache 2.0', source: 'github.com/vercel-labs/just-bash' },
+  { lib: 'just-git', license: 'MIT', source: 'github.com/blindmansion/just-git' },
 ];
 
 const ANDROID_LIBS: { lib: string; license: string; source: string }[] = [

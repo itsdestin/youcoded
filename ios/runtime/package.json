@@ -4,6 +4,8 @@
   "description": "Build tools for the iPhone app's backend bundle (build-backend.mjs). Kept apart from desktop/ so the desktop's dependency lock never changes for the iPhone build.",
   "type": "module",
   "devDependencies": {
-    "esbuild": "0.25.12"
+    "esbuild": "0.25.12",
+    "just-bash": "3.6.1",
+    "just-git": "1.10.0"
   }
 }
