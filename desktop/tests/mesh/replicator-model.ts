@@ -52,7 +52,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const online = new Set(NAMES);
   let noisy = false; let counter = 0; let forked = false;
   const trace: string[] = [];
-  const note = (k: string): void => { ops[k] = (ops[k] ?? 0) + 1; trace.push(k); };
+  const note = (k: string): void => { ops[k] = (ops[k] ?? 0) + 1; trace.push(k); if (process.env.MESH_REPLICATOR_FUZZ_TRACE) fs.appendFileSync(process.env.MESH_REPLICATOR_FUZZ_TRACE, `seed ${seed} step ${trace.length}: ${k} t=${Date.now() % 1_000_000}\n`); };
   const fail = (msg: string): never => { throw new Error(`replicator fuzz seed ${seed}: ${msg} [ops: ${trace.join(',')}]`); };
   try {
     try {

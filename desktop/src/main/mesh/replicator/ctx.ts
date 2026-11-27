@@ -67,6 +67,10 @@ export interface VRun {
   serveWait: boolean;
   /** The highest incarnation this process has used for the version (a rise means the store retired the copy under us, F2). */
   incarnationSeen: number | null;
+  /** When each peer was last sent a `want` for this version, and when a child last asked for its parent (hot-loop guards, fuzz seed 815612). */
+  wantAt: Map<string, number>;
+  parentAskAt: number | null;
+  parentAskLines: number | null;
   /** The writer's own record of the highest head it signed (undefined = not read yet, null = none). */
   ownHead?: { lines: number; hash: string } | null;
 }

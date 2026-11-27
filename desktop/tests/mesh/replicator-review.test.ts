@@ -398,6 +398,40 @@ describe('F6/F8 a child waiting for its parent is not adopted again for every me
   });
 });
 
+describe('F6/F8 a peer that cannot serve is not asked again in a hot loop (found by fuzz seed 815612; review T13/T14)', () => {
+  it('when the only peer that is online answers "unavailable" every time and no time passes, the asker sends a bounded number of frames', async () => {
+    w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('f6h');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(6)); await world.settle();
+    world.devs.B.carrier.setOnline(false);
+    await world.devs.A.rep.appendLocal(V, lineSet(2, 'more', 6)); await world.settle();
+    await vi.waitFor(async () => expect((await headOf(world, 'C', V)).lines).toBe(8));
+    fs.rmSync(nodePath.join(world.dirs.C, 'replicator', 'heads'), { recursive: true, force: true });
+    await world.restart('C'); // C keeps the lines but has lost its saved signed points: it can only say unavailable
+    world.hub.releaseThrough(chatGroup(world.setId, CHAT), 1_000_000);
+    world.devs.A.carrier.setOnline(false);
+    const before = world.devs.B.carrier.passed + world.devs.C.carrier.passed;
+    world.devs.B.carrier.setOnline(true);
+    await new Promise((r) => setTimeout(r, 3000)); // real seconds; the virtual clock does not move
+    const frames = world.devs.B.carrier.passed + world.devs.C.carrier.passed - before;
+    expect(frames).toBeLessThan(60);
+    expect(world.devs.B.rep.counters()['nak-unavailable']).toBeGreaterThanOrEqual(1);
+  }, 60_000);
+  it('a child waiting for a parent that nobody can serve does not make the devices ping-pong either', async () => {
+    w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000, stallMs: 600_000 }); const world = w; const V = wireId('f6i');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    world.hub.holdFilter = () => 'drop'; // B and C get nothing more from the relay
+    await world.devs.A.rep.appendLocal(V, lineSet(1, 'x', 4)); await world.settle();
+    const forkHash = Buffer.from((await world.devs.A.store.hashAt(await world.local('A', V), 0, 5)) as string, 'hex');
+    const child = (await import('../../src/main/mesh/store')).deriveForkId(V, 5, forkHash.toString('hex'), 'pp');
+    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 5, forkHash, token: 'pp' });
+    await world.settle();
+    const total = () => world.devs.B.carrier.passed + world.devs.C.carrier.passed + world.devs.A.carrier.passed;
+    const before = total();
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(total() - before).toBeLessThan(60);
+  }, 60_000);
+});
+
 describe('F7 status never says in-sync when it cannot know', () => {
   it('a peer that says it is repairing, and a peer whose claims are too old, each get their own named state', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('f7');

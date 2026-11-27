@@ -30,7 +30,7 @@ import { unhex } from '../store/chain';
 import { realFs, type Fs } from '../store/fsio';
 import { FrameReject, type LinkFrame } from '../link';
 import { reportFailure } from '../../report-failure';
-import { ByteBudget, INTRO_PERIOD_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
+import { ByteBudget, INTRO_PERIOD_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
 import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
@@ -73,7 +73,7 @@ export interface ReplicatorOptions {
   stepLimitMs?: number;
 }
 
-const newRun = (): VRun => ({ stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null });
+const newRun = (): VRun => ({ stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null });
 
 export class Replicator {
   readonly #o: ReplicatorOptions;
@@ -375,6 +375,13 @@ export class Replicator {
     const v = await this.localOf(wire);
     if (!v) return;
     const run = this.#ctx.runOf(wire);
+    // the same peer is not asked again at once (a peer that cannot serve answers at once, and re-asking at once made two devices ping-pong at full speed, fuzz seed 815612): the stall timer or the
+    // next heads exchange asks again after the gap. A different question (a restart from line 0, or a confirmation request) is not held back.
+    if (!opts.solicit && opts.haveLines === undefined) {
+      const last = run.wantAt.get(peer.hex); const nowMs = this.#ctx.clock.now();
+      if (last !== undefined && nowMs - last < WANT_GAP_MS) { this.#ctx.bump('want-held-back'); this.armWantRetry(wire, run, WANT_GAP_MS - (nowMs - last)); return; }
+      run.wantAt.set(peer.hex, nowMs);
+    }
     const head = await this.#o.store.head(v.local);
     let have = opts.haveLines ?? (repairFrom(head) ?? head.lines);
     let hash: string | null = null;
@@ -385,6 +392,11 @@ export class Replicator {
     run.pull = { peer: peer.hex, haveLines: have, at: this.#ctx.clock.now() };
     run.stall?.cancel();
     run.stall = this.#ctx.clock.setTimeout(() => { void this.stalled(wire, have); }, this.#o.stallMs ?? DEFAULT_STALL_MS);
+  }
+  /** One re-look at the version after a held-back want (not one per held-back call). */
+  private armWantRetry(wire: Buffer, run: VRun, inMs: number): void {
+    if (run.stall) return; // a stall timer is already going to look again
+    run.stall = this.#ctx.clock.setTimeout(() => { run.stall = null; void this.reconsider(wire); }, Math.max(100, inMs));
   }
   /** No progress since the want: the peer is gone or slow. Do not ask it again until someone else has been tried. */
   private async stalled(wire: Buffer, haveLines: number): Promise<void> {

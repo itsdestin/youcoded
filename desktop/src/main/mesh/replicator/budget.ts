@@ -58,3 +58,5 @@ export class RateLimiter {
     this.#last = Math.max(this.#last, t);
   }
 }
+/** The same peer is not sent another `want` for the same version sooner than this, and a child asks for its parent at most this often (a peer that cannot serve answers at once, and an immediate re-ask made two devices ping-pong at full speed, fuzz seed 815612). */
+export const WANT_GAP_MS = 2_000;

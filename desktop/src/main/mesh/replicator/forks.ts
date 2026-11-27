@@ -9,6 +9,7 @@ import { StoreError } from '../store';
 import { reportFailure } from '../../report-failure';
 import { hex } from '../store/chain';
 import { askIntro } from './receive';
+import { WANT_GAP_MS } from './budget';
 import { incarnationId, MAX_INCARNATIONS } from './idmap';
 import { chatGroup, type RepCtx } from './ctx';
 import type { VersionDescriptor } from './directory';
@@ -63,7 +64,12 @@ export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescr
   if (desc.parent === null) return register();
   const forkLine = desc.forkLine as number;
   const parentDesc = ctx.directory.describe(desc.parent);
-  if (!parentDesc) { for (const p of ctx.peers.values()) askIntro(ctx, p, desc.parent); ctx.bump('fork-waits-for-parent-intro'); return null; }
+  if (!parentDesc) {
+    // asked for at most every WANT_GAP_MS (fuzz seed 815612: every answer made the next ask, without end)
+    const nowMs = ctx.clock.now();
+    if (run.parentAskAt === null || nowMs - run.parentAskAt >= WANT_GAP_MS) { run.parentAskAt = nowMs; for (const p of ctx.peers.values()) askIntro(ctx, p, desc.parent); }
+    ctx.bump('fork-waits-for-parent-intro'); return null;
+  }
   const parent = await ctx.localOf(desc.parent);
   if (!parent) return null;
   try {
@@ -84,7 +90,11 @@ export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescr
       }
     }
     if (ph.lines >= forkLine) { ctx.bump('fork-parent-mismatch-copy-all'); return register(); } // my parent differs from the one the takeover names: copy the child whole
-    // pull the parent to the fork line first; the child is set up when it arrives (replicator.reconsider revisits waiting children)
+    // pull the parent to the fork line first; the child is set up when it arrives (replicator.reconsider revisits waiting children).
+    // The ask is repeated only when the parent has GROWN since the last one or WANT_GAP_MS have passed: a peer that cannot serve answers at once, and an immediate re-ask made two devices ping-pong at full speed (fuzz seed 815612).
+    const nowMs = ctx.clock.now();
+    if (run.parentAskLines === ph.lines && run.parentAskAt !== null && nowMs - run.parentAskAt < WANT_GAP_MS) { ctx.bump('fork-parent-ask-held-back'); return null; }
+    run.parentAskAt = nowMs; run.parentAskLines = ph.lines;
     for (const p of ctx.peers.values()) if (p.heads.has(desc.parent.toString('hex'))) { await ctx.want(desc.parent, p, { through: forkLine }); break; }
     return null;
   } catch (e) {
