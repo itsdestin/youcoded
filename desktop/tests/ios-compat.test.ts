@@ -2,7 +2,7 @@
 // and no Unicode data library. Each is tested where it can be FORCED on, on the Node the tests run on, against that
 // Node's own real behaviour.
 import { describe, it, expect, afterEach } from 'vitest';
-import { rewriteUnicodeProperties, installRegExpPropertyFallback, unicodePropertiesWork, installIosCompat, installFatalTextDecoder, fatalTextDecoderWorks, type UnicodeTables } from '../src/main/headless/ios-compat';
+import { rewriteUnicodeProperties, installRegExpPropertyFallback, unicodePropertiesWork, installIosCompat, installTextDecoderFills, fatalTextDecoderWorks, type UnicodeTables } from '../src/main/headless/ios-compat';
 
 /** The same table the build makes (ios/runtime/build-backend.mjs → unicodeTable), from this Node's own Unicode data. */
 function table(name: string): string {
@@ -107,7 +107,7 @@ describe('a text decoder that refuses bad input, where the platform has none', (
   it('gives the same answers as the real one, for good and bad bytes', () => {
     expect(fatalTextDecoderWorks()).toBe(true); // this Node has the real one to compare against
     const real = new NativeTextDecoder('utf-8', { fatal: true });
-    installFatalTextDecoder(true);
+    installTextDecoderFills(true);
     expect(globalThis.TextDecoder).not.toBe(NativeTextDecoder);
     const ours = new TextDecoder('utf-8', { fatal: true });
     expect(ours.fatal).toBe(true);
@@ -122,15 +122,31 @@ describe('a text decoder that refuses bad input, where the platform has none', (
     expect(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x61]))).toBe('\uFEFFa');
   });
 
+  it('decodes the one-byte Western encoding exactly as the real one does, under each of its names', () => {
+    const all = new Uint8Array(256).map((_, i) => i);
+    const real = new NativeTextDecoder('ascii');
+    installTextDecoderFills(true);
+    for (const name of ['ascii', 'latin1', 'ISO-8859-1', 'windows-1252', ' us-ascii ']) {
+      const ours = new TextDecoder(name);
+      expect(ours.encoding).toBe(real.encoding);
+      expect(ours.decode(all)).toBe(real.decode(all));
+    }
+    expect(new TextDecoder('ascii').decode(all.subarray(0x41, 0x44))).toBe('ABC');
+    expect(new TextDecoder('ascii').decode()).toBe('');
+    // An encoding nobody stands in for is still the platform's to answer.
+    expect(() => new TextDecoder('no-such-encoding')).toThrow();
+    expect(new TextDecoder('utf-16le').decode(new Uint8Array([0x61, 0x00]))).toBe('a');
+  });
+
   it('leaves the lenient form and the default alone', () => {
-    installFatalTextDecoder(true);
+    installTextDecoderFills(true);
     expect(new TextDecoder().decode(new Uint8Array([0xFF]))).toBe('\uFFFD');
     expect(new TextDecoder('utf-8', { fatal: false }).fatal).toBe(false);
     expect(new TextDecoder() instanceof NativeTextDecoder).toBe(true);
   });
 
   it('is not installed where the platform already has it', () => {
-    installFatalTextDecoder();
+    installTextDecoderFills();
     expect(globalThis.TextDecoder).toBe(NativeTextDecoder);
   });
 });
