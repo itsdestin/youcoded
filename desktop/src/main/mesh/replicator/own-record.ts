@@ -7,13 +7,15 @@
 // and rewrites its own); the store and the replicator folder put back together leave the witness (refused); only a restore of ALL THREE at once is invisible, and that stays the documented limit
 // (store inventory limit 4), covered by "wait to hear from the peers" in replicator.ts.
 import * as nodePath from 'node:path';
+import { reportFailure } from '../../report-failure';
 import { mkdirDurable, writeFileAtomic, type Fs } from '../store/fsio';
 
 export interface OwnRecord { lines: number; hash: string }
 export type RecordRead = { kind: 'ok'; rec: OwnRecord } | { kind: 'absent' } | { kind: 'malformed' };
 
 async function readOne(fs: Fs, path: string): Promise<RecordRead> {
-  const raw = await fs.readFile(path);
+  let raw: Buffer | null;
+  try { raw = await fs.readFile(path); } catch (cause) { reportFailure({ what: 'read the writer\'s own record of its highest head (it is treated as unreadable, not as missing)', cause, where: 'mesh.replicator' }); return { kind: 'malformed' }; }
   if (raw === null) return { kind: 'absent' };
   if (raw.length !== 40) return { kind: 'malformed' };
   const lines = Number(raw.readBigUInt64BE(0));

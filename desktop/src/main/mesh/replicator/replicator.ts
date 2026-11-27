@@ -32,7 +32,7 @@ import { unhex } from '../store/chain';
 import { realFs, type Fs } from '../store/fsio';
 import { FrameReject, type LinkFrame } from '../link';
 import { reportFailure } from '../../report-failure';
-import { ByteBudget, INTRO_PERIOD_MS, WRITER_ALONE_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
+import { ByteBudget, CLAIM_UNBACKED_MS, INTRO_PERIOD_MS, WRITER_ALONE_MS, MAX_HOLDS_PER_SECOND, MAX_INTRO_ASKS_PER_PERIOD, MAX_PEER_HEADS, QUEUE_STEP_LIMIT_MS, WANT_GAP_MS, RateLimiter, READ_BUFFER_BUDGET_BYTES, REASSEMBLY_BUDGET_BYTES } from './budget';
 import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
@@ -173,7 +173,9 @@ export class Replicator {
         reportFailure({ what: 'finish a step on a chat copy (the store did not answer; the step was given up)', where: 'mesh.replicator' });
         reject(new Error('store-call-blocked'));
       }, this.#o.stepLimitMs ?? QUEUE_STEP_LIMIT_MS); t.unref?.(); return () => clearTimeout(t); })() };
-      fn().then((v) => { if (!done) { done = true; timer.cancel(); resolve(v); } }, (e: unknown) => { if (!done) { done = true; timer.cancel(); reject(e); } });
+      // WHY the late answer clears the named state (review 2, finding 7): `stuck(store-call-blocked)` means the store has not answered; once it HAS (even long after the ceiling) the state would be a lie
+      const answered = (): void => { const r = this.#ctx.runOf(wire); if (r.stuck === 'store-call-blocked') { r.stuck = null; this.#ctx.bump('store-call-answered-late'); } void this.reconsider(wire).catch((e: unknown) => reportFailure({ what: 'look at a chat copy again after its store answered late', cause: e, where: 'mesh.replicator' })); };
+      fn().then((v) => { if (!done) { done = true; timer.cancel(); resolve(v); } else answered(); }, (e: unknown) => { if (!done) { done = true; timer.cancel(); reject(e); } else answered(); });
     });
   }
   /** Resolves when no work is queued (for tests and orderly shutdown). */
@@ -355,7 +357,8 @@ export class Replicator {
       const ack = peer.acks.get(k);
       if (ack && (e.lines < ack.lines || e.state !== 'ok')) peer.acks.delete(k);
       if (peer.heads.size >= MAX_PEER_HEADS && !peer.heads.has(k)) { this.#ctx.bump('peer-heads-full'); continue; }
-      peer.heads.set(k, { lines: e.lines, hash: e.hash.toString('hex'), state: e.state, at: now });
+      const prevH = peer.heads.get(k); const hx = e.hash.toString('hex');
+      peer.heads.set(k, { lines: e.lines, hash: hx, state: e.state, at: now, since: prevH && !prevH.echo && e.lines >= prevH.lines ? (prevH.since ?? now) : now /* a peer that keeps claiming at least as much, backed by nothing, keeps its first-heard time even if it changes the chain value */ });
       await this.reconsider(e.version);
     }
     if (b.page === b.of - 1) peer.headsComplete = now; // every page of this peer's list has now been seen in this process
@@ -586,7 +589,11 @@ export class Replicator {
       for (const p of this.#ctx.peers.values()) {
         const h = p.heads.get(wk);
         if (!h || now - h.at > PEER_FRESH_MS || h.state !== 'ok') continue;
-        if (h.lines > head.lines) throw new Error('writer-behind-peer-holds-more');
+        if (h.lines > head.lines) {
+          // a claim that stays the same and is never backed by a batch from that peer cannot block a chat forever: discounted, counted and named (status) after CLAIM_UNBACKED_MS
+          if (now - (h.since ?? h.at) > CLAIM_UNBACKED_MS) { this.#ctx.bump('claim-discounted'); continue; }
+          throw new Error('writer-behind-peer-holds-more');
+        }
         if (h.lines === head.lines && h.hash !== head.hash) throw new Error('writer-diverged-from-peer');
       }
       if (!this.evidenceNow(wire, eff !== null && ev.own.kind === 'ok' && ev.witness.kind === 'ok')) throw new Error('writer-waiting-for-peers');
@@ -607,6 +614,7 @@ export class Replicator {
       if (res !== 'ok') throw new Error(`append answered ${res}`);
       if (run.pushedThrough === null) run.pushedThrough = head.lines;
       const h = await this.#o.store.head(v.local);
+      run.lastHead = { lines: h.lines, incarnation: v.incarnation };
       const recorded = await this.saveOwnHead(wire, h.lines, h.hash); // AFTER the store has the lines and BEFORE anything is signed or pushed from them
       return { lines: h.lines, hash: h.hash, result: recorded ? 'saved' as const : 'durable-not-recorded' as const };
     });
@@ -633,7 +641,7 @@ export class Replicator {
     if (run.stuck) return early('stuck', run.stuck);
     const cur = await ctx.ids.current(wire).catch(() => null /* benign: a version the store cannot open yet is reported below as having no lines; the state then comes from the other fields */);
     let lines = 0; let refilling = false;
-    if (cur?.registered) { try { const h = await this.#o.store.head(cur.local); lines = h.lines; refilling = repairFrom(h) !== null; } catch (e) { if (!(e instanceof StoreError)) throw e; } }
+    if (cur?.registered) { try { const h = await this.#o.store.head(cur.local); lines = h.lines; refilling = repairFrom(h) !== null; run.lastHead = { lines: h.lines, incarnation: cur.incarnation }; /* kept so a named early state (fault, stuck) shows the last TRUE count, not 0 (review 2, finding 7) */ } catch (e) { if (!(e instanceof StoreError)) throw e; } }
     const mk = (state: VersionStatus['state'], reason: string | null = null): VersionStatus => ({ state, reason, lines, incarnation: cur?.incarnation ?? 0 });
     if (run.diverged) return mk('diverged', run.diverged);
     if (refilling || run.refill) return mk('refilling');
@@ -655,6 +663,7 @@ export class Replicator {
     if (run.pull) {
       // every device that claims more lines has answered "unavailable" more than once: nothing will arrive without something changing (review 2, finding 3)
       const cands = [...ctx.peers.values()].filter((p) => { const h = p.heads.get(wire.toString('hex')); return h && h.lines > lines && ctx.clock.now() - h.at <= PEER_FRESH_MS; });
+      if (desc && desc.writer.equals(ctx.crypto.self)) { const liar = cands.find((p) => (() => { const hh = p.heads.get(wire.toString('hex')); return ctx.clock.now() - (hh?.since ?? hh?.at ?? ctx.clock.now()) > CLAIM_UNBACKED_MS; })()); if (liar) return mk('pulling', `peer-claim-discounted ${hex8(liar.id)}`); if (cands.length > 0) return mk('pulling', `peer-claims-more ${hex8(cands[0].id)}`); }
       if (cands.length > 0 && run.unavailableRounds >= 2 * cands.length && cands.every((p) => run.unavailable.has(p.hex))) return mk('stuck', 'no-peer-can-serve');
       return mk('pulling', run.skip.size > 0 ? 'peers-not-answering' : null);
     }

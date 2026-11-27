@@ -140,3 +140,114 @@ describe('F1(d): a replicator folder older than the store never lets a peer repl
     expect(await st(world, 'B', V)).toMatch(/^faulted/);
   });
 });
+
+// ---------------------------------------------------------------- the new API surface (written with the fixes)
+import { randomBytes } from 'node:crypto';
+import { deriveRootId } from '../../src/main/mesh/replicator/directory';
+import { GROUP_LIVE, headsBodyOf, introBodyOf, introMessage, KIND_HEADS, KIND_INTRO } from '../../src/main/mesh/replicator/wire';
+import { signWith } from '../../src/main/mesh/crypto/identity';
+import { MAX_PEER_HEADS } from '../../src/main/mesh/replicator/budget';
+
+describe('finding 4: a root version id is bound to its writer', () => {
+  it('a paired device announcing someone else\'s id as its own is dropped on its face: no conflict, no fault, the writer keeps writing, and every honest device agrees', async () => {
+    w = await repWorld(['A', 'B', 'C'], { bindIds: true, discoveryMs: 600_000 }); const world = w;
+    const nonce = randomBytes(16); const V = deriveRootId(world.setId, CHAT, world.ids.A.deviceId, nonce);
+    await world.devs.A.rep.createVersion({ version: V, chatId: CHAT, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null, nonce });
+    await world.settle();
+    // B names itself the writer of A's id
+    const evil = { version: V, chatId: CHAT, runtime: 'claude-code' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: world.ids.B.deviceId, nonce: randomBytes(16) };
+    const sig = signWith(world.ids.B, introMessage(evil));
+    world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_INTRO, body: introBodyOf({ ...evil, sig }) });
+    await world.settle();
+    for (const n of ['A', 'C']) { expect(world.devs[n].rep.counters()['intro-bad-root-id']).toBeGreaterThanOrEqual(1); expect(await st(world, n, V)).not.toMatch(/^faulted/); }
+    await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    expect((await headOf(world, 'C', V)).lines).toBe(3);
+  });
+  it('a root id that does not match its writer and nonce is never accepted, even with no earlier announcement (the id cannot be chosen freely)', async () => {
+    w = await repWorld(['A', 'B'], { bindIds: true, discoveryMs: 600_000 }); const world = w;
+    const V = wireId('free-choice'); const nonce = randomBytes(16);
+    const d = { version: V, chatId: CHAT, runtime: 'claude-code' as const, parent: null, forkLine: null, forkHash: null, token: null, writer: world.ids.B.deviceId, nonce };
+    world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_INTRO, body: introBodyOf({ ...d, sig: signWith(world.ids.B, introMessage(d)) }) });
+    await world.settle();
+    expect(world.devs.A.rep.counters()['intro-bad-root-id']).toBeGreaterThanOrEqual(1);
+    expect(world.devs.A.rep.versions().some((x) => x.equals(V))).toBe(false);
+  });
+  it('a bound root works end to end, and a takeover child still forks from it', async () => {
+    w = await repWorld(['A', 'B'], { bindIds: true, discoveryMs: 600_000 }); const world = w;
+    const nonce = randomBytes(16); const V = deriveRootId(world.setId, CHAT, world.ids.A.deviceId, nonce);
+    await world.devs.A.rep.createVersion({ version: V, chatId: CHAT, runtime: 'claude-code', parent: null, forkLine: null, forkHash: null, token: null, nonce });
+    await world.devs.A.rep.appendLocal(V, lineSet(4)); await world.settle();
+    expect((await headOf(world, 'B', V)).lines).toBe(4);
+  });
+});
+
+describe('finding 7: appendLocal after a failure that left the lines durable', () => {
+  it('an expected head makes a retry safe: the same lines are never appended twice, a moved head is refused by name', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r2-exp');
+    await world.create('A', V); const first = await world.devs.A.rep.appendLocal(V, lineSet(3));
+    const again = await world.devs.A.rep.appendLocal(V, lineSet(2, 'x', 3), { lines: first.lines, hash: first.hash });
+    expect(again.result).toBe('saved');
+    const retry = await world.devs.A.rep.appendLocal(V, lineSet(2, 'x', 3), { lines: first.lines, hash: first.hash }); // the caller never heard the answer and asks again
+    expect(retry).toMatchObject({ lines: 5, result: 'already-saved' });
+    expect((await headOf(world, 'A', V)).lines).toBe(5);
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(2, 'y', 3), { lines: first.lines, hash: first.hash })).rejects.toThrow(/writer-head-moved/);
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'z', 5), { lines: 5, hash: 'ab'.repeat(32) })).rejects.toThrow(/writer-head-moved/);
+  });
+  it('lines durable but the own record could not be written to both places: a distinct named result, nothing announced, a named status, and the retry saves it without a second copy', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r2-pending');
+    await world.create('A', V); const first = await world.devs.A.rep.appendLocal(V, lineSet(2));
+    await world.settle();
+    fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { recursive: true, force: true }); fs.writeFileSync(nodePath.join(world.dirs.A, 'witness'), 'in the way'); // the witness folder cannot be made
+    const r = await world.devs.A.rep.appendLocal(V, lineSet(2, 'p', 2), { lines: first.lines, hash: first.hash });
+    expect(r.result).toBe('durable-not-recorded');
+    expect(await st(world, 'A', V)).toBe('stuck(own-record-not-saved)');
+    await world.elapse(5_000, 1_000);
+    expect((await headOf(world, 'B', V)).lines).toBe(2); // nothing was announced
+    fs.rmSync(nodePath.join(world.dirs.A, 'witness'), { force: true });
+    const ok = await world.devs.A.rep.appendLocal(V, lineSet(2, 'p', 2), { lines: first.lines, hash: first.hash });
+    expect(ok).toMatchObject({ lines: 4, result: 'already-saved' });
+    await world.settle();
+    expect((await headOf(world, 'B', V)).lines).toBe(4);
+    expect((await headOf(world, 'A', V)).lines).toBe(4);
+  });
+  it('a store step that gave up (store-call-blocked) is cleared and shows the true count once the store answers', async () => {
+    w = await repWorld(['A'], { discoveryMs: 600_000, stepLimitMs: 150 }); const world = w; const V = wireId('r2-late');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3));
+    const real = world.devs.A.store.head.bind(world.devs.A.store); let hold: (() => void) | null = null;
+    world.devs.A.store.head = (async (id: Buffer) => { await new Promise<void>((r) => { hold = r; }); return real(id); }) as typeof world.devs.A.store.head;
+    await expect(world.devs.A.rep.reportCorrupt(V)).rejects.toThrow(/store-call-blocked/);
+    expect(await st(world, 'A', V)).toBe('stuck(store-call-blocked)');
+    world.devs.A.store.head = real; (hold as (() => void) | null)?.();
+    await vi.waitFor(async () => expect(await st(world, 'A', V)).not.toMatch(/^stuck/));
+    expect((await world.devs.A.rep.status(V)).lines).toBe(3);
+  });
+});
+
+describe('finding 7 and 8: claims of a peer that cannot be backed', () => {
+  async function liar(): Promise<{ world: World; V: Buffer; say: (lines: number) => void }> {
+    const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId('r2-liar');
+    await world.create('A', V); await world.devs.A.rep.appendLocal(V, lineSet(3)); await world.settle();
+    world.devs.B.rep.stop(); // only the lies of B's link now
+    const say = (lines: number): void => { world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_HEADS, body: headsBodyOf({ page: 0, of: 1, ask: false, heads: [{ version: V, lines, hash: Buffer.alloc(32, 7), conversationHash: Buffer.alloc(32), stamp: 1, state: 'ok' }] }) }); };
+    return { world, V, say };
+  }
+  it('a claim of more lines shows a named reason that names the device, not a calm pulling', async () => {
+    const { world, V, say } = await liar(); say(50); await world.settle();
+    await expect(world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 3))).rejects.toThrow(/writer-behind-peer-holds-more|writer-diverged/);
+    expect(await st(world, 'A', V)).toMatch(/peer-claims-more [0-9a-f]{8}/);
+  });
+  it('a claim that is refreshed for ten minutes and never backed by a batch stops blocking the writer, counted and named', async () => {
+    const { world, V, say } = await liar();
+    for (let i = 0; i < 14; i++) { say(50 + i); await world.elapse(60_000, 20_000); }
+    await world.devs.A.rep.appendLocal(V, lineSet(1, 'n', 3));
+    expect(world.devs.A.rep.counters()['claim-discounted']).toBeGreaterThanOrEqual(1);
+    expect(await st(world, 'A', V)).toMatch(/peer-claim-discounted/);
+  });
+  it('claims about versions nobody announced share the per-peer cap (they are never kept without bound)', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w;
+    world.devs.B.rep.stop();
+    for (let p = 0; p < 6; p++) world.devs.B.link.sendLive({ group: GROUP_LIVE, kind: KIND_HEADS, body: headsBodyOf({ page: p, of: 6, ask: false, heads: Array.from({ length: 64 }, () => ({ version: randomBytes(32), lines: 1, hash: randomBytes(32), conversationHash: Buffer.alloc(32), stamp: 1, state: 'ok' as const })) }) });
+    await world.settle(); await world.elapse(200_000, 20_000);
+    expect(world.devs.A.rep.stateSizes().peerHeads).toBeLessThanOrEqual(MAX_PEER_HEADS);
+  });
+});
