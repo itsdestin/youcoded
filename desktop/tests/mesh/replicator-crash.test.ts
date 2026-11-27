@@ -25,6 +25,9 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
   const ffs = new FaultFs(k === 0 ? 0 : base + k, { tear });
   const world = await repWorld(sc.names, { fsFor: (n) => (n === sc.owner ? ffs : undefined), discoveryMs: 20_000, stallMs: 8_000 });
   w = world;
+  // A kill makes every later file operation of the dead device throw. A store read that was already floating somewhere inside that device then rejects with nobody waiting (an unhandled rejection that is the
+  // kill itself, not a finding): mark the dead device's head reads as handled; every caller that DOES wait still gets the rejection.
+  { const st = world.devs[sc.owner].store; const orig = st.head.bind(st); st.head = ((v: Buffer) => { const p = orig(v); p.catch(() => undefined /* benign (test): the simulated kill */); return p; }) as typeof st.head; }
   const setupOps = ffs.ops;
   await sc.run(world).catch(() => undefined /* benign (test): the owner dies mid-run by design; what matters is checked below */);
   const ops = ffs.ops - setupOps;
