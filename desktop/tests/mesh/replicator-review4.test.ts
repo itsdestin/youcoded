@@ -191,6 +191,13 @@ describe('F5: a stale fault clears only when the writer\'s current history exten
     expect((await textOf(world, 'B', V)).slice(0, 6)).toEqual(keep); expect((await textOf(world, 'B', V)).length).toBe(8);
     expect(world.devs.B.rep.counters()['fault-cleared-by-extension']).toBe(1);
   });
+  it('a copy that the writer holds exactly (nothing to extend) asks the writer for its signed head and is taken off the fault without waiting for the next append', async () => {
+    const { world, V, keep } = await faulted();
+    await world.restart('A'); await world.elapse(120_000, 10_000, true); // the writer is back and agrees; it has nothing new to say
+    expect(await st(world, 'B', V)).not.toMatch(/writer-two-histories/);
+    expect(await textOf(world, 'B', V)).toEqual(keep);
+    expect(world.devs.B.rep.counters()['fault-cleared-by-cover']).toBe(1);
+  });
   it('a signed batch that continues the OTHER history (its chain does not start from the copy) leaves the fault in place and appends nothing', async () => {
     const { world, V, keep } = await faulted(6, true); // the other history is exactly as long as the copy and B has no saved points, so a continuation starts at the copy's head and the base the sender names is one it was told
     const base6 = lineSet(6, 'FORK').reduce((h, l) => chainStep(h, l), seed());
@@ -246,22 +253,32 @@ describe('guards of the resolution', () => {
     expect((await world.readAll('C', V)).length).toBe(8);
     return { world, V, peers };
   }
+  /** A REAL second history: B holds common(3)+yy, the writer A signed common(3)+xx on its own, and they have met one-way (A's push reached B, nothing from B reaches A), so B is faulted and A never finds out. */
+  async function realFault(): Promise<{ world: World; V: Buffer; common: Buffer[]; yy: string[] }> {
+    const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId(`r4-real-${Math.random()}`);
+    await world.create('A', V); await world.settle();
+    const { SignedHeads } = await import('../../src/main/mesh/replicator/signed-heads'); const { realFs } = await import('../../src/main/mesh/store/fsio');
+    await down(world, 'B'); const dev = await world.restart('B', { graceful: false, start: false });
+    const common = lineSet(3, 'cc'); const ys = [...common, ...lineSet(2, 'yy', 3)]; const hy = ys.reduce((h, l) => chainStep(h, l), seed());
+    await dev.store.append((await world.localOf('B', V)) as Buffer, 0, 0, ys);
+    void SignedHeads; void realFs; void hy; // (B has NO saved signed point for its lines, as after a replicator folder put back: so the contradiction is a fault on B, not an equivocation it can prove)
+    world.devs.B.carrier.setOnline(false); await dev.rep.start(); await world.elapse(8_000, 1_000, true);
+    await world.append('A', V, [...common, ...lineSet(2, 'xx', 3)]);
+    world.hub.holdFilter = (d) => (d === 'B' ? 'drop' : 'store'); world.devs.B.carrier.passFilter = () => 'drop'; // nothing from B reaches A
+    world.devs.B.carrier.setOnline(true);
+    await vi.waitFor(async () => { await world.elapse(10_000, 5_000, true); expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/); }, { timeout: 60_000, interval: 25 });
+    return { world, V, common, yy: await textOf(world, 'B', V) };
+  }
   it('a peer whose copy matches the second version so far, but is LONGER than it, does NOT set its copy aside (the rest of its lines would live nowhere verified)', async () => {
-    const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId('r4-s3');
-    await world.create('A', V); await world.append('A', V, lineSet(6, 'old')); await world.settle();
-    world.devs.A.rep.stop(); const keep = await textOf(world, 'B', V);
-    const other = lineSet(5, 'FORK'); const ch = other.reduce((h, l) => chainStep(h, l), seed());
-    await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
-    await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/));
-    await world.restart('A'); await world.settle();
-    // the writer announces a self-fork child at 3 that so far holds ONE line, the same as B's fourth
-    const local = await world.local('A', V); const hp = (await world.devs.A.store.hashAt(local, 0, 3)) as string; const { deriveForkId } = await import('../../src/main/mesh/store');
+    const { world, V, common, yy } = await realFault();
+    // the writer announces a self-fork child at 3 (the lines both histories share) that so far holds ONE line, the same as B's fourth
+    const hp = common.reduce((h, l) => chainStep(h, l), seed()).toString('hex'); const { deriveForkId } = await import('../../src/main/mesh/store');
     const token = selfForkToken(world.ids.A.deviceId, CHAT, 'short'); const child = deriveForkId(V, 3, hp, token);
     await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 3, forkHash: Buffer.from(hp, 'hex'), token });
-    await world.append('A', child, [(await world.readAll('A', V))[3]]);
+    await world.append('A', child, [(await world.readAll('B', V))[3]]);
     await world.elapse(120_000, 10_000, true);
     expect((await world.readAll('B', child)).length).toBe(4); // B holds the child as far as it goes
-    expect(await textOf(world, 'B', V)).toEqual(keep);          // and its own 6 lines are still under V
+    expect(await textOf(world, 'B', V)).toEqual(yy);           // and its own 5 lines are still under V
     expect(world.devs.B.rep.counters()['retired-recopy'] ?? 0).toBe(0);
     expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);
   }, 300_000);
@@ -292,30 +309,21 @@ describe('guards of the resolution', () => {
     expect(await st(world, 'A', V)).not.toMatch(/self-fork-in-progress/);
   });
 
-  async function faultedWithChild(kind: 'takeover' | 'selffork-other-prefix'): Promise<{ world: World; V: Buffer }> {
-    const world = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); w = world; const V = wireId(`r4-${kind}-${Math.random()}`);
-    await world.create('A', V); await world.append('A', V, lineSet(6, 'old')); await world.settle();
-    world.devs.A.rep.stop();
-    const other = lineSet(5, 'FORK'); const ch = other.reduce((h, l) => chainStep(h, l), seed());
-    await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 5, hash: ch, sig: signWith(world.ids.A, headMessage(V, 5, ch)) } }) });
-    await vi.waitFor(async () => expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/));
-    await world.restart('A'); await world.settle();
-    return { world, V };
-  }
   it('an ordinary child version of the writer (not a self-fork token) does not take a peer off its fault', async () => {
-    const { world, V } = await faultedWithChild('takeover');
-    const local = await world.local('A', V); const p = 0; const hp = (await world.devs.A.store.hashAt(local, 0, p)) as string; const { deriveForkId } = await import('../../src/main/mesh/store');
-    const token = `${world.ids.A.deviceId.toString('hex')}:takeover:x`; const child = deriveForkId(V, p, hp, token);
-    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: p, forkHash: Buffer.from(hp, 'hex'), token });
-    await world.append('A', child, lineSet(2, 'other'));
+    const { world, V, common } = await realFault();
+    const hp = common.reduce((h, l) => chainStep(h, l), seed()).toString('hex'); const { deriveForkId } = await import('../../src/main/mesh/store');
+    const token = `${world.ids.A.deviceId.toString('hex')}:takeover:x`; const child = deriveForkId(V, 3, hp, token);
+    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 3, forkHash: Buffer.from(hp, 'hex'), token });
+    await world.append('A', child, lineSet(3, 'other', 3));
     await world.elapse(120_000, 10_000, true);
+    expect((await world.readAll('B', child)).length).toBe(6); // B holds it, and that does not matter to its fault
     expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);
   }, 300_000);
   it('a self-fork announcement whose parting-point chain value is NOT the peer\'s own is not a statement about its copy', async () => {
-    const { world, V } = await faultedWithChild('selffork-other-prefix');
-    const p = 3; const hp = lineSet(5, 'FORK').slice(0, 3).reduce((h, l) => chainStep(h, l), seed()).toString('hex'); const { deriveForkId } = await import('../../src/main/mesh/store'); // a chain value at 3 that is NOT the peer's own
-    const token = selfForkToken(world.ids.A.deviceId, CHAT, 'other-prefix'); const child = deriveForkId(V, p, hp, token);
-    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: p, forkHash: Buffer.from(hp, 'hex'), token });
+    const { world, V } = await realFault();
+    const hp = lineSet(3, 'zz').reduce((h, l) => chainStep(h, l), seed()).toString('hex'); const { deriveForkId } = await import('../../src/main/mesh/store'); // a chain value at 3 that is not B's
+    const token = selfForkToken(world.ids.A.deviceId, CHAT, 'other-prefix'); const child = deriveForkId(V, 3, hp, token);
+    await world.devs.A.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: V, forkLine: 3, forkHash: Buffer.from(hp, 'hex'), token });
     await world.append('A', child, lineSet(5, 'other')); // (long enough that comparing past the parting point WOULD be possible)
     await world.elapse(120_000, 10_000, true);
     expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);

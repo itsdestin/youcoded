@@ -672,6 +672,14 @@ export class Replicator {
         const vz = await vouchLines(this.#ctx, wire, v.local, d0, head);
         if (vz.unsignable) { this.#ctx.bump('cover-fetch'); await this.want(wire, holder, { haveLines: vz.lines }); }
       }
+      // a copy held under a stale fault asks the WRITER for its current signed head once the writer says it holds exactly what I hold (review 4, F5): the answer is a signed batch that ends at my head, which
+      // clears the fault when it reproduces my chain value there. Without this the fault waited for the writer's next append.
+      if (run.fault && (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') && d0 && !d0.writer.equals(this.#ctx.crypto.self) && head.lines > 0) {
+        const wp = this.#ctx.peers.get(d0.writer.toString('hex')); const wh = wp?.heads.get(wk);
+        if (wp && wh && wh.state === 'ok' && wh.lines === head.lines && wh.hash === head.hash && !run.rewanted.has(`cover:${wp.hex}`)) {
+          run.rewanted.add(`cover:${wp.hex}`); this.#ctx.bump('stale-fault-asks-writer'); await this.want(wire, wp, { haveLines: head.lines - 1 });
+        }
+      }
       if (diverged) {
         run.diverged = `peer ${hex8(diverged.id)} claims a different history at the same point (not backed by a signed batch from it)`;
         // ask the WRITER (or the divergent peer) from line 0 once: signed batches decide what is true, never a count

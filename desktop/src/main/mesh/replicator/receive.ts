@@ -109,7 +109,7 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   // (review 4, F5) ... except that a copy faulted by a second history may be taken off the fault by ONE thing: a verified writer-signed batch that starts exactly at my head with my own chain value as its
   // base. Its signed head is the chain over MY lines plus these, so the writer's current history contains my copy; the contradicting history no longer exists in the writer's signed line. Checked below,
   // after the chain is verified; anything else is refused as before.
-  const staleFault = !!run.fault && (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') && !iAmWriter && b.from === head.lines && lines.length > 0;
+  const staleFault = !!run.fault && (run.fault === 'writer-signed-two-histories' || run.fault === 'unsigned-lines-contradicted') && !iAmWriter && lines.length > 0 && (b.from === head.lines || b.from + lines.length === head.lines);
   if (run.fault && !staleFault) { ctx.bump('lines-refused-faulted'); return; }
   // WRITER-SIDE (review 1, F1). Lines past my own head that carry MY signature are my own lines coming back (a rolled-back or set-aside copy refilling): the signature is the proof, and they are
   // verified below exactly like any receiver's (signature, chain from a trusted base, then append). Nothing else can put lines past a writer's head, because the writer signs only what it holds.
@@ -119,7 +119,8 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   // 4. the chain over these lines from a trusted starting value must equal the signed value
   const lastSigned = run.lastSigned.get(peer.hex);
   let base: Buffer; let baseIsMine = false;
-  if (lastSigned && lastSigned.lines === b.from) base = lastSigned.hash;
+  // (a faulted copy never trusts the remembered `lastSigned`: it may come from the very contradicting batch that faulted it, so the base is read from my own store)
+  if (lastSigned && lastSigned.lines === b.from && !run.fault) base = lastSigned.hash;
   else {
     let h: string | null;
     try { h = await ctx.store.hashAt(v.local, 0, b.from); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') { ctx.bump('lines-base-evicted'); return; } await storeFailed(ctx, peer, wire, e, b.from); return; }
@@ -134,9 +135,10 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     throw new FrameReject('chain-mismatch');
   }
   if (staleFault) {
-    // the base must be MY chain value at my head, not a value the sender told me (a remembered `lastSigned` is the sender's word until it is compared with my store)
-    if ((await ctx.store.hashAt(v.local, 0, b.from).catch(() => null /* benign: an unreadable chain value cannot show the extension; the batch is refused below */)) !== hex(base)) { ctx.bump('lines-refused-faulted'); return; }
-    await ctx.clearFault(wire); ctx.bump('fault-cleared-by-extension');
+    // (the base of a faulted copy is always read from MY store, see above, so the chain check already proved the batch continues MY lines)
+    // a batch that ENDS at my head must also reproduce my own chain value there: then the writer's current signed head is exactly my copy (nothing to append, the fault is just stale)
+    if (b.from + lines.length === head.lines && (await ctx.store.hashAt(v.local, 0, head.lines).catch(() => null /* benign: see above */)) !== hex(b.head.hash)) { ctx.bump('lines-refused-faulted'); return; }
+    await ctx.clearFault(wire); ctx.bump(b.from === head.lines ? 'fault-cleared-by-extension' : 'fault-cleared-by-cover');
   }
   run.lastSigned.set(peer.hex, { lines: b.head.lines, hash: b.head.hash });
   // 5. keep the signed point (a non-writer needs it to serve; the writer signs on demand)

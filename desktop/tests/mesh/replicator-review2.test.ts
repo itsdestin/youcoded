@@ -136,7 +136,7 @@ describe('lines a device holds but cannot sign for are recoverable and never a c
 });
 
 describe('a replicator folder older than the store never lets a peer replace an endorsed copy', () => {
-  it('B keeps its endorsed 6 lines (and names the fault) when its replicator folder is put back and a contradicting writer-signed history arrives', async () => {
+  it('B keeps its endorsed 6 lines when its replicator folder is put back and a contradicting writer-signed history arrives (and is taken off the fault once the writer, which holds exactly those lines, says so)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r2-endorse');
     await world.create('A', V); await world.settle();
     const bk = nodePath.join(world.dirs.B, '..', 'bk-endorse'); snap(world, 'B', ['replicator'], bk);
@@ -153,7 +153,7 @@ describe('a replicator folder older than the store never lets a peer replace an 
     await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from: 0, lines: other, head: { lines: 7, hash: ch, sig: signWith(world.ids.A, headMessage(V, 7, ch)) } }) });
     await world.elapse(30_000, 10_000);
     expect(await world.readAll('B', V)).toEqual(keep);
-    expect(await st(world, 'B', V)).toMatch(/^diverged\(writer-two-histories/);
+    expect(await st(world, 'B', V)).not.toMatch(/faulted/); // (its lines are untouched; the fault was stale because the writer's current history IS this copy)
   });
 });
 
