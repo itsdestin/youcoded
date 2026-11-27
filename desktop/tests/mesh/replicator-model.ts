@@ -43,6 +43,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const rand = rng(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
   const world = await repWorld(NAMES, { discoveryMs: 20_000, stallMs: 8_000, scrubEveryMs: 60_000, bound: true });
+  const told = new Set<string>(); const toldBy = new Map<string, string>(); // the ledger: every line the adapter was told `saved` for, and the chat it was told for
   const lostIntro = new Set<string>(); // devices whose replicator folder (with the announcements in it) was put back
   const fsnaps: Array<{ dev: string; dir: string }> = []; // review 2: whole-folder snapshots (store, replicator, witness) of any device
   const ops: Record<string, number> = {};
@@ -97,7 +98,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             const held = await Promise.all(NAMES.filter((n) => n !== e.dev).map(async (n) => (online.has(n) ? (await world.heads(n, v)).lines : 0)));
             if (!held.some((n) => n === O.length) || !online.has(e.dev)) lossless = false;
           }
-          if (e && lossless && !(kind === 'restore-all' && writer.size && vs.some((v) => writer.get(v.toString('hex')) === e.dev))) {
+          // (a whole-profile restore of a WRITER is now part of the model: review 3. Lines it re-uses positions of end up in a second version; the oracle below is the ledger of lines told saved)
+          if (e && lossless) {
             const parts = kind === 'restore-store' ? ['store'] : kind === 'restore-replicator' ? ['replicator'] : kind === 'restore-both' ? ['store', 'replicator'] : ['store', 'replicator', 'witness'];
             const dd = e.dev; await world.devs[dd].rep.idle(); world.devs[dd].rep.stop(); world.devs[dd].link.stop(); await world.devs[dd].store.close();
             for (const k of parts) { fs.rmSync(nodePath.join(world.dirs[dd], k), { recursive: true, force: true }); if (fs.existsSync(nodePath.join(e.dir, k))) fs.cpSync(nodePath.join(e.dir, k), nodePath.join(world.dirs[dd], k), { recursive: true }); }
@@ -114,10 +116,23 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           await world.restart(d, { graceful: false }); if (!online.has(d)) world.devs[d].carrier.setOnline(false);
           note(kind);
         }
+      } else if (x < 0.15) { // review 3: idle for a long (virtual) time, then chat: the gate must never have expired
+        const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
+        await world.elapse((11 + Math.floor(rand() * 30)) * 60_000, 120_000, true);
+        const ls = lineSet(1 + Math.floor(rand() * 3), `i${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
+        await world.append(wr, v, ls).then(() => { oracle.get(v.toString('hex'))?.push(...ls); for (const l of ls) { told.add(l.toString()); toldBy.set(l.toString(), v.toString('hex')); } }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; });
+        note('idle-then-chat');
+      } else if (x < 0.19) { // review 3: one flipped bit in ANY file the replicator owns (own records, witness, announcements, signed points, faults, self-fork notes)
+        const d = pick(NAMES); await world.devs[d].rep.idle(); world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close();
+        const all: string[] = []; const walk = (dir: string): void => { if (!fs.existsSync(dir)) return; for (const f of fs.readdirSync(dir)) { const pth = nodePath.join(dir, f); if (fs.statSync(pth).isDirectory()) walk(pth); else all.push(pth); } };
+        walk(nodePath.join(world.dirs[d], 'replicator')); walk(nodePath.join(world.dirs[d], 'witness'));
+        if (all.length) { const f = pick(all); const raw = fs.readFileSync(f); if (raw.length) { raw[Math.floor(rand() * raw.length)] ^= 1 << Math.floor(rand() * 8); fs.writeFileSync(f, raw); } }
+        await world.restart(d, { graceful: false }); if (!online.has(d)) world.devs[d].carrier.setOnline(false);
+        note('rot-any-file');
       } else if (r < 34) { // the writer appends one to four lines
         const v = pick(vs); const wr = writer.get(v.toString('hex')) as string;
         const ls = lineSet(1 + Math.floor(rand() * 4), `s${seed}-${counter++}`, oracle.get(v.toString('hex'))?.length ?? 0);
-        await world.append(wr, v, ls).then(() => oracle.get(v.toString('hex'))?.push(...ls), (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; });
+        await world.append(wr, v, ls).then(() => { oracle.get(v.toString('hex'))?.push(...ls); for (const l of ls) { told.add(l.toString()); toldBy.set(l.toString(), v.toString('hex')); } }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; });
         note('append');
       } else if (r < 42) { const d = pick(NAMES); if (online.has(d)) { world.devs[d].carrier.setOnline(false); online.delete(d); } else { world.devs[d].carrier.setOnline(true); online.add(d); } note('toggle-link'); }
       else if (r < 48) { const d = pick(NAMES); await world.restart(d, { graceful: rand() < 0.5 }); if (!online.has(d)) world.devs[d].carrier.setOnline(false); note('restart'); }
@@ -182,7 +197,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           // a few lines more, so the put-back copy is genuinely older than what peers hold
           await world.restart(wr); const extra = lineSet(2, `ws${seed}-${counter++}`, O.length);
           const ok = await world.append(wr, v, extra).then(() => true, (e) => { if (!/refilling|version-not-ready|writer-|unknown version/.test(String(e))) throw e; return false; });
-          if (ok) O.push(...extra);
+          if (ok) { O.push(...extra); for (const l of extra) { told.add(l.toString()); toldBy.set(l.toString(), v.toString('hex')); } }
           await world.elapse(30_000, 10_000, true);
           // the put-back is only a recoverable fault if an online peer holds every line the writer has acknowledged by now (the extra lines too); otherwise nothing is rolled back
           const heldNow = await Promise.all(others.map(async (n) => (await world.heads(n, v)).lines));
@@ -241,8 +256,41 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     }
     await world.settle();
     watchAcks();
+    // ---- review 3: the ledger of lines told saved, for chats whose writer moved lines into a second version (a self-fork): both versions are checked together
+    const forks = new Map<string, Buffer[]>();
+    for (const n of NAMES) for (const f of world.devs[n].rep.selfForks()) { const k = f.version.toString('hex'); const arr = forks.get(k) ?? []; if (!arr.some((y) => y.equals(f.movedTo))) arr.push(f.movedTo); forks.set(k, arr); }
+    const linesOf = async (n: string, v: Buffer): Promise<{ lines: string[]; state: string; reason: string | null } | null> => {
+      const local = await world.localOf(n, v); if (!local) return null;
+      const st = await world.devs[n].rep.status(v); const h = await world.devs[n].store.head(local);
+      const upto = Math.min(h.lines, h.damagedFromLine ?? Infinity, h.rolledBack?.from ?? Infinity, h.partial?.from ?? Infinity);
+      const got = upto > 0 ? await world.devs[n].store.read(local, 0, 0, upto).catch(() => 'unreadable' as const) : [];
+      return { lines: got === 'unreadable' || got === 'evicted' ? [] : got.map((l) => l.toString()), state: st.state, reason: st.reason };
+    };
+    for (const [vk, kids] of forks) {
+      const V = vs.find((y) => y.toString('hex') === vk); if (!V) continue;
+      const group = [V, ...kids]; const per = new Map<string, Array<{ lines: string[]; state: string; reason: string | null } | null>>();
+      for (const n of NAMES) per.set(n, await Promise.all(group.map((gv) => linesOf(n, gv))));
+      group.forEach((gv, gi) => {
+        const calm: string[] = [];
+        for (const n of NAMES) {
+          const r = per.get(n)?.[gi]; if (!r) continue;
+          for (const l of r.lines) if (!told.has(l)) fail(`${n} holds a line in ${gv.toString('hex').slice(0, 6)} that nobody was ever told saved for (ledger)`);
+          if (r.state === 'in-sync') calm.push(r.lines.join('\n'));
+          else if (r.state === 'diverged' && /writer-two-histories/.test(r.reason ?? '')) fail(`${n} still waits for the writer on ${gv.toString('hex').slice(0, 6)} although the writer is back and everything is online`);
+        }
+        if (new Set(calm).size > 1) fail(`devices that say in-sync differ on ${gv.toString('hex').slice(0, 6)} (ledger)`);
+      });
+      for (const [line, owner] of toldBy) {
+        if (owner !== vk) continue;
+        for (const n of NAMES) {
+          const rs = per.get(n) ?? []; if (!rs.length || !rs.every((r) => r && r.state === 'in-sync')) continue; // a device in a named state is excused by that state
+          if (!rs.some((r) => r?.lines.includes(line))) fail(`a line told saved is held by ${n} in neither ${vk.slice(0, 6)} nor its second version (ledger); version #${vs.indexOf(V)}`);
+        }
+      }
+    }
     // ---- the promises
     for (const v of vs) {
+      if (forks.has(v.toString('hex'))) continue; // checked above together with its second version
       const O = oracle.get(v.toString('hex')) as Buffer[];
       for (const n of NAMES) {
         const dev = world.devs[n]; const st = await dev.rep.status(v);

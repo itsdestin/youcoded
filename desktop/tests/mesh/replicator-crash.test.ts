@@ -42,10 +42,14 @@ async function once(sc: Scenario, k: number, tear: boolean, base = 0): Promise<{
       if (ack) expect(h.lines, `${sc.name} k=${k}: acknowledged lines are on disk`).toBeGreaterThanOrEqual(ack.lines);
     }
   }
+  // a device the scenario had cut off when the owner was killed is reachable again (the owner's restart is the only thing under test)
+  for (const n of sc.names) world.devs[n].carrier.setOnline(true);
   // 2. start it and let everything resume
   await dev.rep.start();
   await world.elapse(60_000, 10_000);
   for (const v of sc.versions) {
+    // a writer killed before its own announcement or its copy was ever saved has nothing of that version to check (the chat was never told "saved")
+    if (sc.owner === 'A' && !(await world.localOf(sc.owner, v))) continue;
     await vi.waitFor(async () => { const hs = await Promise.all(sc.names.map((n) => world.heads(n, v))); for (const x of hs) expect(x, `${sc.name} k=${k} tear=${tear}`).toEqual(hs[0]); }, { timeout: 30_000 });
     const bytes = await Promise.all(sc.names.map((n) => world.readAll(n, v)));
     for (const b of bytes) expect(b).toEqual(bytes[0]);
@@ -120,4 +124,16 @@ describe('a kill at any file operation', () => {
       await world.settle();
     } });
   }, 900_000);
+  it('while the WRITER moves its newer lines into a second version (the self-fork) and the peer resolves', async () => {
+    // B holds one history signed by A; A, cut off from B, signs another for the same positions; when they meet, A moves its lines to a second version. A is killed at every file operation of that, and B's side is
+    // swept by the other scenarios' restarts. After the restart both versions must be complete and equal on both devices.
+    const versions: Buffer[] = [V];
+    await sweep({ diverges: true, name: 'selffork', names: ['A', 'B'], owner: 'A', versions, run: async (world) => {
+      versions.splice(1); // each run starts with only the chat itself
+      await world.create('A', V); await world.settle();
+      const { selfForkToken } = await import('../../src/main/mesh/replicator/selffork');
+      const { splitHistories } = await import('./selffork-helpers');
+      await splitHistories(world, V, (id) => versions.push(id), selfForkToken);
+    } });
+  }, 1_800_000);
 });

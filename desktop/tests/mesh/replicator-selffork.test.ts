@@ -7,6 +7,7 @@ import { repWorld, wireId, lineSet, CHAT, type World } from './replicator-world'
 import { deriveForkId } from '../../src/main/mesh/store';
 import { isSelfForkToken, selfForkToken } from '../../src/main/mesh/replicator/selffork';
 import { GROUP_LIVE, introBodyOf, introMessage, KIND_INTRO } from '../../src/main/mesh/replicator/wire';
+import { splitHistories } from './selffork-helpers';
 import { signWith } from '../../src/main/mesh/crypto/identity';
 
 let w: World | null = null;
@@ -23,6 +24,7 @@ const v2Of = async (world: World, V: Buffer, p: number): Promise<Buffer> => {
   const h = await world.devs.A.store.hashAt(await world.local('A', V), 0, p);
   return deriveForkId(V, p, h as string, selfForkToken(world.ids.A.deviceId, CHAT));
 };
+
 
 describe('a writer restored from a backup that chats before it hears the others', () => {
   it('both histories are kept: the peers\' history stays under the chat, the newer lines move to a second version, every device ends in sync and nothing is lost', async () => {
@@ -126,4 +128,16 @@ describe('a writer restored from a backup that chats before it hears the others'
     expect(isSelfForkToken(a, `${a.toString('hex')}:takeover:x`)).toBe(false);
     expect(selfForkToken(a, 'chat-1')).not.toBe(selfForkToken(a, 'chat-2'));
   });
+});
+
+describe('the same split, made on a stopped device (the shape the crash sweep drives)', () => {
+  it('B holds a history A signed, A cut off from B signs another for the same positions: both versions complete and equal on both devices', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('sf-shape');
+    await world.create('A', V); await world.settle();
+    await splitHistories(world, V);
+    const moved = world.devs.A.rep.selfForks(); expect(moved).toHaveLength(1);
+    const v2 = moved[0].movedTo;
+    for (const n of ['A', 'B']) { expect((await world.readAll(n, V)).length).toBe(5); expect((await world.readAll(n, v2)).length).toBe(5); }
+    expect(await world.readAll('A', V)).toEqual(await world.readAll('B', V)); expect(await world.readAll('A', v2)).toEqual(await world.readAll('B', v2));
+  }, 200_000);
 });
