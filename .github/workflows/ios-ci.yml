@@ -89,6 +89,22 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
             2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | grep -vE '^\s*(CompileC|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|CpResource|Copy|builtin-|cd |export |/Applications/Xcode|\s*$)' | tail -400
+      # WHY: the self-test starts with the app and takes about a minute, but the tests above close the app as soon as
+      # they are done, which can be sooner. If no verdict is in the log yet, the app is started once more (on its own,
+      # no test attached) and given up to five minutes. The log is appended to, so an earlier verdict still counts.
+      - name: Let the shell self-test finish
+        run: |
+          verdict() { find "$HOME/Library/Developer/CoreSimulator/Devices" -name 'backend*.log' -path '*userdata*' -exec grep -lE 'SHELL_SELFTEST (PASS|DONE)' {} + 2>/dev/null | grep -q .; }
+          if verdict; then echo "already finished"; exit 0; fi
+          xcrun simctl boot "${{ steps.sim.outputs.name }}" 2>/dev/null || true
+          for dev in $(xcrun simctl list devices | grep -E 'Booted' | grep -oE '[0-9A-F-]{36}'); do
+            xcrun simctl launch "$dev" com.youcoded.app.dev || true
+          done
+          for i in $(seq 1 60); do
+            if verdict; then echo "finished after about $((i * 5)) seconds"; exit 0; fi
+            sleep 5
+          done
+          echo "no verdict after five minutes; the check below reports it"
       - name: Collect the app's logs
         if: always()
         run: |
