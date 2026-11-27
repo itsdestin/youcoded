@@ -28,9 +28,11 @@ function runOne(cmd: string, cwd: string): Promise<Result> {
 }
 
 async function main(): Promise<void> {
-  // WHY wait: this file is loaded together with the registration (register.ts) and the backend's own start-up; running
-  // before they finish would find no shell registered. A moment later everything is in place.
-  await new Promise((r) => setTimeout(r, 3000));
+  // WHY wait this long: the simulator's screen tests start the same app and tap through setup for about 70 seconds.
+  // This list keeps the processor busy for a minute, and run alongside them it once made a tap go unanswered (CI,
+  // 2026-11-27). So it starts after they are done; CI then opens the app once more, on its own, and waits for the
+  // verdict ("Let the shell self-test finish" in ios-ci.yml). It also gives the registration (register.ts) time to land.
+  await new Promise((r) => setTimeout(r, 100_000));
   // Inside HOME so the credential rules (which are anchored there) apply; named so it cannot be mistaken for a user's folder.
   const parent = fs.mkdtempSync(path.join(process.env.HOME ?? '', '.yc-shell-selftest-'));
   const work = path.join(parent, 'work');
