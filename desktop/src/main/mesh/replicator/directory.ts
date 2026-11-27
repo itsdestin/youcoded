@@ -46,8 +46,7 @@ export type AcceptResult = 'new' | 'known' | 'conflict' | 'bad-signature' | 'unk
 export function deriveRootId(setId: Buffer, chatId: string, writer: Buffer, nonce: Buffer): Buffer {
   return createHash('sha256').update('youcoded-mesh/v1/root-id\0').update(setId).update('\0').update(chatId).update('\0').update(writer).update(nonce).digest();
 }
-/** A takeover's token must begin with the hex id of the host that announces it, so two devices can never derive the same child id for different writers (finding 4, forks). */
-export const tokenFor = (writer: Buffer, entry: string): string => `${writer.toString('hex')}:${entry}`;
+/* A takeover's token must begin with the writer's device id in hex plus a colon, so two devices can never derive the same child id for different writers (review 2, finding 4, forks). */
 
 export interface DirectoryOptions {
   /** The set this device belongs to (part of every root id). */

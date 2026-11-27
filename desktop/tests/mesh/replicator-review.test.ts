@@ -141,7 +141,7 @@ describe('F1 the writer cannot replace its own history, and takes its own lines 
     await world.restart('B'); await world.settle();
     expect(await st(world, 'B', V)).toBe('faulted(writer-signed-two-histories)'); // nor by a restart
   });
-  it('lines no saved writer signature covers, contradicted by the writer, are KEPT and the version goes to a named fault (review 2, finding 5: a folder older than the store looks exactly like this, so nothing is set aside on a guess)', async () => {
+  it('lines no saved writer signature covers, contradicted by the writer, are KEPT and the version goes to a named fault (a replicator folder older than the store looks exactly like this, so nothing is set aside on a guess)', async () => {
     w = await repWorld(['A', 'B']); const world = w; const V = wireId('f1e');
     await world.create('A', V); await world.settle();
     const lb = (await world.localOf('B', V)) as Buffer;

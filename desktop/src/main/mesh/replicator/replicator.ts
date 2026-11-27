@@ -713,11 +713,6 @@ export class Replicator {
     }
     return out;
   }
-  /** For tests: every ack received, before `peerAcks` applies its listing rules (so a test can see what a peer SAID, not only what is listed). */
-  rawAcksForTests(wire: Buffer): Array<{ holder: string; lines: number; round: number }> {
-    const wk = wire.toString('hex');
-    return [...this.#ctx.peers.values()].flatMap((p) => { const a = p.acks.get(wk); return a ? [{ holder: p.hex, lines: a.lines, round: a.round }] : []; });
-  }
   /** Ask every peer to confirm what it holds of `wire` (each answers with a signed ack of its head when it is level with me). Answers arrive through the normal ack path. */
   async solicitAcks(wire: Buffer): Promise<void> {
     // one round for all peers: the same number goes to each, and an answer is credited only when it names it

@@ -11,7 +11,7 @@ import { reportFailure } from '../../report-failure';
 import { mkdirDurable, writeFileAtomic, type Fs } from '../store/fsio';
 
 export interface OwnRecord { lines: number; hash: string }
-export type RecordRead = { kind: 'ok'; rec: OwnRecord } | { kind: 'absent' } | { kind: 'malformed' };
+type RecordRead = { kind: 'ok'; rec: OwnRecord } | { kind: 'absent' } | { kind: 'malformed' };
 
 async function readOne(fs: Fs, path: string): Promise<RecordRead> {
   let raw: Buffer | null;
