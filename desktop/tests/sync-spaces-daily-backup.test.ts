@@ -370,8 +370,9 @@ describe('DailyBackup.runNow', () => {
     });
     const target = { type: 'icloud' as const, base };
     const timer = job.runIfDue([space], [target], () => {});
-    await new Promise(r => setTimeout(r, 10)); // the timer is now inside its copy
+    await vi.waitFor(() => expect(events).toEqual(['timer start'])); // the timer is now inside its copy
     const manual = job.runNow([space], [target], () => {});
+    // settle: a NEGATIVE check — give the manual run time to (wrongly) start before asserting it has not.
     await new Promise(r => setTimeout(r, 30));
     expect(events).toEqual(['timer start']); // the manual run has not started
     release();
