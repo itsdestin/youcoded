@@ -81,8 +81,11 @@ export function ContextMenu({
     // menu opened on a spreadsheet beside it (the comment-popup-reading
     // journey failed this way under load). A page scroll (target = document)
     // still contains everything and still closes it.
+    // An anchor that has left the page (redrawn while the menu was open) can no
+    // longer say which scrolls move it, so then any scroll closes the menu, as
+    // before anchors existed — never a menu left behind by its words.
     const onScroll = (e: Event) => {
-      if (!anchor || !(e.target instanceof Node) || e.target.contains(anchor)) onClose();
+      if (!anchor || !anchor.isConnected || !(e.target instanceof Node) || e.target.contains(anchor)) onClose();
     };
     // Over a text box the box keeps the keyboard, so typing (or Enter sending
     // the message) means the person moved on: close rather than leave a menu

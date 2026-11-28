@@ -51,6 +51,13 @@ function lastRectOf(range: Range): DOMRect {
   return rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
 }
 
+/** The nearest element around `node` that a highlight redraw does not replace
+ *  (skips the text node itself and any highlight <mark> it sits in). */
+function anchorElementOf(node: Node): Element | undefined {
+  const el = node instanceof Element ? node : node.parentElement;
+  return el?.closest(':not(mark)') ?? undefined;
+}
+
 interface Props {
   containerRef: React.RefObject<HTMLElement | null>;
   path: string;
@@ -356,8 +363,10 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           // sideways-scrolling table or code block INSIDE the file contains
           // the words but not the viewer, and scrolling it must still close
           // the menu. Any scroller holding the words (that one, the file's
-          // own, the page) closes it; the chat never does.
-          anchor={selectionMenu.range.startContainer}
+          // own, the page) closes it; the chat never does. The element
+          // holding them, not the text node or a highlight <mark>: a
+          // highlight redraw replaces those, but never the paragraph or cell.
+          anchor={anchorElementOf(selectionMenu.range.startContainer)}
           onClose={() => setSelectionMenu(null)}
         />
       )}

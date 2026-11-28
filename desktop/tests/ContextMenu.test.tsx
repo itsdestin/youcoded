@@ -35,6 +35,15 @@ it('closes when the area holding the right-clicked element scrolls', () => {
   expect(onClose).toHaveBeenCalled();
 });
 
+it('closes on any scroll once the right-clicked element has left the page (redrawn while the menu was open)', () => {
+  const { chat, cell } = layout();
+  const onClose = vi.fn();
+  render(<ContextMenu x={10} y={10} entries={entries as any} anchor={cell} onClose={onClose} />);
+  cell.remove();
+  chat.dispatchEvent(new Event('scroll'));
+  expect(onClose).toHaveBeenCalled();
+});
+
 it('closes when the page itself scrolls', () => {
   const { cell } = layout();
   const onClose = vi.fn();
