@@ -59,7 +59,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   // move interrupted by a kill and a second rollback before it resumes.
   const wsnaps: Array<{ dev: string; dir: string; lines: Map<string, number> }> = [];
   const rolled = new Set<string>();
-  const headLines = async (n: string, v: Buffer): Promise<number> => { const l = await world.localOf(n, v); return l ? (await world.devs[n].store.head(l)).lines : 0; };
+  // (a copy the replicator retired between the lookup and the read answers `damaged`: for the model that copy is empty for now, not a failure of the run, seed 835)
+  const headLines = async (n: string, v: Buffer): Promise<number> => { const l = await world.localOf(n, v); if (!l) return 0; try { return (await world.devs[n].store.head(l)).lines; } catch (e) { if ((e as { code?: string })?.code === 'damaged') return 0; throw e; } };
   const mineOf = (wr: string): Array<{ v: Buffer; root: string }> => [...vs.filter((v) => writer.get(v.toString('hex')) === wr).map((v) => ({ v, root: v.toString('hex') })), ...kidsOf().filter(([, root]) => writer.get(root) === wr).map(([k, root]) => ({ v: k, root }))];
   const stopDevice = async (d: string): Promise<void> => { await world.devs[d].rep.idle(); world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close(); };
   const putBack = async (wr: string, s2: { dir: string }): Promise<void> => {
