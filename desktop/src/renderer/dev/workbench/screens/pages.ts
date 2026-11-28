@@ -101,9 +101,9 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#thermo-auto-climate', 'view'), params: { pagesHome: 'thermo-79-climate-auto' } },
   { ...pg('pages/page/page-home#problems', 'view', 'error-state'), params: { pagesHome: 'view-problems' } },
   { ...pg('pages/page/page-home#settings', 'view'), params: { pagesHome: 'settings' } },
-  { ...pg('pages/page/page-home#chips-pills', 'view'), params: { pagesHome: 'chips-pills' } },
-  { ...pg('pages/page/page-home#chips-sentence', 'view'), params: { pagesHome: 'chips-sentence' } },
-  { ...pg('pages/page/page-home#chips-tiles', 'view'), params: { pagesHome: 'chips-tiles' } },
+  { ...pg('pages/page/page-home#chips-pills', 'view'), params: { pagesHome: 'chips-pills' }, frameReady: '.pills' },
+  { ...pg('pages/page/page-home#chips-sentence', 'view'), params: { pagesHome: 'chips-sentence' }, frameReady: '.glance' },
+  { ...pg('pages/page/page-home#chips-tiles', 'view'), params: { pagesHome: 'chips-tiles' }, frameReady: '.tiles2' },
   // Redesign options, one screen each (fixtures/home-variants/), listed from the registry so
   // a helper adding an option never edits this file.
   ...homeVariantEntries().map(([k, v]) => ({ ...pg(`pages/page/page-home#v-${k}`, 'view', 'redesign'), params: { pagesHome: `v-${k}` }, ...(v.sameAs ? { sameAs: v.sameAs } : {}) })),
@@ -160,6 +160,14 @@ export const PAGES: readonly ScreenEntry[] = [
   // Office (built in, design stage). Documents need the editor add-on served on
   // 127.0.0.1:4717 — fixtures/office.ts says how.
   pg('office/home', 'view', 'office'),
+  // Home's row actions, search and "Show all" (card #143, design stage): the first Recent row's
+  // menu open, the first row renaming, a search typed, and the project list shown in full.
+  { ...pg('office/home#menu', 'view', 'office'), params: { officeHome: 'menu' } },
+  { ...pg('office/rename', 'dialog', 'office'), params: { officeHome: 'rename' } },
+  { ...pg('office/home#search', 'view', 'office'), params: { officeHome: 'search' } },
+  { ...pg('office/home#hover', 'view', 'office'), params: { officeHome: 'hover' } },
+  // Tall enough that the project list's foot — its "Show all" — is in the picture.
+  { ...pg('office/home#show-all', 'view', 'office'), viewport: { width: 1440, height: 1500 } },
   { ...pg('office/first-run', 'view', 'office', 'empty-state'), scenario: 'empty' },
   pg('office/document', 'view', 'office'),
   pg('office/spreadsheet', 'view', 'office'),

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import ts from 'typescript';
-import { keychainLaunchOptions } from '../src/main/providers/keychain-launch';
+import { keychainLaunchOptions, NoSecureStorageError } from '../src/main/providers/keychain-launch';
 
 const metadata = { packaged: true, appPath: '/app/app.asar', name: 'YouCoded Dev (test)', backend: 'kwallet6', scratch: '/tmp/private-keychain', env: { ELECTRON_RUN_AS_NODE: '1', DISPLAY: ':0', YOUCODED_PROFILE: 'dev' } };
 
@@ -23,7 +23,8 @@ describe('keychain helper launch isolation', () => {
   it('maps libsecret spelling and refuses insecure or unknown backends', () => {
     expect(keychainLaunchOptions({ ...metadata, backend: 'gnome_libsecret' }).args).toContain('--password-store=gnome-libsecret');
     for (const backend of ['unknown', 'basic_text', 'basic', '']) {
-      expect(() => keychainLaunchOptions({ ...metadata, backend })).toThrow(/secure storage backend/i);
+      // The kind of error, not its words: KeychainClient shows this one to the person as-is.
+      expect(() => keychainLaunchOptions({ ...metadata, backend })).toThrow(NoSecureStorageError);
     }
   });
 

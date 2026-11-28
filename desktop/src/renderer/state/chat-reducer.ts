@@ -18,6 +18,7 @@ import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchi
 import { reconcilePageSources } from './page-source-anchors';
 import { localUserMessage } from './local-user-message';
 import { reconcileQueueBubbles, boundPendingIndex, recordedUserMessage } from './queue-bubbles';
+import { reduceSendsStale } from './stale-sends';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, commandWithKnownEnd, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
@@ -26,6 +27,7 @@ import { ccCommandFromLaunch, nativeCommandFromRun, putCommand, settleCommands }
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 import { updatePendingSendEntry } from './pending-send-entry';
 import { interruptedAssistantTurns } from './interrupted-turn';
+import { applyBrowserAsk } from './browser-ask-fact';
 import { touchTurnTime } from './turn-time';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
@@ -946,6 +948,8 @@ function spinnerWithNoTurn(session: SessionChatState): Partial<SessionChatState>
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  const browserAsk = applyBrowserAsk(state, action); // browser-ask-fact.ts (card #205)
+  if (browserAsk) return browserAsk;
   let next = chatReducerCases(state, action);
   const id = (action as { sessionId?: string }).sessionId;
   if (next === state || !id) return next;
@@ -1078,6 +1082,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // A definitely unreceived message starts no turn; unknown remains pending without PTY retries.
       next.set(action.sessionId, { ...session, timeline, ...(action.type === 'SEND_NOTE' && action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
       return next;
+    }
+
+    case 'SENDS_STALE': { // a sent bubble is never pinned at the bottom forever (stale-sends.ts, Destin 2026-11-18)
+      const session = next.get(action.sessionId), updated = session && reduceSendsStale(session, action.messageIds, action.now, spinnerWithNoTurn);
+      return updated ? (next.set(action.sessionId, updated), next) : state;
     }
 
     case 'SEND_DISCARD': {
@@ -1276,21 +1285,27 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const loadedBytes = action.loadedBytes ?? null;
+      const loadExpectedMs = action.loadExpectedMs ?? null;
       // Latches true the first time the model reaches 'loaded'. The Reload prompt
       // keys on this so a fresh session's initial 'unloaded'/'loading' (before its
       // eager load completes) shows the loading bar, not a spurious Reload button.
-      const everResident = session.modelEverResident || action.state === 'loaded';
+      // Per MODEL: after a switch, the old model having loaded says nothing about
+      // the new one — carrying it over offered "Reload" for a model never loaded.
+      const sameModel = session.modelInfo?.modelId === action.modelId;
+      const everResident = (sameModel && session.modelEverResident) || action.state === 'loaded';
       // No-op unless state, model, load-progress bytes, OR the ever-resident latch
       // changed (bytes climb while state stays 'loading', and must re-render).
       if (session.modelState === action.state
           && session.modelInfo?.modelId === action.modelId
           && session.modelLoadedBytes === loadedBytes
+          && session.modelLoadExpectedMs === loadExpectedMs
           && session.modelEverResident === everResident) return state;
       next.set(action.sessionId, {
         ...session,
         modelState: action.state,
         modelInfo: { modelId: action.modelId, sizeBytes: action.sizeBytes },
         modelLoadedBytes: loadedBytes,
+        modelLoadExpectedMs: loadExpectedMs,
         modelEverResident: everResident,
       });
       return next;
@@ -1503,11 +1518,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // A queue send's bubble is confirmed by identity first (queue-bubbles.ts): Claude Code records the queue's wording.
       confirmedIdx = boundPendingIndex(session.timeline, action.uuid);
       if (confirmedIdx >= 0) confirmedEntry = session.timeline[confirmedIdx] as Extract<TimelineEntry, { kind: 'user' }>;
-      for (let i = 0; confirmedIdx < 0 && i < session.timeline.length; i++) {
-        const entry = session.timeline[i];
+      // Two passes: bubbles still waiting first, given-up ones (stale-sends.ts) only after — else a retyped "yes" confirmed the lost one.
+      for (let k = 0, n = session.timeline.length; confirmedIdx < 0 && k < 2 * n; k++) {
+        const i = k % n, entry = session.timeline[i];
         if (
           entry.kind === 'user' &&
-          entry.pending === true &&
+          entry.pending === true && (k < n) !== !!entry.sendStale &&
           // WHY: a directly refused native draft was never accepted; older identical history cannot confirm it.
           // Ordinary send-outcome notes may still be corrected by a later real echo (especially Claude Code).
           !entry.sendRefused &&
@@ -1721,7 +1737,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp }];
       } else {
         segments = [...segments, { type: 'text', content: action.text, messageId: nextMessageId(), partId: action.partId,
-          sourceUuid: action.uuid, sourceTimestamp: action.timestamp, lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp }];
+          sourceUuid: action.uuid, sourceTimestamp: action.timestamp, lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp, ...(action.apiError ? { apiError: action.apiError } : {}) }];
       }
       // Task 2.4: Capture model on first text of the turn so the model pill is
       // visible while the turn is in-flight. `?? turn.model` preserves the

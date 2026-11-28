@@ -16,7 +16,7 @@ import type {
 // wrap + the 401-clear closure are shared with marketplace-api-handlers.ts via
 // handler-utils.ts so the renderer sees ONE consistent ApiResult error contract
 // across account:* and social:* — .status must survive the contextBridge.
-import { wrap, makeClearSessionOn401 } from "./handler-utils";
+import { wrap, makeClearSessionOn401, setSessionLostListener } from "./handler-utils";
 // Platform-owned presence socket (Task 6). The account session token and the
 // WebSocket live in the main process; the renderer only ever sees relayed
 // social:presence-event pushes and expresses desired connection state.
@@ -64,6 +64,10 @@ let idlePoller: NodeJS.Timeout | null = null;
 // that comes back under an older one does nothing. A check that could not be made ("unknown") is
 // retried on this timer, and while it waits the device stays disconnected — never visible.
 let presenceIntentGen = 0;
+// WHY the renderer's last wish outlives the socket object (2026-11-01 phone: Games stuck on "Connecting…"): startSocial builds a
+// FRESH presence socket whose desired state starts "off". If the page's connect landed on the old one (a rebuild, a hot reload), the
+// new socket sat idle and nothing would ever ask again. The wish is kept here and re-applied to each new socket.
+let presenceWish: { want: boolean; hidden: boolean } = { want: false, hidden: false };
 let hiddenRetry: NodeJS.Timeout | null = null;
 /** Seconds between capability re-checks after "couldn't check"; the last one repeats. */
 const HIDDEN_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
@@ -115,8 +119,14 @@ export function startSocial(
     remoteServer?.broadcast({ type: "social:presence-event", payload: ev });
   };
 
+  // WHY (card #216): the app signed the account out by itself (the server rejected the session). Relay it as one
+  // more presence event, so it reaches every window and the Android app through the paths that already exist, with
+  // no new message to keep in step across preload / remote-shim / the contract. The screen decides whether to show it.
+  setSessionLostListener(() => broadcastPresenceEvent({ type: "session-lost" }));
+
   // One desired-state connection manager. getToken() is read lazily at connect
   // time so a token that appears after sign-in is picked up on the next attempt.
+  const priorWish = presenceWish; // read before the old socket goes: what the renderer last asked for
   presenceSocket?.destroy(); // hot-reload: tear down the prior socket first
   const presence = createPresenceSocket({
     getToken: () => store.getToken(),
@@ -283,6 +293,7 @@ export function startSocial(
     // the server said yes. A hidden socket this server already confirmed (its hello) needs no re-check.
     presenceConnect: async (opts) => {
       const hidden = opts?.hidden === true;
+      presenceWish = { want: true, hidden };
       cancelPresenceIntent();
       const gen = presenceIntentGen;
       presence.setHidden(hidden);
@@ -295,6 +306,7 @@ export function startSocial(
       return { ok: true };
     },
     presenceDisconnect: () => {
+      presenceWish = { ...presenceWish, want: false };
       cancelPresenceIntent(); // a capability check still in flight must not connect afterwards (F26)
       presence.setDesired(false);
       stopIdlePoller();
@@ -310,6 +322,8 @@ export function startSocial(
       return { ok: true };
     },
   };
+  // Re-apply the wish to the socket just built (goes through the same hidden-mode check as a fresh connect).
+  if (priorWish.want) void socialOps.presenceConnect({ hidden: priorWish.hidden });
 }
 
 /** The social operations, for the social:* table entries (main/ipc/social.ts); null before main registers them (a minimal boot). */
@@ -337,6 +351,7 @@ export function getSocialOps(): SocialOps | null { return socialOps; }
 // linger connected after the local token is cleared until its next server
 // interaction. No-op when presence was never registered.
 export function notifySignedOut(): void {
+  presenceWish = { ...presenceWish, want: false };
   cancelPresenceIntent();
   presenceSocket?.setDesired(false);
   stopIdlePoller();
@@ -345,6 +360,7 @@ export function notifySignedOut(): void {
 // App-quit teardown hook. Electron process death kills the socket anyway, but
 // this makes the intent explicit and cleans timers if called during teardown.
 export function destroySocialHandlers(): void {
+  presenceWish = { want: false, hidden: false };
   cancelPresenceIntent();
   presenceSocket?.destroy();
   presenceSocket = null;

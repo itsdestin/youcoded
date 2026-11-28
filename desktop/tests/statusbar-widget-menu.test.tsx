@@ -363,3 +363,21 @@ describe('the bar and the Customize menu agree about Cost', () => {
     });
   }
 });
+
+describe('sync chip wording', () => {
+  const bar = (syncWarnings: any[]) => render(
+    <StatusBar statusData={{ ...statusData, syncWarnings }} provider="claude" sessionId="s1" nativeTotals={null} />,
+  );
+  const notConfigured = { code: 'PERSONAL_NOT_CONFIGURED', level: 'danger', title: 'No sync configured', body: '', dismissible: false, createdEpoch: 1 };
+
+  it('says "Sync off", not "Sync failing", when sync was simply never set up', () => {
+    bar([notConfigured]);
+    expect(screen.getByText('Sync off')).toBeTruthy();
+    expect(screen.queryByText('Sync failing')).toBeNull();
+  });
+
+  it('still says "Sync failing" when a real failure is among the warnings', () => {
+    bar([notConfigured, { code: 'PUSH_FAILED', level: 'danger', title: 'Push failed', body: '', dismissible: false, createdEpoch: 1 }]);
+    expect(screen.getByText('Sync failing')).toBeTruthy();
+  });
+});

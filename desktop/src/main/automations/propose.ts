@@ -44,7 +44,7 @@ export function watchProposals(deps: ProposalWatcherDeps): (event: TranscriptEve
     if (seen.size > 500) seen.delete(seen.values().next().value as string);
     void (async () => {
       const input = (d.toolInput ?? {}) as { page?: unknown };
-      const page = pageNamed(await deps.pages().catch(() => []), input.page);
+      const page = pageNamed(await deps.pages().catch(() => []), input.page); // benign: no page list means the proposal simply links no page
       const r = draftFromProposal(d.toolInput, { id: `job-${randomUUID().slice(0, 8)}`, model: deps.modelFor(event.sessionId) ?? DEFAULT_MODEL, ...(page ? { page } : {}) });
       // An unusable proposal shows nothing: the assistant was already told what the tool needs by its
       // description, and a half-filled popup would ask the person to approve something nobody wrote.

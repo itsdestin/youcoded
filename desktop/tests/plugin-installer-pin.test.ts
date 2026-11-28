@@ -13,6 +13,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 
 // Every git invocation the installer makes, in order, as argv arrays.
 const calls: string[][] = [];
+const fetchedShas = new Set<string>();
 // Per-argv failure injection: first matching substring wins.
 let failWhen: { match: string; output: string } | null = null;
 
@@ -37,8 +38,20 @@ vi.mock('child_process', () => ({
       fs.mkdirSync(path.join(args[1], args[4]), { recursive: true });
       fs.writeFileSync(path.join(args[1], args[4], 'plugin.json'), '{"name":"y","version":"1.0.0"}');
     }
+    // `rev-parse --verify <sha>^{commit}` confirms a fetched commit is that commit.
+    // Only a commit this fake has fetched is known, like a fresh shallow clone.
+    if (args.includes('--verify')) {
+      const sha = args[args.length - 1].replace('^{commit}', '');
+      if (fetchedShas.has(sha)) { cb(null, `${sha}\n`, ''); return; }
+      cb(Object.assign(new Error('unknown'), { code: 1 }), '', ''); return;
+    }
+    if (args.includes('fetch')) fetchedShas.add(args[args.length - 1]);
     // `rev-parse HEAD` prints the full sha of whatever we checked out.
     if (args.includes('rev-parse')) { cb(null, `${FULL_SHA}\n`, ''); return; }
+    // `checkout --force <sha> -- <path>` restores that folder from the commit.
+    if (args.includes('checkout') && args.includes('--')) {
+      fs.mkdirSync(path.join(args[1], args[args.length - 1]), { recursive: true });
+    }
     cb(null, '', '');
   },
 }));
@@ -51,7 +64,7 @@ beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-pin-'));
   origHome = process.env.HOME;
   process.env.HOME = home; process.env.USERPROFILE = home;
-  calls.length = 0; failWhen = null;
+  calls.length = 0; failWhen = null; fetchedShas.clear();
   vi.resetModules();
 });
 afterEach(() => {
@@ -130,5 +143,72 @@ describe('installPlugin pins to the catalog commit', () => {
     const pin = flat.findIndex((c) => c.includes('checkout --detach'));
     expect(sparse).toBeGreaterThanOrEqual(0);
     expect(pin).toBeGreaterThan(sparse);
+  });
+});
+
+// Plugins listed from someone else's marketplace repo (the official Anthropic collection) are
+// third-party code: they must install the commit the catalog scanned, not that repo's branch head.
+describe('third-party marketplace-repo plugins pin to the scanned commit', () => {
+  const SCANNED = 'a'.repeat(40);
+  const official = { id: 'agent-sdk-dev', sourceType: 'local', sourceRef: './plugins/agent-sdk-dev', sourceMarketplace: 'anthropic' };
+
+  it('refuses without a scanned commit instead of installing the branch head', async () => {
+    const { installPlugin } = await import('../src/main/plugin-installer');
+    const r = await installPlugin(official as any);
+    expect(r.status).toBe('failed');
+    expect(calls).toEqual([]);
+  });
+
+  it('clones the repo at its own default branch, fetches the scanned commit and installs exactly it', async () => {
+    const { installPlugin } = await import('../src/main/plugin-installer');
+    const r = await installPlugin({ ...official, sourceCommit: SCANNED } as any);
+    expect(r).toMatchObject({ status: 'installed', commit: SCANNED });
+    const flat = calls.map((c) => c.join(' '));
+    const clone = flat.find((c) => c.startsWith('clone'));
+    expect(clone).toContain('anthropics/claude-plugins-official');
+    expect(clone).not.toContain('--branch');
+    expect(flat.some((c) => c.endsWith(`fetch --depth 1 origin ${SCANNED}`))).toBe(true);
+    expect(flat.some((c) => c.includes(`checkout --force ${SCANNED} -- ./plugins/agent-sdk-dev`))).toBe(true);
+    // Never moved to the branch head.
+    expect(flat.some((c) => c.includes('reset --hard'))).toBe(false);
+  });
+
+  it('updates only to the scanned commit, and refuses an update without one', async () => {
+    const { upgradePluginFromLocal } = await import('../src/main/plugin-installer');
+    expect((await upgradePluginFromLocal('agent-sdk-dev', './plugins/agent-sdk-dev', 'anthropic')).status).toBe('failed');
+    const r = await upgradePluginFromLocal('agent-sdk-dev', './plugins/agent-sdk-dev', 'anthropic', SCANNED);
+    expect(r).toMatchObject({ status: 'installed', commit: SCANNED });
+  });
+});
+
+// B-7: a failed registry write must not leave files that make every retry say
+// "already installed" — and must never delete a pre-existing working install.
+describe('installPlugin cleanup after a failed registry write', () => {
+  const entry = { id: 'cleanup-plug', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceCommit: 'e91a6c0', version: '1.0.0', description: '', author: '' } as any;
+  const mockRegistry = (fail: boolean) => vi.doMock('../src/main/claude-code-registry', async (orig) => {
+    const real: any = await orig();
+    return { ...real, registerPluginInstall: async () => { if (fail) throw new Error('disk full'); } };
+  });
+
+  it('removes what it copied, so a retry installs instead of saying already installed', async () => {
+    mockRegistry(true);
+    const { installPlugin } = await import('../src/main/plugin-installer');
+    const first = await installPlugin(entry);
+    expect(first.status).toBe('failed');
+    const dir = path.join(home, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins', 'cleanup-plug');
+    expect(fs.existsSync(dir)).toBe(false);
+    vi.resetModules(); vi.doUnmock('../src/main/claude-code-registry'); mockRegistry(false);
+    const { installPlugin: again } = await import('../src/main/plugin-installer');
+    expect((await again(entry)).status).toBe('installed');
+  });
+
+  it('never deletes a pre-existing working install', async () => {
+    mockRegistry(true);
+    const { installPlugin } = await import('../src/main/plugin-installer');
+    const dir = path.join(home, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins', 'cleanup-plug');
+    fs.mkdirSync(path.join(dir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '{"name":"x","version":"1.0.0"}');
+    expect((await installPlugin(entry)).status).toBe('already_installed');
+    expect(fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json'))).toBe(true);
   });
 });

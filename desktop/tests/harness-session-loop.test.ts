@@ -40,6 +40,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { HARNESS, makeOpts, fakeTool, makeSession, scriptModel, drainTurn, FAKE_SESSION_CWD } from './helpers/harness-fakes';
 import { CLOUD_DEFAULT, resolveProfile, IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
 import { looseData } from '../src/shared/transcript-event-types';
+import { FAKE_SUMMARY, SHORT_FAKE_SUMMARY, TINY_FAKE_SUMMARY } from './helpers/harness-fakes';
 
 function collect(session: HarnessSession): TranscriptEvent[] {
   const events: TranscriptEvent[] = [];
@@ -78,7 +79,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const scripts = [
       stream(toolCallChunk('c1', 'Read', { file_path: 'a' }), finishChunk('tool-calls')),
       stream({ type: 'error', error: overflow }),
-      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('s', FAKE_SUMMARY), finishChunk('stop')),
       stream(...textChunks('a', 'done'), finishChunk('stop')),
     ];
     const prompts: any[] = [];
@@ -102,7 +103,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       responseBody: JSON.stringify({ error: { message: 'too long', type: 'invalid_request_error', code: 'context_length_exceeded' } }) });
     const scripts = [
       stream({ type: 'error', error: overflow }),
-      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('s', FAKE_SUMMARY), finishChunk('stop')),
       stream(...textChunks('a', 'done'), finishChunk('stop')),
     ];
     let index = 0;
@@ -136,7 +137,9 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(caps[1]).toBeGreaterThan(0);
   });
 
-  it('preserves a giant tool result in the transcript rather than trimming it before the next request', async () => {
+  it('cuts a giant tool result to the room left, identically in the transcript, the saved history and the next request', async () => {
+    // Replaces the older rule "never cut, fail explicitly": on a small window that failure was the
+    // user-visible bug (2026-11-08). The cut result still says how to read the rest.
     const read = fakeTool('Read', { onExecute: () => ({ text: 'x'.repeat(30_000) }) });
     const seen: any[] = [];
     const model = scriptedModel([
@@ -147,11 +150,11 @@ describe('HarnessSession — multi-step turn driver', () => {
     const events = collect(session);
     await session.send('read file');
     expect((read as any).calls).toHaveLength(1);
-    expect(events.find(e => e.type === 'tool-result')!.data.toolResult).toBe('x'.repeat(30_000));
-    expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(30_000));
-    // A scripted provider may accept a request that a real small-window model
-    // would reject; regardless, no output is erased before the provider sees it.
-    expect(JSON.stringify(seen[1])).toContain('x'.repeat(30_000));
+    const shown: string = events.find(e => e.type === 'tool-result')!.data.toolResult;
+    expect(shown.length).toBeLessThan(30_000);
+    expect(shown).toMatch(/truncated.*offset\/limit/s);
+    expect(JSON.stringify(session.acceptedHistory().messages)).toContain(JSON.stringify(shown).slice(1, -1));
+    expect(JSON.stringify(seen[1])).toContain(JSON.stringify(shown).slice(1, -1));
   });
 
   it('does not retry an overflow after output has begun', async () => {
@@ -180,7 +183,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const overflow = Object.assign(new Error('rejected'), { statusCode: 400,
       responseBody: JSON.stringify({ error: { metadata: { error_type: 'context_length_exceeded' } } }) });
     const chunks = expectedCalls === 3
-      ? [stream({ type: 'error', error: overflow }), stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      ? [stream({ type: 'error', error: overflow }), stream(...textChunks('s', FAKE_SUMMARY), finishChunk('stop')),
         stream({ type: 'error', error })]
       : [stream({ type: 'error', error })];
     let calls = 0;
@@ -410,6 +413,24 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(res.data.toolResult).toBe('Read ran');
     // The tool actually executed.
     expect((read as any).calls).toHaveLength(1);
+  });
+
+  it('records which company OpenRouter says served each step on the turn-complete usage, and nothing when none is named', async () => {
+    // Card #69: lets a later study match cache misses to a change of serving company.
+    const read = fakeTool('Read');
+    const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
+      { ...finishChunk('tool-calls', 10, 2), providerMetadata: { openrouter: { servedBy: 'DeepInfra' } } });
+    const second = stream(...textChunks('b', 'done'),
+      { ...finishChunk('stop', 20, 3), providerMetadata: { openrouter: { servedBy: 'Fireworks' } } });
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW }), async () => scriptedModel([first, second]) as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({ servedBy: ['DeepInfra', 'Fireworks'] });
+    // A provider that names no company leaves the key absent.
+    const plain = new HarnessSession(makeOpts({}), async () => scriptedModel([stream(...textChunks('b', 'hi'), finishChunk('stop', 5, 1))]) as any);
+    const plainEvents = collect(plain);
+    await plain.send('go');
+    expect(plainEvents.find((e) => e.type === 'turn-complete')!.data.usage).not.toHaveProperty('servedBy');
   });
 
   it('emits cumulative measured usage during a root turn', async () => {
@@ -2860,7 +2881,7 @@ describe('shown-image cache resets on history-discarding events', () => {
       // WHY: a complete summary and its output allowance cannot fit the old
       // 6k history into a 4k window; use a feasible over-trigger window.
       contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
-      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'here is the answer' }]),
     });
     // Seed the cache as if an image had been delivered earlier in the
     // (about to be summarized) history — resolveToolImages itself is not
@@ -2873,15 +2894,15 @@ describe('shown-image cache resets on history-discarding events', () => {
   });
 
   it('Fix 2: manual compaction (compactNow) resets the dedupe cache along with the discarded span', async () => {
-    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY: ok' }]) });
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: TINY_FAKE_SUMMARY }]) });
     // At least 2 user-delimited turns so summarizeCutIndex() finds a
     // condensable span (compactNow has no MIN_SUMMARIZE_SPAN thrash guard, so
     // small content is enough — unlike the maybeCompact test above).
     session.seedHistory([
-      { role: 'assistant', content: 'a1' } as any,
-      { role: 'user', content: 'u1' } as any,
-      { role: 'assistant', content: 'a2' } as any,
-      { role: 'user', content: 'u2' } as any,
+      { role: 'assistant', content: 'a1' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u1' + ' padding'.repeat(60) } as any,
+      { role: 'assistant', content: 'a2' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u2' + ' padding'.repeat(60) } as any,
     ]);
     (session as any).shownImages.set('/fake/already-shown.png', 111);
     const result = await session.compactNow();
@@ -3411,17 +3432,17 @@ describe('HarnessSession — the model factory always gets the session id as cac
 
   it('the compaction path passes cacheKey === sessionId too', async () => {
     const seen: Array<{ cacheKey?: string }> = [];
-    const model = scriptModel([{ text: 'SUMMARY: ok' }]);
+    const model = scriptModel([{ text: TINY_FAKE_SUMMARY }]);
     const session = new HarnessSession(
       makeOpts({ sessionId: 'sess-xyz', contextLength: 4096, tools: [], decide: async () => ALLOW }),
       recordingFactory(seen, model),
     );
     // Two user-delimited turns so compactNow finds a span it can condense.
     session.seedHistory([
-      { role: 'assistant', content: 'a1' } as any,
-      { role: 'user', content: 'u1' } as any,
-      { role: 'assistant', content: 'a2' } as any,
-      { role: 'user', content: 'u2' } as any,
+      { role: 'assistant', content: 'a1' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u1' + ' padding'.repeat(60) } as any,
+      { role: 'assistant', content: 'a2' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u2' + ' padding'.repeat(60) } as any,
     ]);
     expect(await session.compactNow()).toEqual({ ok: true });
     expect(seen).toHaveLength(1);
@@ -3453,6 +3474,30 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     const scripts = [stream({ type: 'error', error: PATCH_400() }), stream(...textChunks('a', 'done'), finishChunk('stop'))];
     let index = 0;
     return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }; } });
+  };
+  /** An image service whose FIRST shrink waits until the test releases it (a slow resize
+   *  worker), so a model switch or a Stop can land while pictures are being shrunk. */
+  const heldShrinker = () => {
+    let release!: () => void; let started!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const running = new Promise<void>((r) => { started = r; });
+    const edges: number[] = [];
+    const images = { prepare: async () => ({ kind: 'unchanged' as const }), preparedPathFor: () => null,
+      shrinkBytes: async (bytes: Buffer, limits: any) => {
+        edges.push(limits.maxEdgePx);
+        if (edges.length === 1) { started(); await gate; }
+        const d = imageDimensions(bytes)!; const s = (limits.maxEdgePx * 0.9) / Math.max(d.width, d.height);
+        return { bytes: Buffer.concat([pngHeader(Math.floor(d.width * s), Math.floor(d.height * s)), Buffer.alloc(8)]), mediaType: 'image/png' as const };
+      } };
+    return { images, edges, release, running };
+  };
+  /** A provider-private reasoning message (ChatGPT's encrypted reasoning): a real switch strips it, dropping the whole message. */
+  const privateReasoning = { role: 'assistant', content: [{ type: 'reasoning', text: 'PRIVATE-THOUGHT', providerOptions: { openai: { itemId: 'rs_1' } } }] } as any;
+  const toolPicture = (session: HarnessSession) => (session as any).history.find((m: any) => m.role === 'tool').content[0].output.value[1].data.data as Buffer;
+  const expectStripHeld = (session: HarnessSession) => {
+    const history = (session as any).history as any[];
+    expect(JSON.stringify(history)).not.toContain('PRIVATE-THOUGHT');
+    expect((session as any).historyOrigins).toHaveLength(history.length);
   };
 
   it('safety net: collapses the offending image to the note, retries ONCE, the turn completes, no tool rerun', async () => {
@@ -3536,6 +3581,24 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
       expect(prompts).toHaveLength(3);                                                  // no second rejection
     });
 
+    it('a switch landing while the rejected pictures shrink: the stale result is dropped, the strip holds, the retry fits the newest model', async () => {
+      const prompts: any[] = []; const held = heldShrinker();
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic(),
+        toolServices: { images: held.images } as any }), async () => rejectOnce(prompts) as any);
+      const seeded = wideHistory(); seeded.splice(3, 0, privateReasoning);
+      session.seedHistory(seeded);
+      const sending = session.send('continue');
+      await held.running;
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, { ...chatgpt(), imageLimits: { maxEdgePx: 1000, maxPatches: 30_000 } });
+      held.release();
+      await sending;
+      expectStripHeld(session);
+      expect(held.edges).toEqual([2000, 1000]);
+      expect(imageDimensions(toolPicture(session))).toEqual({ width: 900, height: 562 });
+      expect(prompts).toHaveLength(2);
+      expect(JSON.stringify(prompts[1].prompt)).not.toContain('PRIVATE-THOUGHT');
+    });
+
     it('without an image service, falls back to the note for that picture and still recovers', async () => {
       const prompts: any[] = [];
       const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic() }), async () => rejectOnce(prompts) as any);
@@ -3577,10 +3640,101 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     session.seedHistory(blockedHistory());
     const before = session.acceptedHistory().revision;
     session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
-    expect(session.acceptedHistory().revision).toBeGreaterThan(before);
     await session.send('now?');
+    // No image service here, so nothing can be shrunk: the picture becomes the note, as before.
+    expect(session.acceptedHistory().revision).toBeGreaterThan(before);
     expect(JSON.stringify(prompts[0].prompt)).toContain(NOTE);
     expect(JSON.stringify(prompts[0].prompt)).not.toContain(huge.toString('base64'));
+  });
+
+  // Card #66 (f3): an ordinary switch used only the non-shrinking gate, so a
+  // picture the new model could have taken smaller was replaced by the note.
+  describe('a switch to stricter limits shrinks pictures when it can', () => {
+    const okModel = (prompts: any[]) => new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+    const shrinker = (calls: number[], result: 'fit' | 'none') => ({
+      prepare: async () => ({ kind: 'unchanged' as const }), preparedPathFor: () => null,
+      shrinkBytes: async (_bytes: Buffer, limits: any) => {
+        calls.push(limits.maxEdgePx);
+        if (result === 'none') return null;
+        return { bytes: Buffer.concat([pngHeader(300, 600), Buffer.alloc(8)]), mediaType: 'image/png' as const };
+      },
+    });
+
+    it('sends the shrunk picture, not the note, on the first request after the switch — even a send issued straight after it', async () => {
+      const prompts: any[] = []; const calls: number[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: shrinker(calls, 'fit') } as any }), async () => okModel(prompts) as any);
+      session.seedHistory(blockedHistory());
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+      // The switch itself does no picture work: the shrinking happens off the switch, inside the next turn.
+      expect((session as any).history[2].content[0].output.value[1].data.data).toBe(huge);
+      expect(calls).toEqual([]);
+      await session.send('now?');
+      expect(calls).toHaveLength(1);
+      const sent = JSON.stringify(prompts[0].prompt);
+      expect(sent).not.toContain(NOTE);
+      expect(sent).not.toContain(huge.toString('base64'));
+      expect(sent).toContain('now?');                                                  // the new message was not lost
+      const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+      expect(out.value[0].text).toBe('Read images');
+      expect(imageDimensions(out.value[1].data.data)).toEqual({ width: 300, height: 600 });
+      // Once per switch, not once per request.
+      await session.send('again');
+      expect(calls).toHaveLength(1);
+    });
+
+    it('falls back to the note when the picture cannot be shrunk', async () => {
+      const prompts: any[] = []; const calls: number[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: shrinker(calls, 'none') } as any }), async () => okModel(prompts) as any);
+      session.seedHistory(blockedHistory());
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+      await session.send('now?');
+      expect(calls).toHaveLength(1);
+      expect(JSON.stringify(prompts[0].prompt)).toContain(NOTE);
+    });
+
+    it('a second switch landing while pictures shrink: the stale result is dropped, the strip holds, and the picture fits the newest model', async () => {
+      const prompts: any[] = []; const held = heldShrinker();
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: held.images } as any }), async () => okModel(prompts) as any);
+      const seeded = blockedHistory(); seeded.splice(3, 0, privateReasoning);
+      session.seedHistory(seeded);
+      // Same model, stricter profile: marks the refit WITHOUT stripping, so the reasoning is still there when shrinking starts.
+      session.setBinding({ providerId: 'openrouter', modelId: 'm' }, null, chatgpt());
+      const sending = session.send('now?');
+      await held.running;
+      const strictest = { ...chatgpt(), imageLimits: { maxEdgePx: 500, maxPatches: 30_000 } };
+      session.setBinding({ providerId: 'anthropic', modelId: 'claude-x' }, null, strictest);   // strips the private reasoning
+      held.release();
+      await sending;
+      expectStripHeld(session);
+      expect(Math.max(imageDimensions(toolPicture(session))!.width, imageDimensions(toolPicture(session))!.height)).toBeLessThanOrEqual(500);
+      expect(held.edges).toEqual([8192, 500, 500]);                                    // shrunk again against the newest limits (ok.png is over 500 too)
+      const sent = JSON.stringify(prompts[0].prompt);
+      expect(sent).not.toContain('PRIVATE-THOUGHT');
+      expect(sent).not.toContain(NOTE);
+      expect(sent).not.toContain(huge.toString('base64'));
+    });
+
+    it('a Stop while pictures shrink leaves them for the next request to shrink, not to the note', async () => {
+      const prompts: any[] = []; const held = heldShrinker();
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: held.images } as any }), async () => okModel(prompts) as any);
+      session.seedHistory(blockedHistory());
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+      const sending = session.send('now?');
+      await held.running;
+      session.interrupt();
+      held.release();
+      await sending;
+      expect(toolPicture(session)).toBe(huge);                                          // untouched: no note, no half-done rewrite
+      await session.send('again');
+      expect(held.edges).toHaveLength(2);
+      const sent = JSON.stringify(prompts.at(-1).prompt);
+      expect(sent).not.toContain(NOTE);
+      expect(sent).not.toContain(huge.toString('base64'));
+    });
   });
 
   it('a summary never receives an over-limit picture: compaction enforces the limits first', async () => {
@@ -3804,6 +3958,21 @@ describe('HarnessSession recovers from a reply cut off at the output limit', () 
     expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
   });
 
+  it('a helper report arriving with a cut-off reply does not stop the continuation request', async () => {
+    // The driver's delivery gap must not swallow truncation recovery: the report is spliced AND the model is asked to continue.
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'Here is the first half'), finishChunk('length')), stream(...textChunks('b', ' and the rest.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    let spliced = false;
+    session.setDeliveryBoundary(async () => { if (!spliced) { spliced = true; await session.spliceNotice('REPORT-TOKEN'); } });
+    const events = collect(session);
+    await session.send('write it');
+    expect(prompts).toHaveLength(2);
+    expect(JSON.stringify(prompts[1].prompt)).toContain('REPORT-TOKEN');
+    expect(lastUserText(prompts[1])).toContain('Continue exactly where you stopped');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
   it('a tool call cut off mid-arguments is NEVER run; the model is told to split it, and the turn carries on', async () => {
     const prompts: any[] = [];
     const write = fakeTool('Write', { schema: z.object({ file_path: z.string(), content: z.string() }) });
@@ -3892,6 +4061,43 @@ describe('HarnessSession sorts a provider failure before deciding to retry', () 
     await session.send('hi');
     expect(prompts).toHaveLength(1);
     expect((events.find(e => e.type === 'session-error') as any)?.data).toMatchObject({ errorKind: 'account', errorCode: 'spend-limit' });
+  });
+
+  const networkDown = () => Object.assign(new Error('Cannot connect to API: getaddrinfo ENOTFOUND api.example.com'), { code: 'ENOTFOUND' });
+
+  it('a network failure with the computer offline ends the turn at once as no-internet, with no retry', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1], checkInternet: async () => false }),
+      async () => failing(prompts, [networkDown(), networkDown(), networkDown()]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(1);
+    expect((events.find(e => e.type === 'session-error') as any)?.data).toMatchObject({ errorCode: 'no-internet', errorKind: 'temporary' });
+  });
+
+  it('a failure against a server on this machine or the LAN is never called "no internet", even when the computer is offline', async () => {
+    for (const url of ['http://127.0.0.1:11434/v1/chat/completions', 'http://192.168.1.20:1234/v1/chat/completions']) {
+      const prompts: any[] = [];
+      const check = vi.fn(async () => false);
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1], checkInternet: check }),
+        async () => failing(prompts, [Object.assign(networkDown(), { url }), null]) as any);
+      const events = collect(session);
+      await session.send('hi');
+      expect(check).not.toHaveBeenCalled();
+      expect(prompts).toHaveLength(2); // the normal retry ladder, then it completed
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+    }
+  });
+
+  it('a network failure while online keeps today\'s retry ladder and the turn completes', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1], checkInternet: async () => true }),
+      async () => failing(prompts, [networkDown()]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(2);
+    expect(events.some(e => e.type === 'session-error')).toBe(false);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
   });
 
   it('an unrecognised error is not retried and is reported as unknown, in the provider\'s own words', async () => {

@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { Tooltip } from './ui';
 
 const BRAILLE_CHARS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 function getThemeColors(): string[] {
@@ -33,6 +34,10 @@ interface Props {
 
 export default function BrailleBurst({ children, onTrigger, disabled, className, title }: Props) {
   const [particles, setParticles] = useState<Particle[]>([]);
+  // WHY (round 4 review): the 500 ms clean-up timer was never cleared, so leaving the screen (or a test ending) inside that window
+  // ran setParticles on nothing, and a test torn down first threw "window is not defined" as an unhandled error. Invisible to users.
+  const cleanupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (cleanupTimer.current) clearTimeout(cleanupTimer.current); }, []);
 
   const burst = useCallback(() => {
     if (disabled) return;
@@ -51,41 +56,43 @@ export default function BrailleBurst({ children, onTrigger, disabled, className,
     setParticles(batch);
     onTrigger();
     // Clean up after animation completes
-    setTimeout(() => setParticles([]), 500);
+    if (cleanupTimer.current) clearTimeout(cleanupTimer.current);
+    cleanupTimer.current = setTimeout(() => { cleanupTimer.current = null; setParticles([]); }, 500);
   }, [disabled, onTrigger]);
 
   return (
-    <button
-      type="button"
-      onClick={burst}
-      disabled={disabled}
-      className={`relative ${className || ''}`}
-      title={title}
-    >
-      {children}
-      {particles.map((p) => {
-        const rad = (p.angle * Math.PI) / 180;
-        const tx = Math.cos(rad) * p.dist;
-        const ty = Math.sin(rad) * p.dist;
-        return (
-          <span
-            key={p.id}
-            className="absolute pointer-events-none text-3xs"
-            style={{
-              color: p.color,
-              left: '50%',
-              top: '50%',
-              transform: 'translate(-50%, -50%)',
-              animation: `braille-burst 380ms ease-out ${p.delay}ms forwards`,
-              opacity: 0,
-              '--burst-x': `${tx}px`,
-              '--burst-y': `${ty}px`,
-            } as React.CSSProperties}
-          >
-            {p.char}
-          </span>
-        );
-      })}
-    </button>
+    <Tooltip text={title ?? ''}>
+      <button
+        type="button"
+        onClick={burst}
+        disabled={disabled}
+        className={`relative ${className || ''}`}
+      >
+        {children}
+        {particles.map((p) => {
+          const rad = (p.angle * Math.PI) / 180;
+          const tx = Math.cos(rad) * p.dist;
+          const ty = Math.sin(rad) * p.dist;
+          return (
+            <span
+              key={p.id}
+              className="absolute pointer-events-none text-3xs"
+              style={{
+                color: p.color,
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                animation: `braille-burst 380ms ease-out ${p.delay}ms forwards`,
+                opacity: 0,
+                '--burst-x': `${tx}px`,
+                '--burst-y': `${ty}px`,
+              } as React.CSSProperties}
+            >
+              {p.char}
+            </span>
+          );
+        })}
+      </button>
+    </Tooltip>
   );
 }

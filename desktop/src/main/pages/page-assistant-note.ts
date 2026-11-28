@@ -43,6 +43,6 @@ export function pageAssistantNote(page: Pick<PageSummary, 'name' | 'description'
 export async function buildPageAssistantNote(page: Pick<PageSummary, 'name' | 'description'>, pageDir: string, cwd: string): Promise<string> {
   const rel = path.relative(cwd, pageDir);
   const folder = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : pageDir;
-  const pageMd = await fs.readFile(path.join(pageDir, 'page.md'), 'utf8').catch(() => null);
+  const pageMd = await fs.readFile(path.join(pageDir, 'page.md'), 'utf8').catch(() => null); // benign: a page with no notes file gets a note without them
   return pageAssistantNote(page, folder, pageMd);
 }

@@ -80,21 +80,23 @@ describe('Find marks what is on screen, also after scrolling, and only data cell
   });
 
   it('without the Highlight API the count is right, Next scrolls there, and the current cell gets an outline', async () => {
-    const view = render(<CsvView {...csvProps(bigCsv(2000, 100))} />);
+    // WHY 600 × 20, not 2,000 × 100: the 200,000-cell sheet took 40 s on a busy machine (2026-11-18, past the 30 s budget) and
+    // proved nothing more — row 500 is still far below the first drawn window, so reaching it means scrolling.
+    const view = render(<CsvView {...csvProps(bigCsv(600, 20))} />);
     const bar = withBar(view.container);
     const input = bar.getByLabelText('Find in document');
-    fireEvent.change(input, { target: { value: 'r1999c99' } });
+    fireEvent.change(input, { target: { value: 'r599c19' } });
     await settle();
     expect(bar.container.textContent).toContain('1/1');
-    expect(getSheetFind()!.search('r1999c99')).toBe(1);
-    fireEvent.change(input, { target: { value: 'r1500c' } });
+    expect(getSheetFind()!.search('r599c19')).toBe(1);
+    fireEvent.change(input, { target: { value: 'r500c' } });
     await settle();
-    expect(bar.container.textContent).toContain('/100');
+    expect(bar.container.textContent).toContain('/20');
     fireEvent.keyDown(input, { key: 'Enter' });
     await settle(250);
     const marked = [...view.container.querySelectorAll<HTMLElement>('td[data-r]')].filter((td) => td.style.boxShadow);
     expect(marked).toHaveLength(1);
-    expect(marked[0].textContent).toBe('r1500c1');
+    expect(marked[0].textContent).toBe('r500c1');
     // clearing the search clears the outline
     fireEvent.change(input, { target: { value: '' } });
     await settle();

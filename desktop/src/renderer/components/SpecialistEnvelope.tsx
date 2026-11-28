@@ -137,7 +137,7 @@ export function SpecialistEnvelope({ input, definition, targetTitle, targetRunni
     ? null
     : definition.grantScope === 'project'
       ? 'Its instructions come from a file in this project, not from YouCoded. Only approve it if you trust where this project came from.'
-      : "Its instructions come from a file on your computer, not from YouCoded. Open the file if you're not sure what it does.";
+      : "Its instructions come from a file on your device, not from YouCoded. Open the file if you're not sure what it does.";
 
   // Tailored per charter: a read-only helper cannot delete anything, so listing
   // deletion among the things that still come to you would be noise.

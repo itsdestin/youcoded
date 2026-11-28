@@ -1,0 +1,83 @@
+// @vitest-environment jsdom
+// The strip above the message box while a local model loads.
+//
+// WHY: on a GPU build the byte reading used to sit near zero for a whole load,
+// and the "stopped growing" rule then said "finishing up" for 10-30 s while
+// almost nothing had loaded. A pause early in a load must stay "Loading".
+import React from 'react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, act, screen } from '@testing-library/react';
+import ModelLoadingBar from '../src/renderer/components/ModelLoadingBar';
+
+const GB = 1024 ** 3;
+const info = { modelId: 'Qwen3.8-27B-UD-Q8_K_XL', sizeBytes: 30 * GB };
+
+function bar(loadedBytes: number) {
+  return (
+    <ModelLoadingBar modelState="loading" modelInfo={info} loadedBytes={loadedBytes}
+      everResident={false} isThinking={false} onReload={() => {}} />
+  );
+}
+
+afterEach(() => { vi.useRealTimers(); });
+
+describe('ModelLoadingBar', () => {
+  it('shows nothing for a model that is not loading and was never loaded, with no reply running', () => {
+    // A failed open-time load, or a stopped engine: there is nothing to wait for.
+    const { container } = render(
+      <ModelLoadingBar modelState="unloaded" modelInfo={info} loadedBytes={null}
+        everResident={false} isThinking={false} onReload={() => {}} />,
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('a reply waking a sleeping model shows the loading strip', () => {
+    render(
+      <ModelLoadingBar modelState="sleeping" modelInfo={info} loadedBytes={null}
+        everResident isThinking onReload={() => {}} />,
+    );
+    expect(screen.getByText('Loading')).toBeTruthy();
+  });
+
+  it('a pause early in a load still reads "Loading", not "finishing up"', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const { rerender } = render(bar(0.2 * GB));
+    rerender(bar(0.3 * GB));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByText('Loading')).toBeTruthy();
+    expect(screen.queryByText(/finishing up/)).toBeNull();
+  });
+
+  it('a pause once the file is nearly all read switches to "finishing up"', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const { rerender } = render(bar(10 * GB));
+    rerender(bar(28 * GB));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByText(/finishing up/)).toBeTruthy();
+  });
+
+  it('with no byte reading but a past load time, fills by time and says about how long', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    render(
+      <ModelLoadingBar modelState="loading" modelInfo={info} loadedBytes={null} loadExpectedMs={20_000}
+        everResident={false} isThinking={false} onReload={() => {}} />,
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByText(/about 15s left/)).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25');
+    // Past the usual time it stops claiming progress: back to a plain counter.
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByText(/25s/)).toBeTruthy();
+  });
+
+  it('shows time left once it has a steady reading speed', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const { rerender } = render(bar(0.1 * GB));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    // 6 GB in ~4 s → 24 GB left at that speed is about 15-20 s.
+    rerender(bar(6 * GB));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(screen.getByText(/about \d+s left/)).toBeTruthy();
+  });
+});

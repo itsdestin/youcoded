@@ -28,7 +28,7 @@
      and Twitter all cache a preview image BY URL, for days, and a link Destin
      had already shared kept showing the old picture after the file was
      replaced. Bump the number whenever og-image.png is regenerated. -->
-<meta property="og:image" content="https://youcoded.ai/og-image.png?v=7">
+<meta property="og:image" content="https://youcoded.ai/og-image.png?v=8">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="The YouCoded website: the headline &quot;Make Your Technology Yours.&quot; between four theme mascots, above the app helping plan a week.">
@@ -36,7 +36,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="YouCoded — Make your technology useful, fun, yours.">
 <meta name="twitter:description" content="A fully customizable AI assistant and open-source everything app. Ask it for new features, pages, games or a whole new look, on any AI model — including free ones on your own computer. Windows, macOS, Linux and Android.">
-<meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=7">
+<meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=8">
 <meta name="twitter:image:alt" content="The YouCoded website: the headline &quot;Make Your Technology Yours.&quot; between four theme mascots, above the app helping plan a week.">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/default-32.png" id="favicon">
 <link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
@@ -105,9 +105,37 @@
 html[data-dark="1"]{ --glass-hi:rgba(255,255,255,.14); --ink:rgba(0,0,0,.42); }
 html[data-dark="0"]{ --glass-hi:rgba(255,255,255,.55); --ink:rgba(255,255,255,.34); }
 html{scroll-behavior:smooth}
+/* WHY .intro-scope (2026-11-13, traced). The opening intro shows each word in a
+   different look. A look is ~20 colour settings, and they used to be written on
+   the page's root, so each word made the browser re-style all ~940 elements of
+   a page that is still invisible (a 37ms stall at 4x slowdown, three times,
+   the last one as "Yours." lands -- the hitch Destin reported at "the very end
+   of the header cycle animation"). During the intro only the bar at the top
+   and the headline row are on screen, so the script now writes each word's
+   colours on those two elements (it adds this class to them) and leaves the
+   root on the look the intro finishes in. The lines below re-make, for those
+   two, the settings the root builds out of the colours, and restate the two
+   inherited ones <body> sets from them. :where() keeps this at zero weight so
+   it can never out-rank a rule of the bar's or the headline's own. */
+:where(.intro-scope){
+  --glass:rgba(var(--panel-rgb), var(--panel-op));
+  --glass-prose:rgba(var(--panel-rgb), var(--panel-op-prose));
+  --hair:rgba(var(--edge-rgb), .55);
+  --m-solid:rgb(var(--panel-rgb));--m-bg:rgba(var(--panel-rgb),.97);--m-fg:var(--fg);--m-dim:var(--dim);--m-line:var(--hair);
+  color:var(--fg);font-family:var(--font-theme)}
 
 body{font-family:var(--font-theme);color:var(--fg);line-height:1.6;-webkit-font-smoothing:antialiased;
-  overflow-x:hidden;background:var(--canvas);transition:color .5s}
+  overflow-x:hidden;background:var(--canvas)}
+/* WHY the colour fade is NOT on body any more (2026-11-13, speed pass). Text
+   colour is inherited, so fading it on body made the browser re-style every
+   element on the page -- about 970 of them, including the robots' drawings --
+   on every frame for half a second after each look change. The intro changes
+   look three times, so it spent ~40% of its whole length doing that (measured:
+   864 of 2311ms with the processor slowed 4x), which is the "count the frames"
+   stutter. The fade only ever showed on text sitting directly on the
+   wallpaper; text inside glass cards changes together with its card, which
+   was always instant. So the fade now lives on just that text. */
+.hero h1,.kicker,.hero-sub,section>.wrap>h2,section>.wrap>.eyebrow{transition:color .5s}
 img,video{display:block;max-width:100%}
 a{color:inherit}
 .wrap{max-width:var(--wide);margin:0 auto;padding:0 30px}
@@ -115,6 +143,11 @@ a{color:inherit}
 /* ---- the wallpaper, fixed behind everything, crossfaded on theme change ---- */
 .backdrop{position:fixed;inset:0;z-index:-2;background:var(--canvas)}
 .bd-layer{position:absolute;inset:0;background-size:cover;background-position:center;opacity:0;transition:opacity .65s ease}
+/* A theme's own pattern (Halftone Dimension's dots), drawn the way the app
+   draws it: one tile as tall as the window, repeated sideways. Set per layer
+   by applyTheme(); empty for themes without one. */
+.bd-layer::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background:var(--bd-pattern,none) 0 0/auto 100% repeat-x;opacity:var(--bd-pattern-op,0)}
 .bd-scrim{position:absolute;inset:0;background:
   linear-gradient(rgba(var(--canvas-rgb),.30), rgba(var(--canvas-rgb),.62) 55%, rgba(var(--canvas-rgb),.86));
   transition:background .5s}
@@ -272,9 +305,33 @@ h2{font-family:var(--font-ui);font-size:clamp(2rem,4vw,3rem);font-weight:800;let
   --fade-l:0px; --fade-r:72px;
   -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 var(--fade-l),#000 calc(100% - var(--fade-r)),transparent 100%);
   mask-image:linear-gradient(90deg,transparent 0,#000 var(--fade-l),#000 calc(100% - var(--fade-r)),transparent 100%);
-  transition:--fade-l .22s ease,--fade-r .22s ease}
-.gal::-webkit-scrollbar{height:6px}
-.gal::-webkit-scrollbar-thumb{background:rgba(var(--fg-rgb),.25);border-radius:3px}
+  /* WHY no easing on the fade any more (Destin, 2026-11-13: the scroll fade
+     "has slightly odd/jellowy feel"). Each end's fade used to switch between 0
+     and 72px with a .22s animation of its own once you had scrolled 8px, so it
+     swelled and shrank on a different clock from your finger. The script now
+     sets each fade to exactly how far there is left to scroll that way (up to
+     72px), so it grows and shrinks WITH the scroll and never moves by itself. */
+  /* WHY no scrollbar (same note: "i don't like the visible scrollbar"). Swiping
+     and trackpads still scroll it; for a plain mouse there are two round arrow
+     buttons (.galnav), which only appear on devices that have a pointer. */
+  scrollbar-width:none}
+.gal::-webkit-scrollbar{display:none}
+.galwrap{position:relative}
+.galnav{display:none}
+@media (hover:hover) and (pointer:fine){
+  .galnav{display:grid;place-items:center;position:absolute;top:calc(50% - 46px);z-index:2;
+    width:44px;height:44px;padding:0;border-radius:50%;cursor:pointer;color:var(--fg);
+    background:var(--glass);border:1px solid var(--hair);
+    -webkit-backdrop-filter:blur(var(--blur)) saturate(1.5);backdrop-filter:blur(var(--blur)) saturate(1.5);
+    box-shadow:inset 0 1px 0 var(--glass-hi), 0 14px 30px -14px var(--ink);
+    transition:opacity .2s, transform .18s}
+  .galnav svg{width:20px;height:20px;fill:currentColor}
+  .galnav.prev{left:38px}.galnav.prev svg{transform:rotate(-90deg)}
+  .galnav.next{right:38px}.galnav.next svg{transform:rotate(90deg)}
+  .galnav:hover{transform:scale(1.07)}
+  .galnav:active{transform:scale(.95)}
+  .galnav[disabled]{opacity:0;pointer-events:none}
+}
 .gal img{width:420px;flex:none;scroll-snap-align:center}
 footer{padding:0 0 46px}
 .foot{display:flex;align-items:center;gap:22px;flex-wrap:wrap;padding:26px 30px}
@@ -297,8 +354,10 @@ footer{padding:0 0 46px}
   .stage{height:auto;aspect-ratio:16/10}
   .step{min-height:auto;opacity:1;padding:18px 0}
   .cols,.acctgrid{grid-template-columns:1fr}
-  .nav-links{display:none}
 }
+/* WHY 760 (Destin, 2026-11-13: in-between windows should be "desktop scaled down"):
+   the links used to vanish at 1000px, so a zoomed-in desktop lost its menu. */
+@media(max-width:760px){.nav-links{display:none}}
 
 /* The hero no longer carries its own screenshot — the live demo below is the
    page's first look at the app, so pull it up under the buttons. */
@@ -450,6 +509,27 @@ footer{padding:0 0 46px}
    wallpaper themes). Radius stays for the border + shadow shape; the matching
    content rounding is injected INSIDE the iframe (see bootEmbed). */
 .frame.embed{overflow:visible;background:transparent}
+/* WHY the outline is drawn on top (Destin, 2026-11-11: "the corners of the
+   embedded demo seem to get cut off a bit"). The demo inside is a square-cornered
+   box and this frame cannot clip it (see HERO FADE: a clip smears the app's
+   blur), so on the curved part of each corner the app painted OVER the frame's
+   own hairline and the rounding mask then cut the app's square corner away --
+   leaving an outline on the straight edges that simply stopped at every corner.
+   This layer sits above the demo and redraws the same hairline, so it follows
+   the curve. It is inside the frame's mask, so it dissolves with the bottom of
+   the window as before.
+   WHY corners ONLY (Destin, same day: "the left/right outlines look slightly more
+   inconsistent now"). The first version drew the whole outline here and cleared
+   the real border. A layer above the iframe is composited separately from the
+   frame, so its straight edges could land a fraction of a pixel off where the
+   real border used to. The real border is back, untouched; this layer is
+   trimmed by 1px on every side, which removes exactly the strip the real
+   border already draws in and leaves only the parts of the curve that fall
+   under the demo -- so nothing is drawn twice and the straight edges are the
+   original ones. (clip-path here is safe: it is on this empty layer, not on
+   anything that contains the iframe.) */
+.frame.embed::after{content:'';position:absolute;inset:-1px;border:1px solid var(--hair);
+  border-radius:inherit;pointer-events:none;z-index:7;clip-path:inset(1px)}
 .embed-stage{position:relative;aspect-ratio:16/10}
 .embed-poster,.embed-iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .embed-poster{object-fit:cover;border-radius:var(--radius)}
@@ -575,6 +655,8 @@ body.fade-d .topcta{display:none !important}
   background:transparent;border:1px solid transparent;
   transition:background .18s, color .18s}
 .dlchip svg{width:18px;height:18px;fill:currentColor}
+/* Phone-only pieces; the <=760px block turns them on. */
+.dlchip.dldemo,.dlmore{display:none}
 .dlchip:hover{background:rgba(var(--fg-rgb),.09)}
 .dlchip.primary{background:var(--accent);color:var(--on-accent);
   box-shadow:0 10px 26px -10px rgba(var(--accent-rgb),.65)}
@@ -592,10 +674,16 @@ body.fade-d .topcta{display:none !important}
   box-shadow:inset 0 1px 0 var(--glass-hi), 0 22px 50px -18px var(--ink);
   transition:transform .18s, border-color .18s}
 .trypill:hover{transform:scale(1.05);border-color:var(--accent)}
-.trypill .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);
-  box-shadow:0 0 0 0 rgba(var(--accent-rgb),.55);animation:trydot 2.6s ease-out infinite}
-@keyframes trydot{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.55)}
-                  70%,100%{box-shadow:0 0 0 9px rgba(var(--accent-rgb),0)}}
+/* WHY the pulse is a scaled, fading disc and not an animated box-shadow
+   (2026-11-11, site speed pass): a box-shadow animation makes the browser
+   repaint on every frame for as long as the page is open, and this one never
+   stops. A disc growing from the dot's own 7px to 25px (7 + 2 x 9) while it
+   fades is the same picture, done entirely by the graphics card. */
+.trypill .dot{position:relative;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.trypill .dot::after{content:'';position:absolute;inset:0;border-radius:50%;
+  background:rgba(var(--accent-rgb),.55);animation:trydot 2.6s ease-out infinite}
+@keyframes trydot{0%{transform:scale(1);opacity:1}
+                  70%,100%{transform:scale(3.5714);opacity:0}}
 
 /* The whole-embed "Click to try it" overlay keeps its click target, but its
    label lives at 62% — inside the dissolve, where it would be half-erased and
@@ -610,13 +698,13 @@ body.fade-b .hero>.wrap>.dlrow,
 body.fade-c .hero>.wrap>.dlrow,
 body.fade-d .hero>.wrap>.dlrow{display:none}
 
-@media (prefers-reduced-motion:reduce){.trypill .dot{animation:none}}
+@media (prefers-reduced-motion:reduce){.trypill .dot::after{animation:none;opacity:0}}
 /* NARROW: the row stops being a floating object and sits in the flow under the
    demo. The selectors have to carry the body class -- `body.fade-d .dlfloat`
    sets position:absolute at specificity (0,2,0) and outranked a bare `.dlfloat`
    here, so on a phone-width window the row stayed absolutely positioned and
    then went FIXED the moment you scrolled (same shape as landmine 14). */
-@media(max-width:820px), (max-height:480px){
+@media(max-width:1020px), (max-height:480px){
   body.fade-a .dlfloat,body.fade-b .dlfloat,body.fade-c .dlfloat,body.fade-d .dlfloat,
   body.fade-a .dlfloat.docked,body.fade-b .dlfloat.docked,
   body.fade-c .dlfloat.docked,body.fade-d .dlfloat.docked{
@@ -833,22 +921,31 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
    further (1.14 > 1.06), so the chip never feels unresponsive. */
 .mascot.on{transform:scale(1.06)}
 .mascot.on:hover{transform:scale(1.14)}
-.mascot.on .m-chip{border-color:var(--a);animation:mascot-breathe 3.8s ease-in-out infinite}
-.mascot.on .m-art{animation:mascot-lean 3.8s ease-in-out infinite}
+/* WHY the halo is a separate layer that fades (2026-11-11, site speed pass): it
+   used to be an animated box-shadow on the chip, which the browser has to
+   repaint on every frame for as long as the page is open. The same glow drawn
+   once on ::before and faded with opacity costs nothing per frame. The ring and
+   the drop shadow that never changed are now simply static. */
+.mascot.on .m-chip{border-color:var(--a);box-shadow:0 0 0 2px var(--a), 0 16px 30px -14px rgba(0,0,0,.55)}
+.m-chip::before{content:'';position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;
+  box-shadow:0 0 13px 3px var(--a);opacity:0}
+.mascot.on .m-chip::before{animation:mascot-halo 3.8s ease-in-out infinite}
+@keyframes mascot-halo{0%,100%{opacity:0}50%{opacity:1}}
+/* The lean itself now runs on .m-fig, alongside the idle: see "LAYER 1" in RIGGED MASCOTS. */
 /* The pulse runs on the chip's INNER accent wash as well as the outer halo.
    The outer halo alone was near-invisible for cotton candy: its accent is
    purple and it sits on a purple sky, so the glow had nothing to read against.
    The inner wash is over the chip's own glass, which every theme controls. */
 .mascot.on .m-chip::after{animation:mascot-wash 3.8s ease-in-out infinite}
-@keyframes mascot-breathe{
-  0%,100%{box-shadow:0 0 0 2px var(--a), 0 0 0 0 transparent, 0 16px 30px -14px rgba(0,0,0,.55)}
-  50%    {box-shadow:0 0 0 2px var(--a), 0 0 13px 3px var(--a), 0 16px 30px -14px rgba(0,0,0,.55)}}
 @keyframes mascot-wash{0%,100%{opacity:.26}50%{opacity:.44}}
 /* A hair of rotation on the robot itself. Any bigger and it reads as broken;
    this much only registers as "that one is alive". */
-@keyframes mascot-lean{0%,100%{transform:rotate(-1.1deg)}50%{transform:rotate(1.1deg)}}
+/* WHY the `rotate` property, not transform: the robot's idle (RIGGED MASCOTS, below)
+   animates `transform` on the same box (.m-fig), and one element can only run one
+   animation per property. The two compose exactly as the old nesting did. */
+@keyframes mascot-lean{0%,100%{rotate:-1.1deg}50%{rotate:1.1deg}}
 @media (prefers-reduced-motion:reduce){
-  .mascot.on .m-chip,.mascot.on .m-art,.mascot.on .m-chip::after{animation:none}
+  .mascot.on .m-chip,.mascot.on .m-chip::after,.mascot.on .m-chip::before{animation:none}
   .mascot.on .m-chip{box-shadow:0 0 0 2px var(--a),0 0 10px 2px var(--a),0 16px 30px -14px rgba(0,0,0,.55)}
   .mascot.on .m-chip::after{opacity:.36}}
 .mascot:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
@@ -875,6 +972,12 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
    the picker was tuned at, with the padding living outside the box. */
 .m-rig{width:72.5%;height:72.5%}
 .mascot.m-lg .m-rig{width:70%;height:70%}
+/* .m-fig is a plain box around the drawing (2026-11-11, site speed pass). It
+   takes over the drawing's size and carries the idle motion: see the WHY at
+   "LAYER 1" below. The drawing just fills it. */
+.m-fig{position:relative;display:block;width:72.5%;height:72.5%}
+.mascot.m-lg .m-fig{width:70%;height:70%}
+.mascot .m-fig>.m-rig,.mascot.m-lg .m-fig>.m-rig{display:block;width:100%;height:100%}
 /* Rotations hinge where the rig contract says they do. Limbs are drawn HANGING
    DOWN from their data-pivot, and every pivot is the top-centre of that limb's
    own box (arms 2.5/21.5 at y9, legs 8.95/15.05 at y17) -- so fill-box + 50% 0%
@@ -904,19 +1007,49 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
    This is what makes a chip feel alive between poses, and it rides on
    .rig-idle so a pose can play straight THROUGH it -- an element can only run
    one CSS animation per property, so the two layers have to be two elements. */
-.mascot[data-idle="float"]   .rig-idle{animation:m-float   3.6s ease-in-out infinite}
-.mascot[data-idle="breathe"] .rig-idle{animation:m-breathe 5.2s ease-in-out infinite}
-.mascot[data-idle="scan"]    .rig-idle{animation:m-scan    5.4s ease-in-out infinite}
-.mascot[data-idle="bob"]     .rig-idle{animation:m-bob     2.6s cubic-bezier(.3,.7,.4,1) infinite}
+/* WHY the idle runs on .m-fig, the box AROUND the drawing, and not on the
+   .rig-idle group inside it (2026-11-11, site speed pass). A transform animated
+   on anything that is part of an SVG -- a group inside it, or the <svg> element
+   itself -- cannot be left to the graphics card: the browser re-styled,
+   re-measured and re-painted every shape of all four robots on every frame,
+   forever. Measured at a quarter of the page's whole frame budget while idle,
+   and it is what scrolling, theme clicks and the FAQ folds were colliding with.
+   The same motion on a plain box around the drawing is a layer move with no
+   per-frame page work. The numbers are the old ones converted, so the motion is
+   identical:
+     * 1 viewBox unit = 1/30 of the box = 3.3333%  (viewBox is 30 wide)
+     * the group scaled/rotated about viewBox (0,0), which is 10% / 16.667% into
+       the box; the translate(-40%,-33.333%) ... translate(40%,33.333%) pair
+       moves the pivot there from the box centre.
+   The centre pivot is kept for the selected chip's lean (mascot-lean), which is
+   on the separate `rotate` property so the two can run on one element.
+   .rig-idle stays in the markup: the pose script still reads its children. */
+.mascot[data-idle="float"]   .m-fig{animation:m-float   3.6s ease-in-out infinite}
+.mascot[data-idle="breathe"] .m-fig{animation:m-breathe 5.2s ease-in-out infinite}
+.mascot[data-idle="scan"]    .m-fig{animation:m-scan    5.4s ease-in-out infinite}
+.mascot[data-idle="bob"]     .m-fig{animation:m-bob     2.6s cubic-bezier(.3,.7,.4,1) infinite}
+/* The selected chip runs its lean (rotate property) alongside its idle. */
+.mascot.on[data-idle="float"]   .m-fig{animation:m-float   3.6s ease-in-out infinite, mascot-lean 3.8s ease-in-out infinite}
+.mascot.on[data-idle="breathe"] .m-fig{animation:m-breathe 5.2s ease-in-out infinite, mascot-lean 3.8s ease-in-out infinite}
+.mascot.on[data-idle="scan"]    .m-fig{animation:m-scan    5.4s ease-in-out infinite, mascot-lean 3.8s ease-in-out infinite}
+.mascot.on[data-idle="bob"]     .m-fig{animation:m-bob     2.6s cubic-bezier(.3,.7,.4,1) infinite, mascot-lean 3.8s ease-in-out infinite}
+/* Nothing idles while the row is off screen or the tab is hidden (the script
+   sets .mascots-off): four robots nobody can see were still costing frames.
+   !important: the selected chip's rule is more specific and its shorthand resets the play state. */
+.mascots-off .mascot .m-fig,.mascots-off .mascot .m-chip::before,.mascots-off .mascot .m-chip::after{animation-play-state:paused !important}
 /* Cotton Candy hovers -- it never quite settles. */
-@keyframes m-float{0%,100%{transform:translateY(.5px)}50%{transform:translateY(-1.7px)}}
+@keyframes m-float{0%,100%{transform:translateY(1.6667%)}50%{transform:translateY(-5.6667%)}}
 /* Meadow Mist breathes. Widest and slowest of the four, deliberately: a green
    meadow theme that fidgets is selling the wrong feeling. */
-@keyframes m-breathe{0%,100%{transform:scale(1.015,.985)}50%{transform:scale(.975,1.05) translateY(-.6px)}}
+@keyframes m-breathe{0%,100%{transform:translate(-40%,-33.333%) scale(1.015,.985) translateY(0) translate(40%,33.333%)}
+  50%{transform:translate(-40%,-33.333%) scale(.975,1.05) translateY(-2%) translate(40%,33.333%)}}
 /* Halftone slides side to side like something scanning. */
-@keyframes m-scan{0%,100%{transform:translateX(-1.6px) rotate(-2deg)}50%{transform:translateX(1.6px) rotate(2deg)}}
+@keyframes m-scan{0%,100%{transform:translate(-40%,-33.333%) translateX(-5.3333%) rotate(-2deg) translate(40%,33.333%)}
+  50%{transform:translate(-40%,-33.333%) translateX(5.3333%) rotate(2deg) translate(40%,33.333%)}}
 /* Golden can't hold still -- a springy double-beat, up fast, down slow. */
-@keyframes m-bob{0%,58%,100%{transform:translateY(0) scale(1,1)}22%{transform:translateY(-2.1px) scale(.97,1.04)}76%{transform:translateY(-.8px) scale(.99,1.01)}}
+@keyframes m-bob{0%,58%,100%{transform:translate(-40%,-33.333%) translateY(0) scale(1,1) translate(40%,33.333%)}
+  22%{transform:translate(-40%,-33.333%) translateY(-7%) scale(.97,1.04) translate(40%,33.333%)}
+  76%{transform:translate(-40%,-33.333%) translateY(-2.6667%) scale(.99,1.01) translate(40%,33.333%)}}
 
 /* --- LAYER 2: the minor poses. One-shot, on .rig-root and the limbs, two per
    character, taken in ROTATION by the script so both actually get seen. The
@@ -1063,7 +1196,7 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
 
 /* Motion is decoration here — the picker still works entirely by clicking. */
 @media (prefers-reduced-motion:reduce){
-  .m-rig *{animation:none !important}}
+  .m-fig,.m-rig *{animation:none !important}}
 
 
 /* ---- M1 FLANK: two either side of the headline ---- */
@@ -1179,7 +1312,25 @@ body.intro-mode .hero-app,
 body.intro-mode .dlfloat,
 body.intro-mode > section,
 body.intro-mode > footer,
-body.intro-mode > .topcta{opacity:0;pointer-events:none}
+body.intro-mode > .topcta{opacity:0}
+/* WHY no pointer-events:none here any more (2026-11-13, traced). That property
+   is inherited, so switching it back on at the end of the intro made the browser
+   re-style every one of the page's ~940 elements in the same instant the page
+   content starts to rise -- the hitch Destin reported ("the subsequent fade-up
+   of the robot buttons and other page content still lags/hitches just a bit").
+   Opacity and transform are not inherited: now only the hidden blocks
+   themselves change. The culprits were the big sections BELOW the header
+   (~470 elements), so only they lost it: clicks on them while invisible are
+   swallowed by a small guard in the intro script (search: introClickGuard).
+   The header's own hidden pieces KEEP it, just below -- they are few, and the
+   headline row is centred right on top of the invisible demo window during
+   the intro, so without it the robots could not be clicked. */
+body.intro-mode .kicker,
+body.intro-mode .hero-sub,
+body.intro-mode .dlrow,
+body.intro-mode .hero-app,
+body.intro-mode .dlfloat,
+body.intro-mode > .topcta{pointer-events:none}
 /* The pill fades on ITS OWN and is deliberately absent from the translateY list
    below (Destin 2026-09-03: "it pops in in a really ugly way"). Measured cause:
    it is position:fixed and used to live INSIDE .hero-app, and a transformed
@@ -1210,6 +1361,92 @@ body.intro-mode > footer{transform:translateY(34px)}
   body.intro-mode > .topcta{opacity:1;pointer-events:auto;transform:none}
   body.intro-mode .flankrow{transform:none}}
 
+
+/* ==== The opening intro, 2026-11-12 (body.iv2) ==============================
+   WHY (Destin, 2026-11-12): every load sat frozen on "Make Your Technology ___"
+   with an empty slot -- up to 0.7s waiting for the font and wallpapers, then
+   another 0.62s before "Useful." bumped in. Settled over seven rounds with him:
+     1. Nothing shows until the fonts and wallpapers are ready (700ms cap).
+     2. The nav and the headline row rise in together ON THE PURPLE THEME, the
+        headline CLOSED UP -- "Make Your Technology" centred, no empty slot --
+        with the robots a little apart from it.
+     3. --lead later the line opens and "Useful." arrives letter by letter;
+        "Fun." and "Yours." bump up one --beat apart; the page rises in.
+   He rejected arriving with "Useful." already showing ("feels like it *starts*
+   with useful, then just does a 2-item cycle").
+   The script half is the word-cycler block at the end of the page.
+
+   The entrance uses the separate `translate` property, never `transform`:
+   .flankrow's transform is the intro's centring lift (above). */
+body.iv2{--beat:720ms;--lead:620ms}
+body.iv2:not(.intro-go):not(.cycler-static) .nav,
+body.iv2:not(.intro-go):not(.cycler-static) .flankrow{opacity:0}
+body.iv2.intro-go .nav{animation:iv2-fade .45s ease backwards}
+body.iv2.intro-go .flankrow{animation:iv2-rise .45s cubic-bezier(.22,1,.36,1) backwards}
+@keyframes iv2-fade{from{opacity:0}}
+@keyframes iv2-rise{from{opacity:0;translate:0 26px}}
+/* One beat between words. A word's own animation keeps the original
+   proportions (.82s long on a .78s beat), so each exit still lands exactly on
+   the next word's entry whatever the beat is.
+   WHY --lead is its own, shorter number ("the pause before useful comes in is
+   still a tad too long"): the wait before the FIRST word is not a beat between
+   words -- nothing is being read yet -- so it only has to outlast the
+   headline's own arrival. */
+body.iv2 .cycler-word{animation-duration:calc(var(--beat) * 1.0513)}
+body.iv2 .cycler-word-2{animation-delay:calc(var(--lead) + var(--beat))}
+body.iv2 .cycler-word-3{animation-delay:calc(var(--lead) + var(--beat) * 2)}
+/* The first opening travels about four times as far as the shifts between
+   later words, so it gets a slightly softer curve than their snap. */
+body.iv2-first .word-cycler{transition:width .5s cubic-bezier(.22,.9,.32,1)}
+/* The wallpaper's tint lives inside each wallpaper layer (flip() in
+   applyTheme), so it crossfades with the picture; this element is unused. */
+body.iv2 .bd-scrim{display:none}
+/* During the intro the wallpaper lands a little sooner after its word (.5s,
+   not .65s): with 0.72s between words the longer fade had barely finished
+   before the next began, so the background never came to rest. */
+body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
+/* Robots start a little apart (Destin: "start the empty 'make your
+   technology...' state with the icons slightly further to the left/right of
+   the text ... that way they maybe have to move just a bit less to fit the
+   first 'useful'"). While the headline is still closed (body.iv2-shut) it
+   carries extra room on both sides, half of what the first word needs, set by
+   the script; that room is handed back, on the same curve, as the slot opens,
+   so the robots travel only the other half. Not on phones: there the robots
+   sit in their own bar under the headline and there is nothing to spread. */
+@media(min-width:761px){
+  /* WHY :not(.iv2-shut): the transition must exist only on the way OUT. With it
+     on always, the robots visibly slid apart during the headline's entrance
+     (traced 2026-11-12) instead of simply starting apart. */
+  body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .5s cubic-bezier(.22,.9,.32,1), color .5s}
+  body.iv2-shut .hero-flank .flankrow h1{margin:0 var(--iv2-spread,0px)}
+}
+/* ---- The first word arrives letter by letter --------------------------------
+   Destin picked this over sliding up, two wipes and a slide-out (round 7).
+   "Useful." does not ride the shared bump. Instead:
+     iv2-show   switches the word on, already in place, as its letters begin;
+     iv2-letter each letter (wrapped in <b> by the script) pops up 24ms after
+                the one before;
+     iv2-leave  the same bump-out exit as the other words, on the same clock,
+                so "Fun." still lands exactly as "Useful." leaves.
+   ON THE BEAT: a bumped word is readable ~80ms after its beat and settled by
+   ~160ms. The letters start 110ms BEFORE the beat and the last lands ~170ms
+   after it, so the word reads at the same moment a bumped one does.
+   Frame-traced against the opening slot: the newest letter never gets ahead
+   of the room being made for it. */
+body.iv2 .cycler-word-1{
+  animation-name:iv2-show,iv2-leave;
+  animation-duration:1ms,calc(var(--beat) * .1577);
+  animation-delay:calc(var(--lead) - 110ms),calc(var(--lead) + var(--beat) * .8936);
+  animation-timing-function:linear;animation-fill-mode:forwards}
+@keyframes iv2-show{to{opacity:1;transform:none}}
+@keyframes iv2-leave{0%{transform:translateY(0);opacity:1} 47%{transform:translateY(4%);opacity:1}
+  100%{transform:translateY(-110%);opacity:0}}
+body.iv2 .cycler-word-1 b{display:inline-block;font:inherit;opacity:0;
+  animation:iv2-letter 140ms cubic-bezier(.3,.6,.35,1) both;
+  animation-delay:calc(var(--lead) - 110ms + var(--i) * 24ms)}
+body.iv2:not(.intro-go) .cycler-word-1 b{animation-play-state:paused}
+@keyframes iv2-letter{from{opacity:0;transform:translateY(38%)} to{opacity:1;transform:none}}
+body.cycler-static .cycler-word-1 b{animation:none}
 
 /* ---- Headline size classes for the wording variants (2026-08-31) ----------
    The headline sits BETWEEN two mascot groups in a centred flex row, so its
@@ -1249,12 +1486,26 @@ body.cycler-static .lead-hold{display:none}
    wording still fits side-by-side at 1030 and wraps to two lines by 990, so the
    switch happens at 1020 -- below it the headline takes the whole line and all
    four chips sit under it as one group. */
-@media(max-width:1020px){
-  .hero-flank .flankrow{flex-wrap:wrap;gap:16px}
-  .hero-flank .flankrow h1{flex:1 0 100%;order:1}
-  .hero-flank .mrow-l{order:2}
-  .hero-flank .mrow-r{order:3}
-  .hero-flank .mascot{width:54px;height:54px;border-radius:17px}
+/* ---- In-between windows: the desktop page, scaled down (Destin, 2026-11-13) ----
+   WHY: between phone width and a full desktop the page used to be a third,
+   improvised layout -- a two-line headline, no menu, a bar running edge to
+   edge. Zooming a desktop browser in lands exactly there, and he said it
+   "becomes an entirely different page ... spacing and styling is broken". His
+   call: "desktop scaled down basically, but with the mobile/android download
+   bar. narrow". So from 761px up the headline is always ONE line with two
+   robots each side, exactly like desktop, and it shrinks to fit:
+     --rob  the robots' size, 42-62px with the window;
+     the headline's size is whatever is left after four robots, the gaps and
+     the page margins, divided by its own width in ems (12.4 with the widest
+     word). At 1340px and up every number here equals the desktop's own.
+   This also ends the old flip between one and two lines at ~1030-1100px. */
+@media(min-width:761px) and (max-width:1340px){
+  .nav{padding:0 16px}
+  .hero-flank .flankrow{--rob:clamp(42px,5.6vw,62px);gap:clamp(14px,2.54vw,34px)}
+  .hero-flank .mascot{width:var(--rob);height:var(--rob);border-radius:calc(var(--rob) * .3)}
+  .hero-flank .mrow{gap:clamp(8px,1.05vw,14px)}
+  body.h1-md .hero-flank .flankrow h1{white-space:nowrap;
+    font-size:min(4.3rem,calc((100vw - 4 * var(--rob) - 176px) / 12.4))}
 }
 /* ==========================================================================
    "What you get" — three alternatives to the original scrolling theater.
@@ -1426,7 +1677,16 @@ body.cycler-static .lead-hold{display:none}
 /* No transition here on purpose: --d is driven straight off scroll position,
    so every frame is already the right value. A transition would only make the
    card lag behind the scroll, which is exactly the jank this replaced. */
+/* WHY registered and NOT inherited (2026-11-11, site speed pass): --d is written
+   on every card on every scrolled frame. An ordinary custom property is
+   inherited, so each write re-styled every element INSIDE all ten cards (clips,
+   text, the 40-key keyboard drawing); only the card itself reads it. */
+@property --d{syntax:'<number>';inherits:false;initial-value:0}
 .deck-fade .step{transition:none}
+/* A card that has fully dissolved (opacity 0 from d = 1/.85) stops being drawn at
+   all. It was invisible already, but the browser was still blurring the page
+   behind each of up to nine stacked, see-through cards on every frame. */
+.deck-fade .step.gone{visibility:hidden}
 .deck-fade .step.buried{
   transform:scale(calc(1 - var(--d,0) * 0.03));
   opacity:calc(1 - var(--d,0) * 0.85);      /* gone a little past one card-length */
@@ -1531,11 +1791,25 @@ body.motion-on .m-rise.m-wait{opacity:0}
     box-shadow:inset 0 1px 0 var(--glass-hi), 0 10px 26px -14px var(--ink)}
 }
 
+/* ---- footer on anything narrower than a desktop (Destin, 2026-11-13: the
+   footer buttons "get weird spacing/stacking on narrow screens"). It used to be
+   one wrapping row: on a tablet the Open Source badge dropped to a line of its
+   own, and on a phone the six links broke 4 + 2 while the badge was nudged
+   into place with fixed pixel offsets. Now it is a small grid: the name on the
+   left with the badge at the right end of the same line, the links on their
+   own line, the small print under them. */
+@media(max-width:1020px){
+  .foot{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px 16px}
+  .foot .logo{grid-column:1;grid-row:1}
+  .foot .badge{grid-column:2;grid-row:1;order:0;margin:0;white-space:nowrap}
+  .foot .flinks{grid-column:1 / -1;margin-left:0;flex-wrap:wrap;gap:6px 20px}
+  .foot .legal{grid-column:1 / -1}
+}
 /* The Open Source badge moved in the markup so a phone can sit it beside the
    wordmark. Above 760 it goes back to trailing the links, which is where it has
    always been — `order` only, so the wide footer is unchanged. (Say the word and
    this rule comes out and the badge moves up there too.) */
-@media(min-width:761px){
+@media(min-width:1021px){
   .foot .badge{order:9}
   .foot .legal{order:10}
   /* Inside .flinks the badge sat on that row's 18px gap; as a child of .foot it
@@ -1626,35 +1900,15 @@ body.motion-on .m-rise.m-wait{opacity:0}
 
   /* ---- hero ------------------------------------------------------------ */
   .hero{padding-top:calc(var(--nav-h) + 10px)}
-  .hero-flank .flankrow{gap:12px}
-  .hero-flank .mascot{width:50px;height:50px;border-radius:15px}
-  .hero-flank .mrow{gap:10px}
-  .hero-sub{font-size:1.02rem;margin-top:12px}
+  .hero-sub{font-size:1.02rem}
   .kicker{font-size:.7rem;letter-spacing:.12em}
 
-  /* ---- the download row -----------------------------------------------
-     A 999px pill is a shape for a single row of chips. Wrapped onto three
-     lines at 390px it became a rounded blob with the chips floating loose
-     inside it. Below 760 it is a CARD with a two-up grid: the visitor's own
-     platform full width on top (the script above marks it .primary), the
-     other four underneath. Same chips, same order, same accent. */
-  body.fade-a .dlfloat,body.fade-b .dlfloat,
-  body.fade-c .dlfloat,body.fade-d .dlfloat{
-    display:flex;flex-direction:column;align-items:stretch;gap:10px;
-    width:100%;margin-top:20px}
-  .dlpill{display:grid;grid-template-columns:1fr 1fr;gap:8px;
-    padding:12px;border-radius:calc(var(--radius) + 4px);width:auto !important}
-  body.legend-on .dlpill{padding-top:16px}
-  body.legend-on .dl-legend{left:16px}
-  .dlchip{grid-column:span 1;justify-content:center;padding:14px 8px;
-    border-radius:var(--radius);background:rgba(var(--fg-rgb),.07);
-    font-size:.9rem;min-height:48px}
-  /* First AND full width (Destin 2026-09-03: "the selected one should always be
-     at the top as the first option"). The markup order is Windows, macOS,
-     Linux, Android, iOS and must stay that way — the wide pill's width is
-     pinned per theme and reordering it would move the pill sideways — so the
-     phone reorders visually with `order` instead. */
-  .dlchip.primary{grid-column:1 / -1;order:-1}
+  /* The download buttons are a dock pinned to the bottom of the screen on a
+     phone -- see the PHONE FIRST SCREEN block further down. */
+  /* The live demo no longer sits in the header on a phone: squeezed to this
+     width its text was cut off and its start button covered the chat. It is
+     one tap away on its own page (the Demo button in the bottom dock). */
+  .hero-app{display:none}
   /* HIDDEN on a phone, not restyled. It does exactly what "Start the demo" on
      the picture right above it does, and since the demo now waits for a tap
      that button is the obvious one. The action is not lost -- that is the whole
@@ -1730,16 +1984,16 @@ body.motion-on .m-rise.m-wait{opacity:0}
      Destin" broke over three lines and the Open Source badge sat in the
      middle of them. Stacked here, and the badge sits beside the wordmark
      (Destin 2026-09-03) rather than trailing the links. */
-  .foot{flex-direction:column;align-items:flex-start;gap:14px;padding:22px 18px}
-  /* logo and badge share the first line; `order` does the rest of the stack. */
-  .foot .logo{order:1}
-  /* Beside the 44px name-only lockup (about 185px wide), centred on its icon:
-     back up the 14px gap and the icon, then down half the icon less half the badge. */
-  .foot .badge{order:2;margin-top:-47px;margin-left:200px}
-  .flinks{order:3;margin-left:0;flex-wrap:wrap;gap:4px 6px}
-  /* 44px tall, not 23px -- these were the smallest tap targets on the page. */
-  .flinks a{font-size:.9rem;padding:11px 10px;margin:0 -10px}
-  .legal{order:4;font-size:.75rem}
+  /* Layout: see the footer block for windows up to 1020px, just below this one. */
+  .foot{padding:22px 18px}
+  /* The name and the badge share one line; on the narrowest phones (360px) the
+     name is drawn a little smaller so the two fit without pushing the page wide. */
+  .foot{column-gap:10px}
+  .foot .logo{--icon:clamp(34px,10.4vw,44px)}
+  /* Six links as two even rows of three, each a full 44px tap target. */
+  .flinks{display:grid;grid-template-columns:repeat(3,auto);justify-content:space-between;gap:0 12px}
+  .flinks a{font-size:.9rem;padding:11px 0;margin:0}
+  .legal{font-size:.75rem}
 
   /* ---- the "back to Download" pill -------------------------------------
      Hidden on desktop because the floating download pill is always docked at
@@ -1753,6 +2007,144 @@ body.motion-on .m-rise.m-wait{opacity:0}
      and only appears on the way back up. Position and transform are the base
      rule's; only the size and the gap change here. */
   .topcta{bottom:16px;padding:12px 20px;font-size:.84rem}
+}
+
+/* ==========================================================================
+   PHONE FIRST SCREEN (2026-11-12)
+   ==========================================================================
+   WHY: Destin on the first phone layout: "it doesn't have half the spirit or
+   visual polish of the desktop page". Seven rounds of side-by-side variants
+   later he picked this ("i like x"):
+     - a POSTER headline, left-aligned and stacked: "Make" / "Technology" / the
+       changing word in the accent colour. "Your" is left out on phones (his
+       call: "drop 'your' so its just 'make technology....'");
+     - no "Free . Easy . MIT" line and no tagline on phones (both his calls);
+     - the four robots in one full-width frosted-glass bar under the headline;
+     - no app picture and no live demo in the page -- only a Demo button;
+     - the downloads as one glass bar pinned to the bottom of the screen: the
+       visitor's own platform, Demo, and a chevron that opens the other four.
+   Everything here is inside the phone query; wider screens are untouched. */
+@media(max-width:760px){
+  .hero{padding-top:calc(var(--nav-h) + 6px);padding-bottom:6px}
+  .hero-flank > .wrap > .kicker,.hero-flank .hero-sub{display:none}
+
+  /* ---- the poster headline ---- */
+  /* --pfs: "Technology" measures 4.82em wide in DM Sans 900, so this size
+     makes it run the full width of the column on any phone. --ptop: the
+     breathing room above the headline. */
+  .hero-flank > .wrap{position:relative;--pfs:calc((100vw - 36px) / 4.9);--ptop:20px}
+  .hero-flank .flankrow{display:block;margin-top:var(--ptop);text-align:left}
+  body.h1-md .hero-flank .flankrow h1{font-size:var(--pfs);line-height:.88;
+    letter-spacing:-.055em;white-space:normal;text-align:left;margin:0}
+  /* One word per line (the script wraps each in a .pw span on phones). */
+  .hero-flank .flankrow h1 .pw{display:block}
+  /* The changing word: the loudest thing on the page, but not so large that it
+     overpowers "Technology" (Destin: "*slightly* reducing size of cycling
+     words"; he picked 1.38 over 1.55 and 1.72). */
+  .hero-flank .flankrow .word-cycler{display:block;font-size:1.38em;
+    margin:.06em 0 0 -.02em;white-space:normal}
+
+  /* ---- the robots: one glass bar, full width ---- */
+  /* WHY full width with mid-size robots (Destin: "either full-width or
+     centered, not left-aligned with partial screen coverage", then "smaller
+     individual robots with slightly wider spacing between them in the wider
+     outer card"). The script moves both robot pairs into .robocap;
+     display:contents lets the four sit as one evenly spaced row. */
+  .robocap{display:flex;align-items:center;justify-content:space-evenly;gap:9px;
+    margin:26px 0 0;padding:10px 8px;
+    border-radius:999px;background:var(--glass);
+    -webkit-backdrop-filter:blur(var(--blur)) saturate(1.5);backdrop-filter:blur(var(--blur)) saturate(1.5);
+    border:1px solid var(--hair);
+    box-shadow:inset 0 1px 0 var(--glass-hi), 0 18px 36px -18px var(--ink);
+    --rob:clamp(52px,15.4vw,62px)}
+  .hero-flank .robocap .mrow{display:contents}
+  .hero-flank .robocap .mascot{width:var(--rob);height:var(--rob);border-radius:999px}
+  /* A press squeezes the robot a touch, so a tap feels like it landed. */
+  .hero-flank .robocap .mascot:active{transform:scale(.9)}
+
+  /* The download dock's own styles are in the next block: it is shared with
+     in-between windows up to 1020px. */
+
+  /* ---- arrival: the robot bar rises in just after the headline settles ---- */
+  .robocap{transition:opacity .55s cubic-bezier(.22,1,.36,1) .42s, transform .55s cubic-bezier(.22,1,.36,1) .42s}
+  body.intro-mode .robocap{opacity:0;transform:translateY(34px);pointer-events:none}
+}
+@media(max-width:760px) and (prefers-reduced-motion:reduce){
+  body.intro-mode .robocap{opacity:1;transform:none;pointer-events:auto}
+}
+/* ==========================================================================
+   THE DOWNLOAD DOCK -- phones AND in-between windows (up to 1020px)
+   ==========================================================================
+   WHY up to 1020 (Destin, 2026-11-13: "desktop scaled down basically, but with
+   the mobile/android download bar. narrow"). The desktop's five-platform pill
+   needs about 760px of width and used to either float over the demo or drop
+   under it depending on a 60px difference in window width. Below 1021px the
+   page now always uses this bar: the visitor's own platform, Demo, and a
+   chevron that opens the other four. */
+@media(max-width:1020px){
+  /* ---- the download dock ---- */
+  body.fade-d .hero .dlfloat{position:fixed;left:12px;right:12px;top:auto;
+    bottom:calc(12px + env(safe-area-inset-bottom,0px));transform:none;margin:0;width:auto;
+    display:flex;flex-direction:row;flex-wrap:nowrap;align-items:stretch;justify-content:center;gap:8px;z-index:65}
+  /* Steps out of the way while the footer (which has its own download links)
+     is on screen -- the same rule desktop's pill follows. */
+  body.fade-d .hero .dlfloat.p-away{opacity:0;transform:translateY(18px);pointer-events:none}
+  /* A soft fade of the page's own colour under the dock, so text scrolling
+     beneath melts away instead of running hard up against the bar. */
+  body.fade-d .hero .dlfloat::before{content:'';position:absolute;left:-12px;right:-12px;top:-30px;
+    bottom:calc(-12px - env(safe-area-inset-bottom, 0px));z-index:-1;pointer-events:none;
+    background:linear-gradient(rgba(var(--canvas-rgb),0), rgba(var(--canvas-rgb),.78) 62%)}
+  body.fade-d .hero .dlfloat.open::before{top:-50px}
+  .hero .dlpill{flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:center;gap:6px;
+    padding:6px;border-radius:999px;width:auto !important}
+  body.legend-on .hero .dlpill{padding-top:8px}
+  body.legend-on .hero .dl-legend{left:20px}
+  .hero .dlchip{display:none;justify-content:center;min-height:48px;padding:0 12px;font-size:.92rem}
+  .hero .dlchip.primary{display:flex;flex:1 1 auto;min-width:0;font-size:.98rem}
+  /* WHY chevron only (Destin: "reduce 'more' to just a chevron"): a 48px
+     round button with the arrow alone; its aria-label still says "More
+     platforms" for screen readers. It flips when the dock is open. */
+  .dlmore{display:flex;align-items:center;justify-content:center;flex:none;
+    width:48px;height:48px;padding:0;border-radius:50%;border:0;cursor:pointer;
+    color:var(--fg);background:rgba(var(--fg-rgb),.08)}
+  .dlmore svg{width:22px;height:22px;fill:currentColor;transition:transform .25s ease}
+  .dlmore:active{opacity:.72}
+  /* Demo: a quiet flat button inside the same bar, clearly second to the
+     filled platform button. WHY flat: the first version was a glossy play
+     circle on its own pill, and Destin said it looked "like something straight
+     out of 2005". */
+  .hero .dlpill .dlchip.dldemo{display:flex;flex:none;gap:7px;padding:0 15px;border-radius:999px;
+    font-size:.93rem;color:var(--fg);background:rgba(var(--fg-rgb),.08)}
+  .hero .dlpill .dlchip.dldemo svg{width:13px;height:13px}
+  /* OPEN: the bar becomes a card that grows upward with the other four
+     platforms two to a row above the visitor's own; Demo steps aside. */
+  .hero .dlfloat.open .dlpill .dlchip.dldemo{display:none}
+  .hero .dlfloat.open .dlpill{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:16px 10px 10px;
+    border-radius:calc(var(--radius) + 12px)}
+  .hero .dlfloat.open .dlpill .dlchip{display:flex;border-radius:var(--radius);background:rgba(var(--fg-rgb),.08);
+    animation:dock-pop .28s cubic-bezier(.22,1,.36,1) both}
+  .hero .dlfloat.open .dlpill .dlchip.primary{order:5;background:var(--accent);animation:none;border-radius:999px}
+  /* Open, the chevron is a full-width row's partner: centred in its cell. */
+  .hero .dlfloat.open .dlmore{order:6;width:auto;border-radius:999px}
+  .hero .dlfloat.open .dlmore svg{transform:rotate(180deg)}
+  @keyframes dock-pop{from{opacity:0;transform:translateY(10px)}}
+  /* Room under the last of the page, so the dock never sits on the footer. */
+  body{padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px))}
+  /* The dock is always on screen, so the old floating "Download" button that
+     led back to the buttons has nothing left to do here. */
+  body.fade-d .topcta{display:none !important}
+
+  .trypill{display:none}   /* the bar's own Demo button does its job here */
+}
+/* In-between windows: the same bar, narrow and centred instead of edge to edge. */
+@media(min-width:761px) and (max-width:1020px){
+  body.fade-d .hero .dlfloat{left:50%;right:auto;width:min(440px,calc(100vw - 24px));transform:translateX(-50%)}
+  body.fade-d .hero .dlfloat.p-away{transform:translateX(-50%) translateY(18px)}
+  body.fade-d .hero .dlfloat::before{left:calc(220px - 50vw);right:calc(220px - 50vw)}
+}
+@media(max-width:1020px) and (prefers-reduced-motion:reduce){
+  .dlmore svg{transition:none}
+  .hero .dlfloat.open .dlpill .dlchip{animation:none}
 }
 
 
@@ -1827,8 +2219,21 @@ html{-webkit-tap-highlight-color:transparent}
 .faq details.is-open summary{border-radius:var(--radius) var(--radius) 0 0}
 .faq summary:active,.storyfold>summary:active{transform:none;background:transparent}
 .faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
-.faq details[open] summary::after{content:'+'}
-.faq details.is-open summary::after{transform:rotate(45deg)}
+/* WHY the + is drawn, not typed (Destin, 2026-11-13: "happen in-place instead of swinging
+   right a bit"). A typed "+" does not sit in the middle of its own text box, so turning the
+   box 45 degrees swung the mark sideways. This is two bars centred in a box exactly one line
+   tall, so the box's middle IS the mark's middle and it turns on the spot. Same size, colour
+   and place as the typed one. */
+.faq summary::after,.faq details[open] summary::after{content:'';flex:none;width:13px;height:1.6em;
+  font-size:inherit;line-height:inherit;
+  background:linear-gradient(var(--accent),var(--accent)) center/13px 2px no-repeat,
+             linear-gradient(var(--accent),var(--accent)) center/2px 13px no-repeat}
+/* WHY :not(.closing) (Destin, 2026-11-13: "it waits till close is complete instead of
+   animating on click"). The card keeps is-open until its fold has finished, because the answer
+   must stay visible while it shrinks -- so the x used to turn back into a + only AFTER the card
+   had shut. The script marks the card .closing on the click itself, and the mark turns back
+   right then, together with the fold. */
+.faq details.is-open:not(.closing) summary::after{transform:rotate(45deg)}
 .storyfold>summary{list-style:none;display:none}
 .storyfold>summary::-webkit-details-marker{display:none}
 @media (prefers-reduced-motion:reduce){.faq summary,.faq summary::after{transition:none}}
@@ -1891,6 +2296,23 @@ html{-webkit-tap-highlight-color:transparent}
   --gl:rgba(31,19,41,.8);--tk:#2B1B39;--kf:#2B1B39;--kn:#352345;--kb:#45305A;--knob:#F3EAF9;--fn:rgba(243,234,249,.3);--sh:rgba(0,0,0,.45)}
 .devdemo *{box-sizing:border-box}
 .devdemo,.devdemo *{transition:background-color .5s,color .5s,border-color .5s,box-shadow .5s}
+/* WHY (2026-11-13, speed pass): this drawing is 179 pieces that each fade four
+   colours whenever the look goes light<->dark. The intro does that twice while
+   the drawing is still invisible, so all of it was animating for nobody. */
+/* WHY the rule that stood here is gone (2026-11-13, traced). It read
+   `body.intro-mode .devdemo *{transition:none}`. A rule that starts at <body>
+   and ends in `*` makes the browser re-check EVERY element on the page when
+   the class leaves <body> -- 943 of them, in the very instant the page content
+   starts to rise (Destin: "the subsequent fade-up of the robot buttons and other
+   page content still lags/hitches just a bit"). It was also not needed: the
+   drawing is already parked with .dv-idle (below) until its card is on screen,
+   and the intro's colours no longer reach it at all (see .intro-scope). */
+/* WHY (same pass): each look brings its own font, so every word of the intro
+   re-flowed the whole hidden page in a new font. Until the intro ends the
+   hidden sections stay in the resting look's font (Outfit, YouCoded Light's:
+   keep in step with THEMES.youcoded.font) -- the font the intro finishes on,
+   so nothing has to be re-flowed when they appear. */
+body.intro-mode .hero-flank ~ section,body.intro-mode .hero-flank ~ footer{font-family:'Outfit', system-ui, sans-serif}
 .devdemo .abs{position:absolute}
 
 .devdemo .p1{left:0;top:0;width:42%;height:100%;overflow:hidden}
@@ -1958,7 +2380,8 @@ html{-webkit-tap-highlight-color:transparent}
 .devdemo .k.q{font-size:1.8cqw}
 .devdemo .k.e{background:var(--accent);color:var(--oa)}
 .devdemo .k .ic{width:3cqw;height:3cqw}
-.devdemo .l{animation:dvLit 7s var(--d) infinite}
+/* --kd, not --d: --d is the deck's registered scroll number (see @property --d). */
+.devdemo .l{animation:dvLit 7s var(--kd) infinite}
 .devdemo .tr{left:0;top:0;width:100%;height:100%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .7cqw var(--accent))}
 .devdemo .tr path{fill:none;stroke:var(--accent);stroke-linecap:round;stroke-linejoin:round}
 .devdemo .trail{stroke-width:11;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
@@ -1978,6 +2401,14 @@ html{-webkit-tap-highlight-color:transparent}
 @keyframes dvGen{0%,49.9%{opacity:.6}52%,91%{opacity:0}95%,100%{opacity:.6}}
 @keyframes dvGuess{0%,49.9%{opacity:0}52%,91%{opacity:1}95%,100%{opacity:0}}
 @keyframes dvBlink{50%{opacity:0}}
+/* WHY (2026-11-11, site speed pass): this drawing runs ~50 looping animations
+   (every lit key, the trail, the typed word) and they kept running for the whole
+   visit, wherever the page was scrolled -- re-styling the keyboard on every frame
+   behind whatever the visitor was actually doing. The deck script sets .dv-idle
+   whenever this card is not one of the ones playing (the same list that pauses
+   the video clips); clearing it restarts the loop from its first frame. */
+.devdemo.dv-idle *{animation:none!important}
+.devdemo.dv-idle,.devdemo.dv-idle *{transition:none!important}
 @media (prefers-reduced-motion:reduce){
  .devdemo *{animation:none!important}
  .devdemo .warm{opacity:.05}
@@ -1990,8 +2421,28 @@ html{-webkit-tap-highlight-color:transparent}
  .devdemo .l{background:color-mix(in srgb,var(--accent) 30%,var(--kf))}
 }
 
+
 </style></head>
-<body class="intro-mode fade-d pill-accent legend-on h1-md">
+<body class="intro-mode fade-d pill-accent legend-on h1-md iv2">
+<script>
+// WHY (Destin, 2026-11-13: after the intro the page "starts partway down").
+// On a reload the browser puts the page back where it was scrolled to, but the
+// intro plays as if from the top -- so it ended with the page already part-way
+// down. A reload now starts at the top, like a first visit. A link to a place
+// on the page (#faq) and the Back button are left alone.
+(function(){
+  try {
+    var n = performance.getEntriesByType('navigation')[0];
+    if (n && n.type === 'reload' && !location.hash) {
+      history.scrollRestoration = 'manual';
+      // Said again once the page has been read in and once it has been laid out:
+      // at this point the page is still empty, and the browser can move it after.
+      var top = function(){ scrollTo({ top: 0, behavior: 'instant' }); };
+      top(); document.addEventListener('DOMContentLoaded', top); addEventListener('load', top);
+    }
+  } catch (e) {}
+})();
+</script>
 
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
 
@@ -2005,12 +2456,14 @@ html{-webkit-tap-highlight-color:transparent}
 
 <header class="hero hero-centred hero-flank" id="top">
   <div class="wrap">
-    <p class="kicker">Free &middot; Easy &middot; <a href="https://github.com/itsdestin/youcoded/blob/master/LICENSE" target="_blank" rel="noopener">MIT</a></p>
+    <!-- WHY no "Free . Easy . MIT" line above the headline (Destin, 2026-11-13: "try
+         dropping 'free easy mit' entirely"). "Free" moved into the line under the
+         headline; the MIT licence is still linked in the footer and the FAQ. -->
     <div class="flankrow">
       <div class="mrow mrow-l">
 <button class="mascot" data-theme="youcoded" data-idle="float" data-acts="wave cheer" data-face="welcome"
   aria-label="Use the YouCoded Light look" style="--a:#8B47B8"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <defs>
 <clipPath id="c-body-youcoded"><path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z"/></clipPath>
 <radialGradient id="g-halo-youcoded" cx="50%" cy="55%" r="50%">
@@ -2057,10 +2510,10 @@ and feet (deck glass-buddy-2 GB2-1). -->
 </g>
 <g id="slot-hat-youcoded"/>
 </g></g>
-</svg><span class="m-name">YouCoded Light</span></button>
+</svg></span><span class="m-name">YouCoded Light</span></button>
 <button class="mascot" data-theme="meadow-mist" data-idle="breathe" data-acts="shrug nod" data-face="welcome"
   aria-label="Use the Meadow Mist look" style="--a:#2F7D55"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <!-- Sprout — meadow-mist's buddy. Generated by the theme-builder's build-mascot.mjs from
 this theme's palette, then decorated; the body, limbs and eight faces are the shared
 contract and never move. Approved 2026-09-06.
@@ -2104,7 +2557,7 @@ Contract: mascots/README.md (from the repo root) -->
 </g>
 <g id="slot-hat-meadow-mist"><path d="M12 4 L12 1.4" stroke="#2F7D55" stroke-width="0.45" stroke-linecap="round"/><path d="M12 2.4 Q9.4 2.2 9.6 0.2 Q11.9 0.4 12 2.4 Z" fill="#3F9A69"/><path d="M12 2 Q14.6 1.6 14.8 -0.4 Q12.2 -0.1 12 2 Z" fill="#2F7D55"/></g>
 </g></g>
-</svg><span class="m-name">Meadow Mist</span></button>
+</svg></span><span class="m-name">Meadow Mist</span></button>
 </div>
       <h1>Make Your Technology <span class="word-cycler" aria-label="Useful., Fun., Yours.">
         <!-- WHY: a zero-width space preserves the text baseline without invisible
@@ -2119,7 +2572,7 @@ Contract: mascots/README.md (from the repo root) -->
       <div class="mrow mrow-r">
 <button class="mascot" data-theme="halftone-dimension" data-idle="scan" data-acts="think startle" data-face="welcome"
   aria-label="Use the Halftone Dimension look" style="--a:#E51F48"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <!--
 Example rig: Halftone Dimension — the theme's shipped capsule buddy rebuilt to the rig
 contract. 2.5D-soft shading stack on the theme's ink-navy body, with the identity kept
@@ -2202,10 +2655,10 @@ Contract: mascots/README.md (from the repo root)
 </g>
 <g id="slot-hat-halftone-dimension"/>
 </g></g>
-</svg><span class="m-name">Halftone Dimension</span></button>
+</svg></span><span class="m-name">Halftone Dimension</span></button>
 <button class="mascot" data-theme="golden-sunbreak" data-idle="bob" data-acts="tada armwave" data-face="welcome"
   aria-label="Use the Golden Sunbreak look" style="--a:#ffc030"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <!--
 Example rig: Golden Sunbreak — the theme's shipped capsule buddy rebuilt to the rig
 contract in the 2.5D-soft skin (the skin's demo palette IS this theme's amber).
@@ -2279,10 +2732,10 @@ Contract: mascots/README.md (from the repo root)
 </g>
 <g id="slot-hat-golden-sunbreak"/>
 </g></g>
-</svg><span class="m-name">Golden Sunbreak</span></button>
+</svg></span><span class="m-name">Golden Sunbreak</span></button>
 </div>
     </div>
-    <p class="hero-sub">A fully customizable AI assistant and open-source everything app.</p>
+    <p class="hero-sub">A free, fully customizable AI assistant and open-source everything app.</p>
     <div class="dlrow">
         <a data-dl="dl-windows" class="dlbtn primary" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.75L10,11.9V5.21L20,3M3,13L9,13.09V19.9L3,18.75V13M20,13.25V22L10,20.09V13.1L20,13.25Z"/></svg><span>Windows</span></a>
         <a data-dl="dl-macos" class="dlbtn" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>macOS</span></a>
@@ -2304,6 +2757,16 @@ Contract: mascots/README.md (from the repo root)
         <a data-dl="dl-linux" class="dlchip" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19,16C19,17.72 18.37,19.3 17.34,20.5C17.75,20.89 18,21.41 18,22H6C6,21.41 6.25,20.89 6.66,20.5C5.63,19.3 5,17.72 5,16H3C3,14.75 3.57,13.64 4.46,12.91L4.47,12.89C6,11.81 7,10 7,8V7A5,5 0 0,1 12,2A5,5 0 0,1 17,7V8C17,10 18,11.81 19.53,12.89L19.54,12.91C20.43,13.64 21,14.75 21,16H19M16,16A4,4 0 0,0 12,12A4,4 0 0,0 8,16A4,4 0 0,0 12,20A4,4 0 0,0 16,16Z"/></svg><span>Linux</span></a>
         <a data-dl="dl-android" class="dlchip" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.44 5.56c-.68 1.16-1.36 2.33-2.03 3.5-.04-.02-.08-.03-.11-.04-1.83-.7-3.49-.8-4.42-.79-1.86.02-3.36.46-4.26.82-.09-.15-1.76-3.02-2.03-3.49a1.15 1.15 0 0 0-.14-.19c-.33-.36-.9-.49-1.38-.2-.47.28-.71.94-.39 1.5 1.95 3.37-.1-.22 1.95 3.36.02.03-.5.26-1.4 1.02C2.9 12.18.45 14.77 0 18.99h24c-.12-1.11-.37-2.1-.75-3.07-.74-1.91-1.84-3.29-2.74-4.18a12.1 12.1 0 0 0-2.13-1.69c.66-1.12 1.31-2.25 1.96-3.38.21-.36.19-.8-.01-1.12a1.1 1.1 0 0 0-.85-.53c-.52-.05-.94.31-1.05.54z"/></svg><span>Android</span></a>
         <a data-dl="dl-ios" class="dlchip" href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>iOS<sup>*</sup></span></a>
+        <!-- WHY: on phones the live demo opens on a page of its own (demo.html),
+             in the look the visitor picked. Destin chose it as a quiet button
+             INSIDE the download bar ("3 is good"): platform, Demo, chevron in one
+             bar, rather than a second pill beside it. Hidden on wide screens,
+             where the demo is on the page itself. -->
+        <a class="dlchip dldemo" href="demo.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11.2-6.86a1 1 0 0 0 0-1.72L9.5 4.28A1 1 0 0 0 8 5.14z"/></svg>Demo</a>
+        <!-- WHY (phones): on a phone the dock shows only the visitor's
+             own platform; this chevron opens the other four. Hidden on wide
+             screens, where all five chips are always in the pill. -->
+        <button class="dlmore" type="button" aria-expanded="false" aria-label="More platforms"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z"/></svg></button>
 <script>
 // Highlight the visitor's own platform as the primary download, on both the
 // docked pill (.dlbtn) and the footer chips (.dlchip). The old page did this
@@ -2334,7 +2797,7 @@ Contract: mascots/README.md (from the repo root)
 
 <!-- repositioning 2026-10-21 -->
 <section id="about"><div class="wrap">
-  <p class="eyebrow">What is this?</p><h2>One app. Whatever you want it to be.</h2>
+  <p class="eyebrow">What is this?</p><h2>Whatever you want it to be.</h2>
   <div class="panel prose">
     <p class="big">YouCoded is an AI assistant that does what you want, the way you want, with the screens and features you want. Hand it your files, your research and your writing. Ask it for a control panel for your house, a page for your money, or a game for a slow afternoon. Ask it to change its own look, give itself new features, or handle your requests in different ways. What exactly is YouCoded? That&rsquo;s for you to decide.</p>
     <div class="cols">
@@ -2475,26 +2938,28 @@ Contract: mascots/README.md (from the repo root)
      tag list, every description, the icons and the note are the originals;
      only the styling is new. Sits after the feature tour, before the story. -->
 <!-- integrations grid hidden 2026-10-21 (Destin): kept for later, not deleted -->
+<!-- WHY loading="lazy" on every icon below: this section is hidden, and a lazy image in a hidden
+     section is never downloaded. They were 16 requests on every visit for pictures nobody sees. -->
 <section id="integrations" hidden><div class="wrap">
   <p class="eyebrow">Integrations</p><h2>Connect your services.</h2>
   <div class="panel integrations">
     <p class="integrations-intro">With skills from the YouCoded marketplace, YouCoded can link with all of the following services:</p>
     <div class="integrations-tags">
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to Google Drive — keeping everything safe and synced across sessions."><img class="tag-icon" src="icons/google-drive.svg" alt="">Google Drive</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create, read, and edit documents — drafting cover letters, memos, reports, and more directly in Google Docs."><img class="tag-icon" src="icons/google-docs.svg" alt="">Google Docs</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and analyze spreadsheets — building trackers, organizing data, and working with structured information in Google Sheets."><img class="tag-icon" src="icons/google-sheets.svg" alt="">Google Sheets</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and edit slide decks and visual presentations in Google Slides."><img class="tag-icon" src="icons/google-slides.svg" alt="">Google Slides</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Google Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" src="icons/google-calendar.svg" alt="">Google Calendar</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies in Gmail — all without leaving the app."><img class="tag-icon" src="icons/gmail.svg" alt="">Gmail</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your SMS and RCS conversations and send texts on your behalf through Google Messages."><img class="tag-icon" src="icons/google-messages.svg" alt="">Google Messages</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can access your Apple Messages conversations and send texts through iMessage."><img class="tag-icon" src="icons/imessage.svg" alt="">iMessage</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to iCloud Drive — keeping everything safe and synced across sessions."><img class="tag-icon" src="icons/icloud.svg" alt="">iCloud</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your existing Apple Notes and create new ones for quick reference and capture."><img class="tag-icon" src="icons/apple-notes.svg" alt="">Apple Notes</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can add items to your Apple Reminders lists and help you keep track of things to do."><img class="tag-icon" src="icons/apple-reminders.svg" alt="">Apple Reminders</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Apple Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" src="icons/apple-calendar.svg" alt="">Apple Calendar</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies through Apple Mail."><img class="tag-icon" src="icons/apple-mail.svg" alt="">Apple Mail</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can manage your task list, process inbox items captured from your phone, create tasks from conversations, and help you stay on top of priorities."><img class="tag-icon" src="icons/todoist.svg" alt="">Todoist</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can receive marketplace updates and sync your configuration through GitHub, keeping your installation current with the latest features and fixes."><img class="tag-icon" src="icons/github.svg" alt="">GitHub</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to Google Drive — keeping everything safe and synced across sessions."><img class="tag-icon" loading="lazy" src="icons/google-drive.svg" alt="">Google Drive</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create, read, and edit documents — drafting cover letters, memos, reports, and more directly in Google Docs."><img class="tag-icon" loading="lazy" src="icons/google-docs.svg" alt="">Google Docs</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and analyze spreadsheets — building trackers, organizing data, and working with structured information in Google Sheets."><img class="tag-icon" loading="lazy" src="icons/google-sheets.svg" alt="">Google Sheets</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and edit slide decks and visual presentations in Google Slides."><img class="tag-icon" loading="lazy" src="icons/google-slides.svg" alt="">Google Slides</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Google Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" loading="lazy" src="icons/google-calendar.svg" alt="">Google Calendar</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies in Gmail — all without leaving the app."><img class="tag-icon" loading="lazy" src="icons/gmail.svg" alt="">Gmail</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your SMS and RCS conversations and send texts on your behalf through Google Messages."><img class="tag-icon" loading="lazy" src="icons/google-messages.svg" alt="">Google Messages</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can access your Apple Messages conversations and send texts through iMessage."><img class="tag-icon" loading="lazy" src="icons/imessage.svg" alt="">iMessage</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to iCloud Drive — keeping everything safe and synced across sessions."><img class="tag-icon" loading="lazy" src="icons/icloud.svg" alt="">iCloud</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your existing Apple Notes and create new ones for quick reference and capture."><img class="tag-icon" loading="lazy" src="icons/apple-notes.svg" alt="">Apple Notes</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can add items to your Apple Reminders lists and help you keep track of things to do."><img class="tag-icon" loading="lazy" src="icons/apple-reminders.svg" alt="">Apple Reminders</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Apple Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" loading="lazy" src="icons/apple-calendar.svg" alt="">Apple Calendar</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies through Apple Mail."><img class="tag-icon" loading="lazy" src="icons/apple-mail.svg" alt="">Apple Mail</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can manage your task list, process inbox items captured from your phone, create tasks from conversations, and help you stay on top of priorities."><img class="tag-icon" loading="lazy" src="icons/todoist.svg" alt="">Todoist</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can receive marketplace updates and sync your configuration through GitHub, keeping your installation current with the latest features and fixes."><img class="tag-icon" loading="lazy" src="icons/github.svg" alt="">GitHub</button>
     <!-- Chrome and Safari chips REMOVED 2026-09-03: both claimed "navigate websites,
          fill out forms, take screenshots". Nothing in the registry does browser
          automation -- measured: 0 hits for safari across the whole marketplace repo,
@@ -2502,7 +2967,7 @@ Contract: mascots/README.md (from the repo root)
          Control / Windows Control integrations, which drive the whole desktop, are
          permission-gated and are one-platform-each. Do not restore either chip
          without an integration behind it. -->
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can generate graphics, edit presentations, and work with visual content directly in Canva."><img class="tag-icon" src="icons/canva.svg" alt="">Canva</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can generate graphics, edit presentations, and work with visual content directly in Canva."><img class="tag-icon" loading="lazy" src="icons/canva.svg" alt="">Canva</button>
     <span class="integration-tag soon">More coming soon...</span>
     </div>
     <div class="integration-desc" id="integration-desc"></div>
@@ -2578,10 +3043,24 @@ Contract: mascots/README.md (from the repo root)
 
 // WHY: the website's resting palette is the shipped lavender YouCoded theme,
 // not the older grey `light` theme. site-theme.test.mjs pins these to its manifest.
-var THEMES = {"youcoded": {"name":"YouCoded Light","dark":false,"canvas":"#F7F0FB","panel":"#EFE3F6","accent":"#8B47B8","onAccent":"#FFFFFF","fg":"#21152C","fg2":"#43354E","dim":"#50415C","muted":"#5D4D69","edge":"#C9B0DB","radius":"24px","blur":16,"opacity":0.72,"font":"'Outfit', system-ui, sans-serif","fontUrl":null,"wall":"wall/youcoded.webp"}, "cotton-candy-sky": {"name": "Cotton Candy Sky", "dark": false, "canvas": "#FBF5FC", "panel": "#ECDDF0", "accent": "#8B47B8", "onAccent": "#FFFFFF", "fg": "#21152C", "fg2": "#41304D", "dim": "#564463", "muted": "#695775", "edge": "#B597C6", "radius": "22px", "blur": 16, "opacity": 0.7, "font": "'Comfortaa', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap", "wall": "wall/cotton-candy-sky.webp"}, "devils-garden": {"name": "Devil's Garden", "dark": true, "canvas": "#140810", "panel": "#221020", "accent": "#FFC627", "onAccent": "#140810", "fg": "#FBE9C9", "fg2": "#D8C299", "dim": "#BDA57C", "muted": "#A28E6D", "edge": "#7A3048", "radius": "16px", "blur": 14, "opacity": 0.72, "font": "'Space Grotesk', system-ui, sans-serif", "fontUrl": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap", "wall": "wall/devils-garden.webp"}, "golden-sunbreak": {"name": "Golden Sunbreak", "dark": true, "canvas": "#08080e", "panel": "#140e1a", "accent": "#ffc030", "onAccent": "#000000", "fg": "#F8E8C8", "fg2": "#DCC898", "dim": "#B09060", "muted": "#917950", "edge": "#3C3223", "radius": "24px", "blur": 18, "opacity": 0.72, "font": null, "fontUrl": null, "wall": "wall/golden-sunbreak.webp"}, "halftone-dimension": {"name": "Halftone Dimension", "dark": true, "canvas": "#08060e", "panel": "#100e1c", "accent": "#E51F48", "onAccent": "#ffffff", "fg": "#F0E8F8", "fg2": "#D4CAE4", "dim": "#A498C0", "muted": "#7468A0", "edge": "#372D56", "radius": "24px", "blur": 20, "opacity": 0.78, "font": null, "fontUrl": null, "gradient": "linear-gradient(135deg, #08060e 0%, #18102e 25%, #200e3a 50%, rgba(232,35,74,0.07) 70%, rgba(0,184,255,0.05) 85%, #08060e 100%)"}, "kuromi-dreamer": {"name": "Kuromi Dreamer", "dark": false, "canvas": "#C9B8E0", "panel": "#D4C5E6", "accent": "#8158ad", "onAccent": "#FFFFFF", "fg": "#190E27", "fg2": "#3A2850", "dim": "#543D6E", "muted": "#65507F", "edge": "#8466A8", "radius": "32px", "blur": 18, "opacity": 0.74, "font": "'Comfortaa', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap", "wall": "wall/kuromi-dreamer.webp"}, "meadow-mist": {"name": "Meadow Mist", "dark": false, "canvas": "#F6FAF5", "panel": "#DDE9DA", "accent": "#2F7D55", "onAccent": "#FFFFFF", "fg": "#041008", "fg2": "#1E3426", "dim": "#33493A", "muted": "#465B4E", "edge": "#8FB191", "radius": "14px", "blur": 22, "opacity": 0.58, "font": "'Nunito', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap", "wall": "wall/meadow-mist.webp"}, "strawberry-kitty": {"name": "Strawberry Kitty", "dark": false, "canvas": "#F8D7DE", "panel": "#FCE4E9", "accent": "#CC4060", "onAccent": "#FFFFFF", "fg": "#3A1420", "fg2": "#5C2235", "dim": "#7E3850", "muted": "#A26179", "edge": "#E09AA8", "radius": "32px", "blur": 4, "opacity": 0.3, "font": "'Comfortaa', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap", "wall": "wall/strawberry-kitty.webp"}, "midnight": {"name": "Midnight", "dark": true, "canvas": "#0D1117", "panel": "#161B22", "accent": "#88B4D8", "onAccent": "#0D1117", "fg": "#E6EDF3", "fg2": "#C9D1D9", "dim": "#8B949E", "muted": "#6E7681", "edge": "#30363D", "radius": "14px", "blur": 18, "opacity": 0.72, "gradient": "radial-gradient(1200px 700px at 20% -10%, #17283a 0%, transparent 60%), radial-gradient(900px 600px at 90% 10%, #101c2b 0%, transparent 55%), linear-gradient(#0D1117,#0A0E14)"}};
+var THEMES = {"youcoded": {"name":"YouCoded Light","dark":false,"canvas":"#F7F0FB","panel":"#EFE3F6","accent":"#8B47B8","onAccent":"#FFFFFF","fg":"#21152C","fg2":"#43354E","dim":"#50415C","muted":"#5D4D69","edge":"#C9B0DB","radius":"24px","blur":16,"opacity":0.72,"font":"'Outfit', system-ui, sans-serif","fontUrl":null,"wall":"wall/youcoded.webp"}, "cotton-candy-sky": {"name": "Cotton Candy Sky", "dark": false, "canvas": "#FBF5FC", "panel": "#ECDDF0", "accent": "#8B47B8", "onAccent": "#FFFFFF", "fg": "#21152C", "fg2": "#41304D", "dim": "#564463", "muted": "#695775", "edge": "#B597C6", "radius": "22px", "blur": 16, "opacity": 0.7, "font": "'Comfortaa', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap", "wall": "wall/cotton-candy-sky.webp"}, "devils-garden": {"name": "Devil's Garden", "dark": true, "canvas": "#140810", "panel": "#221020", "accent": "#FFC627", "onAccent": "#140810", "fg": "#FBE9C9", "fg2": "#D8C299", "dim": "#BDA57C", "muted": "#A28E6D", "edge": "#7A3048", "radius": "16px", "blur": 14, "opacity": 0.72, "font": "'Space Grotesk', system-ui, sans-serif", "fontUrl": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap", "wall": "wall/devils-garden.webp"}, "golden-sunbreak": {"name": "Golden Sunbreak", "dark": true, "canvas": "#08080e", "panel": "#140e1a", "accent": "#ffc030", "onAccent": "#000000", "fg": "#F8E8C8", "fg2": "#DCC898", "dim": "#B09060", "muted": "#917950", "edge": "#3C3223", "radius": "24px", "blur": 18, "opacity": 0.72, "font": null, "fontUrl": null, "wall": "wall/golden-sunbreak.webp"}, "halftone-dimension": {"name": "Halftone Dimension", "dark": true, "canvas": "#08060e", "panel": "#100e1c", "accent": "#E51F48", "onAccent": "#ffffff", "fg": "#F0E8F8", "fg2": "#D4CAE4", "dim": "#A498C0", "muted": "#7468A0", "edge": "#372D56", "radius": "24px", "blur": 20, "opacity": 0.78, "font": null, "fontUrl": null, "gradient": "linear-gradient(135deg, #08060e 0%, #18102e 25%, #200e3a 50%, rgba(232,35,74,0.07) 70%, rgba(0,184,255,0.05) 85%, #08060e 100%)", "pattern": "wall/halftone-dimension-pattern.svg", "patternOpacity": 0.12, "vignette": 0.3, "scanLines": true}, "kuromi-dreamer": {"name": "Kuromi Dreamer", "dark": false, "canvas": "#C9B8E0", "panel": "#D4C5E6", "accent": "#8158ad", "onAccent": "#FFFFFF", "fg": "#190E27", "fg2": "#3A2850", "dim": "#543D6E", "muted": "#65507F", "edge": "#8466A8", "radius": "32px", "blur": 18, "opacity": 0.74, "font": "'Comfortaa', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap", "wall": "wall/kuromi-dreamer.webp"}, "meadow-mist": {"name": "Meadow Mist", "dark": false, "canvas": "#F6FAF5", "panel": "#DDE9DA", "accent": "#2F7D55", "onAccent": "#FFFFFF", "fg": "#041008", "fg2": "#1E3426", "dim": "#33493A", "muted": "#465B4E", "edge": "#8FB191", "radius": "14px", "blur": 22, "opacity": 0.58, "font": "'Nunito', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap", "wall": "wall/meadow-mist.webp"}, "strawberry-kitty": {"name": "Strawberry Kitty", "dark": false, "canvas": "#F8D7DE", "panel": "#FCE4E9", "accent": "#CC4060", "onAccent": "#FFFFFF", "fg": "#3A1420", "fg2": "#5C2235", "dim": "#7E3850", "muted": "#A26179", "edge": "#E09AA8", "radius": "32px", "blur": 4, "opacity": 0.3, "font": "'Comfortaa', 'Cascadia Mono', monospace", "fontUrl": "https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap", "wall": "wall/strawberry-kitty.webp"}, "midnight": {"name": "Midnight", "dark": true, "canvas": "#0D1117", "panel": "#161B22", "accent": "#88B4D8", "onAccent": "#0D1117", "fg": "#E6EDF3", "fg2": "#C9D1D9", "dim": "#8B949E", "muted": "#6E7681", "edge": "#30363D", "radius": "14px", "blur": 18, "opacity": 0.72, "gradient": "radial-gradient(1200px 700px at 20% -10%, #17283a 0%, transparent 60%), radial-gradient(900px 600px at 90% 10%, #101c2b 0%, transparent 55%), linear-gradient(#0D1117,#0A0E14)"}};
 var order = Object.keys(THEMES);
 var bdA = document.getElementById('bd-a'), bdB = document.getElementById('bd-b'), useA = true;
 var fontLinks = {};
+var embedSyncTicket = 0;
+// --- Pictures a theme needs, fetched ahead of the click (2026-11-11) -----------
+// keep[] holds every preloaded Image so the browser keeps it in memory: a picture
+// that is only in the disk cache still costs a round trip to the server to check.
+var keep = [], wallJobs = {}, wallDone = {}, fadeTicket = 0;
+function wallReady(src){
+  if (!wallJobs[src]) {
+    var img = new Image(); img.decoding = 'async'; img.src = src; keep.push(img);
+    var done = function(){ wallDone[src] = 1; };
+    wallJobs[src] = (img.decode ? img.decode() : new Promise(function(ok){ img.onload = img.onerror = ok; }))
+      .then(done, done);
+  }
+  return wallJobs[src];
+}
 function backdropCss(t){
   if (t.gradient) return t.gradient;
   if (t.wall) return 'url("' + t.wall + '")';
@@ -2612,9 +3091,41 @@ var BRAND = {
 // Chrome re-reads the <link> on href change; swapping the whole element is not
 // needed and flickers. docs/brand/default-32.png is the resting state a
 // bookmark or a crawler gets.
-function setBrand(slug, t){
+// WHY introScope (2026-11-13): see the note beside `.intro-scope` in the styles.
+// While the intro plays its own words, a look's colours are written on the bar
+// at the top and the headline row (the only things on screen) instead of the
+// page's root, so the hidden page is not re-styled for every word. The intro
+// ends on the look the root already wears, so at the last word the two elements
+// simply drop their own copies (clearIntroScope) and take the root's again.
+var introScope = null, introScopeProps = {};
+function themeTargets(scoped){
+  var root = [document.documentElement];
+  if (!scoped || !document.body.classList.contains('intro-mode')) return root;
+  if (!introScope) {
+    // WHY the headline row's CHILDREN and not the row itself: the row is the
+    // element that glides back up when the intro ends, so the browser re-works
+    // its style at that moment -- and if the colours sat on it, everything
+    // inside it (about 400 pieces: the robots are drawings) was re-worked too.
+    introScope = [].slice.call(document.querySelectorAll('.nav, .flankrow > *'));
+    introScope.forEach(function(el){ el.classList.add('intro-scope'); });
+  }
+  return introScope.length ? introScope : root;
+}
+function setThemeVar(targets, name, value){
+  if (targets === introScope) introScopeProps[name] = 1;
+  targets.forEach(function(el){ el.style.setProperty(name, value); });
+}
+function clearIntroScope(){
+  if (!introScope) return;
+  introScope.forEach(function(el){
+    Object.keys(introScopeProps).forEach(function(name){ el.style.removeProperty(name); });
+    el.classList.remove('intro-scope');
+  });
+  introScope = null; introScopeProps = {};
+}
+function setBrand(slug, t, targets){
   var b = BRAND[slug] || BRAND['cotton-candy-sky'];
-  var r = document.documentElement.style;
+  var r = { setProperty: function(n, v){ setThemeVar(targets || [document.documentElement], n, v); } };
   r.setProperty('--wm-a', b.a); r.setProperty('--wm-b', b.b);
   r.setProperty('--wm-ink', t.dark ? t.fg : b.ink);
   r.setProperty('--wm-tag', t.dark ? t.dim : '#8a7b96');
@@ -2622,9 +3133,11 @@ function setBrand(slug, t){
   var link = document.getElementById('favicon');
   if (link) link.setAttribute('href', 'brand/' + b.icon + '-32.png');
 }
-function applyTheme(slug){
+function applyTheme(slug, scoped){
   var t = THEMES[slug]; if(!t) return;
-  var r = document.documentElement.style;
+  // `scoped` is passed only by the intro's own word steps (see introScope).
+  var targets = themeTargets(scoped);
+  var r = { setProperty: function(n, v){ setThemeVar(targets, n, v); } };
   // Panels are rgba() built from the theme's own panel colour + its own
   // panels-opacity, so the site is made of the same material as the app.
   r.setProperty('--panel-rgb', rgb(t.panel));
@@ -2643,7 +3156,15 @@ function applyTheme(slug){
   // holding prose get a readability FLOOR; frames keep the theme's real numbers.
   r.setProperty('--panel-op-prose', Math.max(t.opacity, 0.80));
   r.setProperty('--blur-prose', Math.max(t.blur, 16) + 'px');
-  document.documentElement.setAttribute('data-dark', t.dark ? '1' : '0');
+  if (targets === introScope) {
+    // The root's light/dark switch sets these two; during the intro the root is
+    // left alone, so give the two visible elements the same pair directly
+    // (keep in step with html[data-dark] at the top of the styles).
+    r.setProperty('--glass-hi', t.dark ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.55)');
+    r.setProperty('--ink', t.dark ? 'rgba(0,0,0,.42)' : 'rgba(255,255,255,.34)');
+  } else {
+    document.documentElement.setAttribute('data-dark', t.dark ? '1' : '0');
+  }
   // Load the theme's own webfont, exactly like the app does.
   if (t.fontUrl && !fontLinks[t.fontUrl]) {
     var l = document.createElement('link'); l.rel='stylesheet'; l.href=t.fontUrl;
@@ -2651,10 +3172,53 @@ function applyTheme(slug){
   }
   r.setProperty('--font-theme', t.font || "'DM Sans', system-ui, sans-serif");
   // Crossfade the wallpaper between two stacked layers so it never flashes.
-  var next = useA ? bdB : bdA, cur = useA ? bdA : bdB;
-  next.style.background = backdropCss(t);
-  next.style.backgroundSize = 'cover'; next.style.backgroundPosition = 'center';
-  next.style.opacity = 1; cur.style.opacity = 0; useA = !useA;
+  // WHY the wait (2026-11-11, site speed pass): the fade used to start at once,
+  // so a wallpaper that was still downloading or decoding faded in as a blank
+  // layer and then drew itself in strips. Now the picture is fetched and decoded
+  // first (normally already done by warmThemes(), below) and the fade starts on
+  // a finished image. The cap keeps a slow connection from holding the old
+  // wallpaper for long; `fadeTicket` drops a fade that a newer click replaced.
+  var ticket = ++fadeTicket;
+  var flip = function(){
+    if (ticket !== fadeTicket) return;
+    fadeTicket++;                      // the cap and the decode both call this; first one wins
+    var next = useA ? bdB : bdA, cur = useA ? bdA : bdB;
+    // WHY the tint is painted INTO the layer (traced 2026-11-12): it used to be
+    // a separate element (.bd-scrim), a gradient built from a colour variable,
+    // and browsers do not fade gradients -- so on every theme change the whole
+    // window's tint SNAPPED to the new theme in one frame while the wallpaper
+    // under it took .65s to follow. As part of the layer it rides the same
+    // opacity crossfade, which the graphics card does without redrawing.
+    var tint = rgb(t.canvas);
+    // WHY the theme's own extras are drawn too (Destin, 2026-11-13: the page's
+    // Halftone background "looks VERY sad/flat" next to the app's). The app does
+    // not show Halftone Dimension as a bare gradient: it lays the theme's
+    // halftone dot pattern over it (one tile as tall as the window, repeated
+    // sideways, at the theme's own 12% strength), darkens the corners and adds
+    // faint scan lines. The page only ever drew the gradient, and then washed it
+    // with the tint that keeps text readable over PHOTO wallpapers -- which a
+    // dark gradient does not need, so it gets a much lighter one. The numbers
+    // and the picture are the theme's own (its manifest and assets/pattern.svg),
+    // written the way the app's theme-engine.ts writes them.
+    var soft = !!t.gradient;
+    var stack = [];
+    if (t.scanLines) stack.push('repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(0,0,0,.012) 1px, rgba(0,0,0,.012) 2px)');
+    if (t.vignette) stack.push('radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,' + t.vignette + ') 100%)');
+    stack.push(soft
+      ? 'linear-gradient(rgba(' + tint + ',0), rgba(' + tint + ',.22) 55%, rgba(' + tint + ',.5))'
+      : 'linear-gradient(rgba(' + tint + ',.30), rgba(' + tint + ',.62) 55%, rgba(' + tint + ',.86))');
+    stack.push(backdropCss(t));
+    next.style.background = stack.join(', ');
+    // The pattern is a separate layer INSIDE this one (see .bd-layer::after), so
+    // it can carry its own strength and still ride the same crossfade.
+    next.style.setProperty('--bd-pattern', t.pattern ? 'url("' + t.pattern + '")' : 'none');
+    next.style.setProperty('--bd-pattern-op', t.pattern ? (t.patternOpacity || 0.06) : 0);
+    next.style.backgroundSize = 'cover'; next.style.backgroundPosition = 'center';
+    next.style.opacity = 1; cur.style.opacity = 0; useA = !useA;
+  };
+  var ready = t.wall && !t.gradient ? wallReady(t.wall) : null;
+  if (ready && !wallDone[t.wall]) { ready.then(flip); setTimeout(flip, 450); }
+  else flip();
   // '.mascot' is the 2026-08-30 mascot picker; '.sw' the older colour swatches.
   document.querySelectorAll('[data-now]').forEach(function(n){ n.textContent = t.name; });
   document.querySelectorAll('.sw, .mascot').forEach(function(s){
@@ -2662,29 +3226,129 @@ function applyTheme(slug){
     s.classList.toggle('on', on);
     s.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  setBrand(slug, t);
+  setBrand(slug, t, targets);
   try { localStorage.setItem('yc-mock-theme', slug); } catch(e){}
   // The demo is the real app's interface, and it keeps its theme under this
   // key (same origin, so we share storage): set it before boot, sync it after.
   currentTheme = slug;
   try { localStorage.setItem('youcoded-theme', slug); } catch(e){}
-  syncEmbedTheme();
+  // WHY deferred (2026-11-11, site speed pass): the live demo is the whole app
+  // running in this page's own thread, and re-theming it took 25-90ms -- spent
+  // INSIDE the click, before the page could show any response, and again as a
+  // stall in the middle of the page's own half-second colour fade. The page now
+  // changes first and the demo follows on the very next frame.
+  // WHY one frame and not longer (Destin, 2026-11-11: "still a noticeable delay
+  // between clicking a new theme chip and the embedded demo/image changing").
+  // The first version waited 520ms, until the page's fade had finished; that
+  // read as the demo lagging behind. Waiting for one painted frame keeps the
+  // click's own response instant and puts the demo a few hundredths of a second
+  // behind it -- the cost is a brief stall early in the page's colour fade.
+  // The timer inside the frame callback is what guarantees the page has
+  // painted first. A second click before then replaces the first.
+  var syncTicket = ++embedSyncTicket;
+  requestAnimationFrame(function(){ setTimeout(function(){
+    if (syncTicket === embedSyncTicket) syncEmbedTheme();
+  }, 0); });
+  // WHY skipped during the intro (measured 2026-11-12): the demo
+  // window is invisible, yet every word swapped its still picture (a decode of
+  // a large image nobody can see) and re-measured its rounded mask, which
+  // forces the browser to restyle the whole page on the spot -- 14-45ms of
+  // stall at the exact moment each word's slide begins. Both now wait for the
+  // intro's end (the listener just below), when the demo is about to appear.
+  if (document.body.classList.contains('intro-mode')) {
+    rethemeClips(slug);
+    return;
+  }
   setEmbedPoster();
   rethemeClips(slug);
   if (typeof maskEmbed === 'function') maskEmbed();
 }
+document.addEventListener('yc:intro-end', function(){
+  setEmbedPoster();
+  if (typeof maskEmbed === 'function') maskEmbed();
+});
 // --- Per-theme clips (2026-10-21): media/<name>--<theme>.webm for each of the four site themes.
 var CLIP_THEMES = ['youcoded', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
+// WHY rewritten (2026-11-11, site speed pass). Every theme change used to reload
+// all ten clips on the spot -- ten pictures and up to ten video files requested
+// at the moment of the click, three times over during the opening intro alone
+// (measured: 74 media requests before the visitor had touched anything). Now:
+//   * during the intro nothing is touched: the clips are far below the fold and
+//     the intro ends on the theme the markup already carries;
+//   * a theme change swaps every clip's still picture (already in memory, see
+//     warmThemes) and reloads only the clips that are PLAYING;
+//   * every other clip goes back to "not fetched" and picks up the new theme's
+//     file through warm(), the same door it always used, when it comes near.
+var clipTheme = CLIP_THEMES[0];
+function clipBase(v){ return 'media/' + v.dataset.clip + '--' + clipTheme; }
 function rethemeClips(slug){
-  var theme = CLIP_THEMES.indexOf(slug) >= 0 ? slug : CLIP_THEMES[0];
+  clipTheme = CLIP_THEMES.indexOf(slug) >= 0 ? slug : CLIP_THEMES[0];
+  if (document.body.classList.contains('intro-mode')) return;   // re-run at yc:intro-end
+  var cooled = false;
   document.querySelectorAll('video[data-clip]').forEach(function(v){
-    var base = 'media/' + v.dataset.clip + '--' + theme;
-    var s = v.querySelector('source'); if (!s || s.getAttribute('src') === base + '.webm') return;
+    var base = clipBase(v);
+    var s = v.querySelector('source'); if (!s) return;
+    if (v.getAttribute('poster') !== base + '.webp') v.setAttribute('poster', base + '.webp');
+    if (s.getAttribute('src') === base + '.webm') return;
     var running = !v.paused && !v.ended;
-    v.setAttribute('poster', base + '.webp'); s.setAttribute('src', base + '.webm');
-    v.load(); if (running) v.play().catch(function(){});
+    if (running) { s.setAttribute('src', base + '.webm'); v.load(); v.play().catch(function(){}); return; }
+    if (v.dataset.warm) {
+      // Fetched for the old theme but not playing: forget it. load() with
+      // preload="none" drops the old file and downloads nothing.
+      delete v.dataset.warm; v.preload = 'none';
+      s.setAttribute('src', base + '.webm'); v.load(); cooled = true;
+    }
+    // Never fetched: leave its <source> alone. warm() points it at the right
+    // file at the moment it would have started downloading anyway.
   });
+  // Let the deck re-warm whichever cooled clips are near the window right now.
+  if (cooled) setTimeout(function(){ dispatchEvent(new Event('scroll')); }, 0);
 }
+document.addEventListener('yc:intro-end', function(){ rethemeClips(currentTheme); });
+
+// --- Background fetch of the other themes' pictures (2026-11-11) ---------------
+// Destin: "things being loaded in the background instead of on click". Once the
+// intro is over and the browser is idle, fetch what a mascot click would need:
+// each picker theme's wallpaper, logo, demo still and clip stills. One at a time
+// and at low priority so it never competes with what the visitor is looking at.
+// Skipped on a data-saver or 2g/3g connection, where a click loads on demand as before.
+function warmThemes(){
+  var c = navigator.connection || {};
+  if (c.saveData || /(^|-)(2g|3g)$/.test(c.effectiveType || '')) return;
+  // On mobile data fetch only the small, certain-to-be-seen pictures (wallpaper,
+  // logo, demo still); the thirty clip stills (~1.5MB) load on demand as before.
+  var lean = c.type === 'cellular';
+  var first = [], later = [];
+  var layout = posterPhoneMQ.matches ? 'phone' : 'desktop';
+  [].slice.call(document.querySelectorAll('.mascot')).forEach(function(m){
+    var slug = m.dataset.theme, t = THEMES[slug], b = BRAND[slug];
+    // The theme on show is included on purpose: its pictures are already
+    // downloaded, and holding them here keeps them in memory for the click BACK.
+    if (!t) return;
+    if (t.wall && !t.gradient) first.push({ wall: t.wall });
+    if (b) { first.push('brand/' + b.icon + '-128.png'); first.push('brand/' + b.icon + '-32.png'); }
+    if (POSTER_THEMES.indexOf(slug) >= 0) first.push('media/embed-' + layout + '-' + slug + '.webp');
+    if (!lean && CLIP_THEMES.indexOf(slug) >= 0) document.querySelectorAll('video[data-clip]').forEach(function(v){
+      later.push('media/' + v.dataset.clip + '--' + slug + '.webp');
+    });
+  });
+  var queue = first.concat(later), seen = {};
+  (function next(){
+    var item = queue.shift(); if (!item) return;
+    if (item.wall) { wallReady(item.wall).then(next); return; }
+    if (seen[item]) return next(); seen[item] = 1;
+    var img = new Image(); img.decoding = 'async';
+    try { img.fetchPriority = 'low'; } catch (e) {}
+    img.onload = img.onerror = function(){ setTimeout(next, 0); };
+    img.src = item; keep.push(img);
+  })();
+}
+document.addEventListener('yc:intro-end', function(){
+  var go = function(){ (window.requestIdleCallback || setTimeout)(warmThemes, { timeout: 2500 }); };
+  // After the intro's own motion (0.62s exit) and never before the page's load event.
+  var arm = function(){ setTimeout(go, 1200); };
+  if (document.readyState === 'complete') arm(); else addEventListener('load', arm, { once: true });
+}, { once: true });
 
 
 // The still in the demo window is a picture of the app IN THE THEME THE PAGE IS
@@ -2718,14 +3382,32 @@ addEventListener('resize', setEmbedPoster);
 (function(){
   var gal = document.querySelector('.gal');
   if (!gal) return;
+  // Round arrow buttons for a plain mouse (see .galnav in the stylesheet).
+  var wrap = gal.parentNode, CHEV = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z"/></svg>';
+  function arrow(cls, label, dir){
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'galnav ' + cls;
+    b.setAttribute('aria-label', label); b.innerHTML = CHEV;
+    b.addEventListener('click', function(){
+      var card = gal.querySelector('.idea, img'), step = card ? card.getBoundingClientRect().width + 16 : 436;
+      gal.scrollBy({ left: dir * step, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    });
+    wrap.appendChild(b); return b;
+  }
+  var prev = arrow('prev', 'Previous pictures', -1), next = arrow('next', 'More pictures', 1);
   function fade(){
-    var max = gal.scrollWidth - gal.clientWidth;
-    gal.style.setProperty('--fade-l', (gal.scrollLeft > 8 ? 72 : 0) + 'px');
-    gal.style.setProperty('--fade-r', (gal.scrollLeft < max - 8 ? 72 : 0) + 'px');
+    var max = gal.scrollWidth - gal.clientWidth, x = gal.scrollLeft;
+    // Each end fades by exactly as much as is left to scroll that way, up to 72px.
+    gal.style.setProperty('--fade-l', Math.max(0, Math.min(72, x)) + 'px');
+    gal.style.setProperty('--fade-r', Math.max(0, Math.min(72, max - x)) + 'px');
+    prev.disabled = x < 8; next.disabled = x > max - 8;
   }
   gal.addEventListener('scroll', fade, { passive: true });
   addEventListener('resize', fade);
-  fade();
+  // WHY not straight away (2026-11-13, speed pass): measuring the scroller here
+  // made the browser lay the whole page out on the spot, in the middle of
+  // loading (53ms with the processor slowed 4x), for a strip that is far below
+  // the first screen and hidden under the intro. It waits for a quiet moment.
+  (window.requestIdleCallback || function(f){ setTimeout(f, 300); })(fade);
   // The screenshots are lazy-loaded, so scrollWidth is wrong until they land.
   gal.querySelectorAll('img').forEach(function(i){ i.addEventListener('load', fade); });
 })();
@@ -2906,8 +3588,9 @@ var DOCK_GAP = 34;
 // WHY: the bottom-edge anchor kept the demo blended after its top was leaving
 // the viewport. Start before the top reaches the viewport and finish the 180px
 // reveal while the complete window remains visible, without rebuilding its mask.
-var FADE_REVEAL_START = 240;
-var FADE_REVEAL_SPAN = 180;
+// FADE_REVEAL_END: the window's distance from the top of the screen at which the
+// dissolve is fully gone (unchanged: the old 240px start minus its 180px span).
+var FADE_REVEAL_END = 60;
 var demoRevealed = false, lastFz = null;
 // Below 820px the pill is not a floating object at all -- it sits in the flow
 // under the demo. The docked rule is `body.fade-d .dlfloat.docked`, which
@@ -2919,7 +3602,11 @@ var demoRevealed = false, lastFz = null;
 // two fifths of the window and page text scrolled visibly through it (found
 // 2026-09-03). 520px of height is the floor -- every laptop clears it, no
 // landscape phone does.
-var wideMQ = matchMedia('(min-width: 821px) and (min-height: 480px)');
+var wideMQ = matchMedia('(min-width: 1021px) and (min-height: 480px)');
+// WHY 1021 (2026-11-13): below that the downloads are the bottom dock (see THE
+// DOWNLOAD DOCK in the stylesheet), so the wide pill's docking, width lock and
+// dissolve all stand down. dockMQ is where the dock is in use.
+var dockMQ = matchMedia('(max-width: 1020px)');
 // The phone layout (see the <=760px block in the stylesheet). Anything
 // scroll-driven, anything that boots a megabyte, and anything that measures
 // a pill nobody can see is gated on this.
@@ -2929,6 +3616,92 @@ var phoneMQ = matchMedia('(max-width: 760px)');
 // same height, which stops being true the moment this page single-columns any of
 // them -- and it already does that at 1000.
 var narrowMQ = matchMedia('(max-width: 1000px)');
+// WHY: things that live in different places on a phone are MOVED there, never
+// copied, so there is one set of robots and buttons to keep right. Runs before
+// the intro reveals the page, so nothing is seen to jump.
+var capEl = null, leadText = 'Make Your Technology ';
+function seatPhone(){
+  // On a phone the headline row holds the headline ALONE (so the intro centres
+  // just the type), and the four robots move into one glass bar under it.
+  // Wider than a phone they go straight back either side of the word.
+  var sub = document.querySelector('.hero-flank .hero-sub'), ml = document.querySelector('.mrow-l'),
+      mr = document.querySelector('.mrow-r'), fl = document.querySelector('.hero-flank .flankrow'),
+      h1 = fl && fl.querySelector('h1');
+  if (!sub || !ml || !mr || !h1) return;
+  if (phoneMQ.matches) {
+    if (!capEl) {
+      capEl = document.createElement('div'); capEl.className = 'robocap';
+      capEl.setAttribute('role', 'group'); capEl.setAttribute('aria-label', 'Themes');
+    }
+    if (capEl.parentNode !== sub.parentNode || capEl.previousElementSibling !== sub) sub.after(capEl);
+    capEl.appendChild(ml); capEl.appendChild(mr);
+  } else if (capEl && capEl.parentNode) {
+    fl.insertBefore(ml, h1); fl.appendChild(mr);
+    capEl.remove();
+  }
+  // WHY the words are split here and not in the markup: on a phone each word
+  // of the headline stands on its own line (a .pw span each). Split in the
+  // markup, the wide headline's letters shifted by a fraction of a pixel
+  // (measured), so wide screens keep the original single text run.
+  // WHY "Your" is skipped: Destin, 2026-11-12 -- on phones the headline reads
+  // "Make Technology ___". Wide screens keep "Make Your Technology ___"; the
+  // original wording is remembered in leadText and put back when widening.
+  var lead = h1.firstChild;
+  if (phoneMQ.matches && lead && lead.nodeType === 3 && lead.nodeValue.trim()) {
+    leadText = lead.nodeValue;
+    var frag = document.createDocumentFragment();
+    lead.nodeValue.trim().split(/\s+/).filter(function(w){ return w !== 'Your'; }).forEach(function(w){
+      var sp = document.createElement('span'); sp.className = 'pw'; sp.textContent = w;
+      frag.appendChild(sp); frag.appendChild(document.createTextNode(' '));
+    });
+    h1.replaceChild(frag, lead);
+  } else if (!phoneMQ.matches && h1.querySelector('.pw')) {
+    while (h1.firstChild && h1.firstChild !== h1.querySelector('.word-cycler')) h1.removeChild(h1.firstChild);
+    h1.insertBefore(document.createTextNode(leadText), h1.firstChild);
+  }
+}
+seatPhone();
+if (phoneMQ.addEventListener) phoneMQ.addEventListener('change', function(){ seatPhone(); placeFloat(); });
+// The demo page opens in the look the visitor has picked here.
+var demoChip = document.querySelector('.dldemo');
+if (demoChip) demoChip.addEventListener('click', function(e){
+  // On a phone the demo opens on its own page. On an in-between window the demo
+  // is on this page (the desktop layout), so the same button starts it here.
+  if (!phoneMQ.matches) { e.preventDefault(); activateDemo(); return; }
+  demoChip.href = 'demo.html#t=' + currentTheme;
+});
+// --- PHONE DOCK: the chevron opens the dock into a
+// card with every platform; the dock steps aside while the footer shows.
+(function(){
+  var more = dlFloat && dlFloat.querySelector('.dlmore');
+  function setOpen(on){
+    if (!more) return;
+    dlFloat.classList.toggle('open', on);
+    more.setAttribute('aria-expanded', on ? 'true' : 'false');
+  }
+  if (more) {
+    more.addEventListener('click', function(e){ e.stopPropagation(); setOpen(!dlFloat.classList.contains('open')); });
+    // A tap anywhere else closes it again.
+    document.addEventListener('click', function(e){
+      if (dlFloat.classList.contains('open') && !dlFloat.contains(e.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape') setOpen(false); });
+    // The demo page's "Download" link points at #download; on a phone that
+    // section is gone, so open the dock instead.
+    if (dockMQ.matches && location.hash === '#download') setOpen(true);
+  }
+  var foot = document.querySelector('footer'), queued = false;
+  function dockPass(){
+    queued = false;
+    if (!dlFloat) return;
+    var away = dockMQ.matches && !!foot && foot.getBoundingClientRect().top < innerHeight;
+    dlFloat.classList.toggle('p-away', away);
+    if (away) setOpen(false);
+  }
+  addEventListener('scroll', function(){ if (!queued) { queued = true; requestAnimationFrame(dockPass); } }, { passive: true });
+  addEventListener('resize', dockPass);
+  dockPass();
+})();
 function placeFloat(){
   if (!dlFloat || !heroApp || getComputedStyle(dlFloat).display === 'none') return;
   if (!wideMQ.matches) { dlFloat.classList.remove('docked', 'hidden'); return; }
@@ -2945,8 +3718,19 @@ function placeFloat(){
   // --- Heal the dissolve before the complete demo starts leaving the viewport.
   if (!demoRevealed && embed && maskRest < 1) {
     var er = embed.getBoundingClientRect();
-    var k = Math.max(0, Math.min(1, ((FADE_REVEAL_START - er.top) / FADE_REVEAL_SPAN)));
-    k = k * k * (3 - 2 * k);                                // ease in AND out
+    // WHY linear, from the window's resting spot (Destin, 2026-11-11: "a slightly
+    // odd/finicky acceleration ... compared to the actual scroll speed"). This
+    // used to ignore the first ~55px of scrolling, then run an ease-in-and-out
+    // curve over the next 180px -- measured, the dissolve's edge sat still, sped
+    // up to about 3.4px per pixel scrolled, then slowed again, so it visibly
+    // moved on its own clock. Now it starts with the first pixel of scroll and
+    // moves the same amount for every pixel (about 1.7px per pixel at 1600 wide),
+    // finishing at the same place as before. restTop is where the window sits
+    // with the page at the top; the 120px floor only matters on a window so
+    // short that the demo already starts near the top bar.
+    var restTop = er.top + scrollY;
+    var span = Math.max(120, restTop - FADE_REVEAL_END);
+    var k = Math.max(0, Math.min(1, (FADE_REVEAL_END + span - er.top) / span));
     var fz = maskRest + (1 - maskRest) * k;
     // Quantised only enough to skip sub-pixel writes. The old 0.012 step moved
     // the gradient's start by 8px at a time on a 672px window, which is what
@@ -2992,14 +3776,25 @@ function lockPillWidth(){
   // Narrow layout wraps the chips onto several lines, so a pinned width there
   // would fight the wrap instead of steadying anything.
   if (!wideMQ.matches) { boxes.forEach(function(b){ b.style.width = ''; }); return; }
-  var root = document.documentElement, saved = root.style.getPropertyValue('--font-theme');
+  // WHY measured on hidden COPIES (2026-11-13, speed pass). This used to switch
+  // the whole page's font four times and measure after each, so the browser
+  // re-styled and re-flowed the entire page four times in a row (measured: 200ms
+  // with the processor slowed 4x). It runs when the web fonts finish arriving,
+  // which on a slow connection is in the middle of the intro. The copies sit off
+  // screen inside the pill's own row, so only they are re-flowed.
+  var rig = document.createElement('div');
+  rig.setAttribute('aria-hidden', 'true');
+  rig.style.cssText = 'position:absolute;left:-9999px;top:0;display:flex;visibility:hidden;pointer-events:none';
+  var copies = boxes.map(function(b){ var c = b.cloneNode(true); c.style.width = ''; c.removeAttribute('id'); rig.appendChild(c); return c; });
+  dlFloat.appendChild(rig);
   var max = boxes.map(function(){ return 0; });
   PICKER_SLUGS.forEach(function(slug){
     var t = THEMES[slug]; if (!t) return;
-    root.style.setProperty('--font-theme', t.font || "'DM Sans', system-ui, sans-serif");
-    boxes.forEach(function(b, i){ var w = b.getBoundingClientRect().width; if (w > max[i]) max[i] = w; });
+    rig.style.setProperty('--font-theme', t.font || "'DM Sans', system-ui, sans-serif");
+    rig.style.fontFamily = 'var(--font-theme)';
+    copies.forEach(function(c, i){ var w = c.getBoundingClientRect().width; if (w > max[i]) max[i] = w; });
   });
-  if (saved) root.style.setProperty('--font-theme', saved); else root.style.removeProperty('--font-theme');
+  dlFloat.removeChild(rig);
   boxes.forEach(function(b, i){
     if (max[i] > 0) { b.style.width = Math.ceil(max[i]) + 'px'; b.style.justifyContent = 'center'; }
   });
@@ -3032,7 +3827,7 @@ function activateDemo(){
   // WHY: after a visitor chooses the app, the decorative dissolve must not hide
   // any part of the surface they are about to use.
   embedFade = 1; setFadeStop(1); placeFloat();
-  if (!wideMQ.matches || demoActivated) return;
+  if (phoneMQ.matches || demoActivated) return;
   demoActivated = true;
   var er = embed.getBoundingClientRect();
   scrollTo({
@@ -3060,15 +3855,33 @@ if (embed) {
     // just short at rest), so D1's demo sat on its dark poster until the
     // visitor scrolled. Fire instead when any part of it reaches the middle
     // band of the window.
+    // WHY the demo now starts when the pointer first reaches it, not on its own
+    // (2026-11-13, speed pass). The demo is the whole app, and it runs in this
+    // page's own thread: starting it froze the page for 650ms plus three more
+    // stalls of 90-140ms (measured with the processor slowed 4x), about a
+    // second after the intro -- right when a visitor starts to scroll or click.
+    // Every desktop visitor paid that, and a 3MB download, whether or not they
+    // ever tried the demo. Until it starts, the window shows its still picture,
+    // which is a photograph of the same app in the same look, so the page looks
+    // the same. Moving the pointer onto the window or onto "Try Demo" starts
+    // it; so does a click or keyboard focus, as before.
     var armAutoBoot = function(){
-      new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) bootEmbed(); }); }, { rootMargin: '-20' + String.fromCharCode(37) + ' 0px -20' + String.fromCharCode(37) + ' 0px', threshold: 0 }).observe(embed);
+      var hosts = [document.querySelector('.hero-app'), tryPill].filter(Boolean);
+      var go = function(){
+        hosts.forEach(function(h){ h.removeEventListener('pointerenter', go); h.removeEventListener('focusin', go); });
+        bootEmbed();
+      };
+      hosts.forEach(function(h){ h.addEventListener('pointerenter', go); h.addEventListener('focusin', go); });
     };
-    // WHY wait for the intro (2026-09-11): the embed sits in that middle band
-    // while it is still invisible under the intro, so the whole app booted at
-    // once -- measured 175-215ms freezes just before "Useful.", 60ms ones on
-    // "Fun." and "Yours.", and its script competing with the intro's wallpapers
-    // for the connection. It now boots once the page has risen into place (the
-    // rise is a .1s delay plus .62s). "Try Demo" still boots it immediately.
+    // The big "Try the demo" button in the middle of the picture is for the
+    // layouts where the demo waits for a tap. Here "Try Demo" in the bar below
+    // does that job, and the button used to vanish 0.8s after the intro anyway.
+    embed.querySelector('.embed-start').hidden = true;
+    // A click on the still picture itself (touch screens have no hover) starts and opens the demo.
+    embed.querySelector('.embed-poster').addEventListener('click', activateDemo);
+    // WHY wait for the intro (2026-09-11): the demo window is still invisible
+    // under the intro, and a pointer resting where it will appear must not
+    // start the app in the middle of the opening animation.
     if (document.body.classList.contains('intro-mode')) {
       document.addEventListener('yc:intro-end', function(){ setTimeout(armAutoBoot, 800); }, { once: true });
     } else {
@@ -3248,12 +4061,20 @@ applyTheme("youcoded");
   // Nothing runs while the row is off screen or the tab is in the background.
   if (typeof IntersectionObserver === 'function') {
     new IntersectionObserver(function(entries){
-      visible = entries.some(function(en){ return en.isIntersecting; });
+      rowSeen = entries.some(function(en){ return en.isIntersecting; });
+      visible = rowSeen && !document.hidden;
+      idleGate();
       schedule();
     }, { threshold: 0 }).observe(chips[0].closest('.flankrow') || chips[0]);
   }
+  // WHY: the timers above only stop the POSES. The long idle is a CSS animation
+  // and kept running off screen; this class pauses it (see .mascots-off).
+  var rowSeen = true;
+  function idleGate(){ document.documentElement.classList.toggle('mascots-off', !visible || document.hidden); }
   document.addEventListener('visibilitychange', function(){
-    visible = !document.hidden; schedule();
+    // WHY rowSeen: coming back to the tab used to mark the row visible even when
+    // it was scrolled away, restarting the poses nobody could see.
+    visible = !document.hidden && rowSeen; idleGate(); schedule();
   });
   if (reduced.addEventListener) reduced.addEventListener('change', schedule);
   schedule();
@@ -3315,7 +4136,8 @@ function playSlides(list, hidden){
   if (list.length === playing.length && list.every(function(n, i){ return n === playing[i]; })) return;
   var was = playing; playing = list;
   slides.forEach(function(s, n){
-    if (s.tagName !== 'VIDEO') return;
+    // WHY: the drawn keyboard demo is a slide too; it idles exactly when a clip would pause.
+    if (s.tagName !== 'VIDEO') { if (s.__idle) s.__idle(list.indexOf(n) < 0); return; }
     if (list.indexOf(n) < 0) {
       s.pause();
       // WHY: a clip paused mid-story and rewound later, while its card is on
@@ -3379,6 +4201,16 @@ function warm(v){
   // file once for warm() and a second time for play(). Measured 2026-09-03
   // over the whole page: 7,381KB of video for 3,700KB of clips, every one of
   // the nine downloaded twice, both full 200s. Costs a phone 3.7MB.
+  // WHY: a clip that was never fetched still carries whatever theme its markup
+  // or an earlier theme change gave it (see rethemeClips). Fix that here, the
+  // one place a download starts. load() is needed only when the file changes --
+  // and nothing is in flight yet, so it cannot cause the double fetch above.
+  var s = v.dataset.clip && v.querySelector('source');
+  if (s && s.getAttribute('src') !== clipBase(v) + '.webm') {
+    v.setAttribute('poster', clipBase(v) + '.webp');
+    s.setAttribute('src', clipBase(v) + '.webm');
+    v.preload = 'auto'; v.load(); return;
+  }
   v.preload = 'auto';
 }
 function show(i){
@@ -3524,7 +4356,7 @@ if (document.querySelector('.demo-deck')) {
     if (!narrowStyled) {
       // Clear whatever the desktop driver last wrote, in case the window was
       // resized (or rotated) across the breakpoint mid-scroll.
-      steps.forEach(function(s){ s.style.removeProperty('--d'); s.classList.remove('buried'); });
+      steps.forEach(function(s){ s.style.removeProperty('--d'); s.__d = null; s.classList.remove('buried'); s.classList.remove('gone'); });
       narrowStyled = true;
     }
     var mid = innerHeight / 2, best = -1, bd = 1e9;
@@ -3599,12 +4431,22 @@ if (document.querySelector('.demo-deck')) {
       if (d >= 1 || y - scrollY > innerHeight) hiddenClips.push(n);
       // Warm two screens ahead so frame 0 is decoded before the clip starts and
       // the poster-to-video swap happens off screen, not under the reader.
-      if (y - scrollY < innerHeight * 2 && slides[n]) warm(slides[n]);
+      // WHY the second test (2026-11-11): a theme change now un-fetches the clips
+      // that are not playing, and without a floor every card already scrolled
+      // PAST counted as "near" and downloaded the new theme's file for nothing.
+      if (y - scrollY < innerHeight * 2 && y + stride - scrollY > -innerHeight && slides[n]) warm(slides[n]);
     });
     // ---- writes ----
     for (var w = 0; w < writes.length; w += 2) {
-      writes[w].style.setProperty('--d', writes[w + 1].toFixed(3));
+      // WHY the cache: most cards sit at a clamped 0 or 2.2 for most of the page;
+      // re-writing an unchanged value still cost a style pass per card per frame.
+      var dv = writes[w + 1].toFixed(3);
+      if (writes[w].__d === dv) continue;
+      writes[w].__d = dv;
+      writes[w].style.setProperty('--d', dv);
       writes[w].classList.toggle('buried', writes[w + 1] > 0.002);
+      // 1.18 = just past 1/.85, where the card's opacity has reached 0 (see .gone).
+      writes[w].classList.toggle('gone', writes[w + 1] >= 1.18);
     }
     show(best);
     // Once the whole deck is behind you, nothing should still be looping.
@@ -4342,13 +5184,22 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 (function(){
   var cyclers = [].slice.call(document.querySelectorAll('.word-cycler'));
   if (!cyclers.length) return;
+  // The first word arrives letter by letter (see the stylesheet): wrap each
+  // letter so it can animate on its own. Done before anything is measured.
+  {
+    var w1 = document.querySelector('.cycler-word-1'), txt = w1.textContent;
+    w1.textContent = '';
+    txt.split('').forEach(function(ch, i){
+      var b = document.createElement('b'); b.textContent = ch; b.style.setProperty('--i', i); w1.appendChild(b);
+    });
+  }
 
+  // Themes in the order their words arrive; timing comes from LEAD and BEAT
+  // (below), which mirror --lead and --beat in the stylesheet.
   var HERO_SEQUENCE = [
-    // 100ms ahead of each word's CSS delay (.62 / 1.40 / 2.18s) so the 0.5s
-    // theme crossfade completes exactly as the word settles.
-    { theme: 'golden-sunbreak',     at: 520  },   // "Useful."
-    { theme: 'halftone-dimension',  at: 1300 },   // "Fun."
-    { theme: 'youcoded',           at: 2080 }    // "Yours." - rests here
+    { theme: 'golden-sunbreak' },      // "Useful."
+    { theme: 'halftone-dimension' },   // "Fun."
+    { theme: 'youcoded' }              // "Yours." - rests here
   ];
 
   // Each word is measured at its natural size by cloning it into the cycler
@@ -4390,17 +5241,47 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 
   var timers = [];
   var introEnded = false;
+  // WHY: the hidden page used to be made unclickable with a CSS property that
+  // cost a whole-page re-style when the intro ended (see the note beside
+  // `body.intro-mode > .topcta`). This does the same job for free: while the
+  // intro runs, a click anywhere except the bar at the top and the headline row
+  // (the robots, which take over the intro) does nothing.
+  function introClickGuard(e){
+    if (!document.body.classList.contains('intro-mode')) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;   // nothing is hidden then
+    if (e.target.closest && e.target.closest('.nav, .flankrow')) return;
+    e.preventDefault(); e.stopPropagation();
+    // On a very tall window an invisible section can lie over the centred
+    // headline. If a robot is under the pointer, the click was meant for it.
+    if (e.isTrusted && document.elementsFromPoint) {
+      var hit = document.elementsFromPoint(e.clientX, e.clientY).filter(function(n){ return n.closest && n.closest('.flankrow .mascot'); })[0];
+      if (hit) hit.closest('.mascot').click();
+    }
+  }
+  document.addEventListener('click', introClickGuard, true);
   function endIntro(){
     document.body.classList.remove('intro-mode');
+    document.removeEventListener('click', introClickGuard, true);
     // The live demo waits for this before it boots (autoBoot, above).
-    if (!introEnded) { introEnded = true; document.dispatchEvent(new Event('yc:intro-end')); }
+    if (!introEnded) {
+      introEnded = true; document.dispatchEvent(new Event('yc:intro-end'));
+      clearIntroScope();   // normally already done at the last word; a safety net
+    }
   }
   function cancel(){
     timers.forEach(clearTimeout); timers = [];
-    // Taken over before the words were released: they would stay paused and the
-    // slot empty, so show the resting word the way the static path does.
-    if (!document.body.classList.contains('intro-go')) {
+    // The visitor picked a look themselves: the root now carries it, so the
+    // intro's own copies on the bar and headline must go at once.
+    clearIntroScope();
+    document.body.classList.remove('iv2-first', 'iv2-shut');   // their removal timers were just cleared
+    // Taken over mid-intro: go straight to the resting word, the way the static
+    // path does. WHY always (2026-11-12), not only before the words were
+    // released: the timers that open the word's slot were just cleared, and the
+    // headline now starts CLOSED -- left alone, the words kept animating into a
+    // zero-width slot, drawn on top of the robots.
+    if (!introEnded) {
       document.body.classList.add('cycler-static');
+      curStep = 2;
       applyStep(2);
     }
     endIntro();
@@ -4418,7 +5299,13 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     if (!flank || !document.body.classList.contains('intro-mode')) return;
     flank.style.setProperty('--intro-lift', '0px');
     var r = flank.getBoundingClientRect();
-    var lift = Math.round(innerHeight / 2 - (r.top + r.height / 2));
+    // WHY subtract the entrance's own offset (measured 2026-11-12):
+    // this also runs when the web fonts finish, which can land WHILE the
+    // "rising up" entrance is still sliding the row up from 40px low. The
+    // measurement then included that temporary offset and the headline
+    // settled 40px above the middle of the window for the whole intro.
+    var slid = parseFloat((getComputedStyle(flank).translate || '').split(' ')[1]) || 0;
+    var lift = Math.round(innerHeight / 2 - (r.top - slid + r.height / 2));
     flank.style.setProperty('--intro-lift', (lift > 0 ? lift : 0) + 'px');
   }
   setLift();
@@ -4427,9 +5314,11 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 
   // One entry per slot: its measured word widths and its beat-to-word map.
   var slots = cyclers.map(function(h){ return { el: h, w: measure(h), steps: stepsOf(h) }; });
+  addEventListener('resize', function(){ slots.forEach(function(sl){ sl.w = measure(sl.el); }); applyStep(typeof curStep === 'number' ? curStep : 2); });
   function applyStep(i){
     slots.forEach(function(sl){
       var wide = 0;
+      if (i < 0) { setWidth(sl.el, 0); return; }   // -1 = closed up, no word yet
       sl.steps[i].forEach(function(idx){ if (idx >= 0 && sl.w[idx] > wide) wide = sl.w[idx]; });
       setWidth(sl.el, wide);
     });
@@ -4447,8 +5336,8 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // ends the line -- there is nothing after it to shove -- but mid-sentence it
   // drags the rest of the headline (and both mascot groups, since the row is
   // centred) left and right on every beat.
-  var curStep = 0;
-  applyStep(0);
+  var curStep = -1;                    // the headline starts closed up
+  applyStep(curStep);
   // Widths measured before the web font arrives are the FALLBACK font's, and it
   // is wider -- that is where 42px of dead space after the final word came from.
   // Re-measure once the real font has landed and re-apply the current beat.
@@ -4473,6 +5362,14 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // On a simulated 3 Mbit/s link with 70ms latency everything was ready in
   // ~110ms; 700ms is headroom above that, and the most a bad link can add.
   var START_CAP_MS = 700;
+  // Keep in step with --beat and --lead on body.iv2 in the stylesheet.
+  var BEAT = 720;                      // between words
+  var LEAD = 620;                      // headline's arrival -> first word
+  var SPREAD = 0.5;                    // share of the first word's room the robots start with
+  // The word slot begins at zero width, so the headline arrives as a centred,
+  // complete-looking phrase instead of one with a hole at the end. Turned off
+  // below where opening the slot would re-wrap the headline.
+  var CLOSED = true;
   var started = false;
   function beginSequence(){
     if (started) return;
@@ -4481,20 +5378,75 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       if (introEnded) return;          // a mascot click already took over
       // Measure in the real font and re-centre before anything moves.
       slots.forEach(function(sl){ sl.w = measure(sl.el); });
-      applyStep(0);
+      // WHY this check (measured 2026-11-12 on a
+      // 430px-wide phone): closed, "Make Your Technology" fitted on ONE line,
+      // and the moment "Useful." opened its slot the headline re-wrapped to
+      // two, shoving the robots down mid-animation. Starting closed is only
+      // safe when opening the slot cannot change how many lines the headline
+      // takes; where it would, the space is held open from the start instead.
+      // Transitions are off for the test so the widths apply at once.
+      // On a phone the word is its own line (display:block): there is no slot to
+      // open, so the space is simply there from the start and nothing has to move.
+      if (slots[0] && getComputedStyle(slots[0].el).display === 'block') { CLOSED = false; curStep = 0; }
+      if (CLOSED) {
+        var h1 = flank && flank.querySelector('h1');
+        var tall = function(step){
+          slots.forEach(function(sl){ sl.el.style.transition = 'none'; });
+          applyStep(step);
+          return h1 ? h1.getBoundingClientRect().height : 0;
+        };
+        var shut = tall(-1), open = Math.max(tall(0), tall(1), tall(2));
+        if (Math.abs(open - shut) > 1) { CLOSED = false; curStep = 0; }
+        // Robots start a little apart: extra room each side while closed, as a
+        // share of half the first word's width (see body.iv2-shut).
+        if (CLOSED && SPREAD && slots[0]) {
+          flank.style.setProperty('--iv2-spread', Math.round(SPREAD * (slots[0].w[0] + 4) / 2) + 'px');
+          document.body.classList.add('iv2-shut');
+        }
+        applyStep(curStep);
+        if (h1) h1.getBoundingClientRect();          // settle before transitions return
+        slots.forEach(function(sl){ sl.el.style.transition = ''; });
+      }
+      applyStep(curStep);
       setLift();
       document.body.classList.add('intro-go');
+      if (CLOSED) {
+        document.body.classList.add('iv2-first');
+        // Off again just before the second word's own changes begin.
+        timers.push(setTimeout(function(){ document.body.classList.remove('iv2-first'); }, LEAD + BEAT - 150));
+      }
       HERO_SEQUENCE.forEach(function(step, i){
+        // Every step sits on one even beat, counted from the moment the headline
+        // arrives. Each theme leads its word by 100ms so the colour change is
+        // well under way as the word lands.
+        var at = LEAD + BEAT * i - 100;
+        // WHY the first word starts its changes 40ms earlier (rounds 2-4,
+        // frame-traced 2026-11-12). From closed, the line has to open a whole
+        // word's width (about four times the shift between later words). With
+        // the usual 100ms head start the word landed while the robots were
+        // still in its way ("the icons barely make it out of the way"); opening
+        // it much earlier, on its own, read as a separate odd move with the
+        // background on a third clock. So background and opening start
+        // TOGETHER, just early enough that the room is there for each letter.
+        if (CLOSED && i === 0) at = LEAD - 140;
         timers.push(setTimeout(function(){
-          applyTheme(step.theme);
+          // true: colour only what is on screen (see introScope). The LAST word is
+          // the look the page's root has worn since it loaded, so there the bar
+          // and headline just drop their own copies and take the root's again:
+          // the root is told nothing new and the hidden page is left alone.
+          // (Measured: dropping them later, when the intro ends, re-styled the
+          // headline's ~400 pieces in the same instant the page starts to rise.)
+          if (i === HERO_SEQUENCE.length - 1) { clearIntroScope(); applyTheme(step.theme); }
+          else applyTheme(step.theme, true);
           curStep = i;
           applyStep(i);
-        }, step.at));
+          document.body.classList.remove('iv2-shut');   // hand the spare room back as the slot opens
+        }, at));
       });
-      // 'Yours.' starts at 2180 and settles ~2344 (its bump is done at 20% of
-      // 820ms). The rise fires right on that settle now -- the pause that used to
-      // sit between them is what read as a slow tail.
-      timers.push(setTimeout(endIntro, 2360));
+      // The page rises 180ms after the last word's beat, right as its bump
+      // settles (20% into its animation) -- a pause between the two is what
+      // once read as a slow tail.
+      timers.push(setTimeout(endIntro, LEAD + BEAT * 2 + 180));
     });
   }
   function introReady(){
@@ -4507,15 +5459,24 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     HERO_SEQUENCE.forEach(function(step){
       var t = THEMES[step.theme];
       if (!t || !t.wall) return;       // a gradient theme has no file to wait for
-      var img = new Image();
-      img.src = t.wall;
-      waits.push(img.decode ? img.decode().catch(function(){})
-        : new Promise(function(done){ img.onload = img.onerror = done; }));
+      // WHY wallReady: one shared fetch-and-decode per wallpaper, so applyTheme()
+      // knows this picture is finished and starts its fade without waiting again.
+      waits.push(wallReady(t.wall));
     });
     return Promise.all(waits);
   }
   if (window.Promise) {
-    introReady().then(beginSequence);
+    // WHY the extra wait (measured 2026-11-12): the moment the fonts and
+    // wallpapers land is also when the browser re-lays-out the whole page in
+    // the new fonts and decodes the pictures -- one 0.1-0.25s burst of work.
+    // The entrance used to start INSIDE that burst, so its first frames were
+    // simply never drawn and it popped rather than rose. Now it also waits for
+    // every font (not only the headline's), then lets two frames go by so the
+    // burst is over before anything moves. Still under the same 700ms cap.
+    introReady().then(function(){
+      var all = (document.fonts && document.fonts.ready) || Promise.resolve();
+      all.then(function(){ requestAnimationFrame(function(){ requestAnimationFrame(beginSequence); }); });
+    });
     setTimeout(beginSequence, START_CAP_MS);
   } else {
     beginSequence();
@@ -4532,7 +5493,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 R.forEach(function(row,i){var r=document.createElement('div');r.className='kr'+(i==1?' ix':'');
  row.split('').forEach(function(c){var k=document.createElement('div'),cl='k';
   if('^<#>'.indexOf(c)>-1)cl+=' w f';if(c==','||c=='.'||c=='#')cl+=' f';if(c=='>')cl=cl.replace(' f',' e');if(c==' ')cl+=' sp';if(c=='#')cl+=' q';
-  if(lit[c]!=null){cl+=' l';k.style.setProperty('--d',lit[c]+'s')}
+  if(lit[c]!=null){cl+=' l';k.style.setProperty('--kd',lit[c]+'s')}
   k.className=cl;
   var g={'^':'d-sh','<':'d-bk','>':'d-rt'}[c];
   if(g)k.innerHTML='<svg class="ic"><use href="#'+g+'"/></svg>';else k.textContent=c=='#'?'?123':c==' '?'space':c;
@@ -4542,7 +5503,12 @@ if(matchMedia('(prefers-reduced-motion:reduce)').matches){d.classList.add('is-da
 var w=d.querySelector('.warm'),a,b;
 function go(){clearTimeout(a);clearTimeout(b);d.classList.remove('is-dark');
  a=setTimeout(function(){d.classList.add('is-dark')},800);b=setTimeout(function(){d.classList.remove('is-dark')},6400)}
-w.addEventListener('animationstart',go);w.addEventListener('animationiteration',go)})();
+w.addEventListener('animationstart',go);w.addEventListener('animationiteration',go);
+/* WHY: going idle (see .dv-idle; the deck calls this) also cancels the pending dark-mode
+   flip -- left alone it fired later and ran a half-second colour fade across the whole
+   hidden drawing. Start idle unless the deck already counts this card as playing. */
+d.__idle=function(off){d.classList.toggle('dv-idle',off);if(off){clearTimeout(a);clearTimeout(b);d.classList.remove('is-dark')}};
+try{d.__idle(playing.indexOf(slides.indexOf(d))<0)}catch(e){}})();
 </script>
 <script>
 // --- Tips over the live demo (2026-10-21). Chips hang under the demo's own toolbar buttons,
@@ -4644,6 +5610,11 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
   }
   var items = [], built = '';
   function render(force){
+    // WHY the early exit (2026-11-11, site speed pass): tips exist only once the
+    // visitor has clicked into the demo, but this ran on every change inside the
+    // demo regardless, and detect() measures buttons -- forcing the demo to be
+    // re-laid-out mid-frame (20ms+ on each theme click) to draw nothing.
+    if (!embed.classList.contains('interactive')) { layer.classList.remove('on', 'off'); built = ''; return; }
     var d = doc(); mode = detect(d);
     var live = mode && mode !== 'page' && embed.classList.contains('interactive'), show = live && !hidden;
     layer.classList.toggle('on', show); layer.classList.toggle('off', live && hidden);
@@ -4757,13 +5728,47 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
 (function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
 // Animated folds: the FAQ cards and the story card.
 // WHY this shape (Destin, 2026-10-21, three rounds): a height transition on the answer stuttered;
-// a clip reveal cut the card's own bottom edge, so its border vanished until the fold ended. Now
-// the CARD's height is animated, so its border, corners and shadow travel with the edge, the
-// content is clipped by the card itself, and the blocks below follow through normal layout.
-// Profiled headless on the machine's GPU at 2x: 27 frames per 420 ms, worst 17 ms.
+// a clip reveal cut the card's own bottom edge, so its border vanished until the fold ended. So
+// the CARD's height is what animates: its border, corners and shadow travel with the edge and
+// the content is clipped by the card itself.
+// WHY the rest of the page no longer follows through layout (Destin, 2026-11-13, on a phone:
+// "i can literally almost count the frames"). The card used to push everything under it down
+// a little on every frame, so the browser re-placed and re-drew the rest of the page -- the
+// other frosted cards, the ideas pictures, the footer -- thirty times per fold. Measured with
+// the processor slowed 6x (a mid-range phone): half the frames were dropped. Now:
+//   1. the page jumps to its FINAL layout at once, invisibly: while the card's height
+//      animates, its bottom margin makes up the difference, so nothing under it is re-placed;
+//   2. everything under the card is SLID into place instead (a transform, which the graphics
+//      card does without re-drawing anything);
+//   3. one clock drives both, so the card's edge and the things below it cannot drift apart.
 (function(){
   var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var DUR = 340, EASE = 'cubic-bezier(.2,.8,.2,1)';
+  var DUR = 340;
+  // The same curve as before, cubic-bezier(.2,.8,.2,1), solved for y at a given time.
+  function ease(t){
+    var x1 = .2, y1 = .8, x2 = .2, y2 = 1, u = t, i, x, dx;
+    for (i = 0; i < 6; i++) {
+      x = 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u - t;
+      dx = 3 * (1 - u) * (1 - u) * x1 + 6 * (1 - u) * u * (x2 - x1) + 3 * u * u * (1 - x2);
+      if (Math.abs(dx) < 1e-6) break;
+      u = Math.max(0, Math.min(1, u - x / dx));
+    }
+    return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
+  }
+  // Everything that sits under the card: its later siblings, then its parents' later siblings,
+  // up to the page. Things pinned to the screen (the download bar, pop-ups) are left alone.
+  function below(d){
+    var out = [], n, sib, cs;
+    for (n = d; n && n !== document.body; n = n.parentElement) {
+      for (sib = n.nextElementSibling; sib; sib = sib.nextElementSibling) {
+        if (sib.tagName === 'SCRIPT' || sib.tagName === 'STYLE') continue;
+        cs = getComputedStyle(sib);
+        if (cs.display === 'none' || cs.position === 'fixed') continue;
+        out.push(sib);
+      }
+    }
+    return out;
+  }
   document.querySelectorAll('.faq details, details.storyfold').forEach(function(d){
     var s = d.querySelector('summary'), a = d.querySelector('.a'); if (!s || !a) return;
     if (d.open) d.classList.add('is-open');
@@ -4778,13 +5783,31 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
       else { d.classList.remove('is-open'); h1 = d.getBoundingClientRect().height; d.classList.add('is-open'); }
       if (Math.abs(h1 - h0) < 1) { if (!opening) { d.classList.remove('is-open'); d.open = false; } busy = false; return; }
       d.classList.add('folding');
-      var anims = [ d.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], { duration: DUR, easing: EASE, fill: 'both' }),
-                    a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' }) ];
-      Promise.all(anims.map(function(an){ return an.finished.catch(function(){}); })).then(function(){
+      if (!opening) d.classList.add('closing');     // the x starts turning back now, not when the fold ends
+      var rest = below(d);
+      // Slide, don't re-place: each thing below gets its own layer for the length of the fold,
+      // and any transition of its own is paused so it cannot lag behind the clock here.
+      rest.forEach(function(el){ el.style.transition = 'none'; el.style.willChange = 'transform'; });
+      var fade = a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }],
+        { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' });
+      var t0 = 0;
+      function frame(now){
+        if (!t0) t0 = now;
+        var k = Math.min(1, (now - t0) / DUR), h = h0 + (h1 - h0) * ease(k);
+        d.style.height = h + 'px';
+        d.style.marginBottom = (h1 - h) + 'px';              // the card's footprint is already final
+        var shift = 'translateY(' + (h - h1) + 'px)';
+        for (var i = 0; i < rest.length; i++) rest[i].style.transform = shift;
+        if (k < 1) { requestAnimationFrame(frame); return; }
         if (!opening) { d.classList.remove('is-open'); d.open = false; }
-        anims.forEach(function(an){ an.cancel(); });
-        d.classList.remove('folding'); busy = false;
-      });
+        fade.cancel();
+        d.style.height = ''; d.style.marginBottom = '';
+        rest.forEach(function(el){ el.style.transform = ''; el.style.willChange = ''; });
+        d.classList.remove('folding'); d.classList.remove('closing');
+        // Transitions come back a frame later, once the cleared transform has been applied.
+        requestAnimationFrame(function(){ rest.forEach(function(el){ el.style.transition = ''; }); busy = false; });
+      }
+      frame(performance.now());
     });
   });
 })();

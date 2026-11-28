@@ -14,6 +14,7 @@
 //   • that anything uncertain is refused rather than guessed.
 // After a Claude Code update: re-run the capture, then this file.
 import { describe, it, expect, afterEach } from 'vitest';
+import { cardTitleFor } from '../src/shared/prompt-card-rules';
 import {
   parseInkSelect, menuToButtons, readStartupDialog,
 } from '../src/shared/ink-select-parser';
@@ -46,7 +47,46 @@ const MCP_ONE = {
 };
 /** A multi-select checkbox dialog: deliberately NOT turned into buttons. */
 const UNREADABLE = (heading: string) => ({ unreadable: heading });
-type Expect = typeof TRUST | ReturnType<typeof UNREADABLE>;
+/**
+ * A first-install screen (no "Enter to confirm" footer, so not a "dialog"): the
+ * user must still get BUTTONS while the session starts. WHY a separate kind
+ * (first-install coverage): the theme picker is a different menu shape from the
+ * trust dialogs, so the dialog-only assertions would not fit it; the one that
+ * matters here is that cardTitleFor() gives a card at all.
+ */
+// `cursor` may list several rows: Claude Code has moved a dialog's starting highlight between versions, and the app
+// reads the highlight off the screen (selectedIndex), so any listed start is fine — the test pins that it is READ.
+const SCREEN = (title: string, options: string[], cursor: number | number[], extra: { numbered?: boolean; older?: string[][] } = {}) =>
+  ({ screen: true as const, title, options, cursor: ([] as number[]).concat(cursor), numbered: !!extra.numbered, older: extra.older ?? [] });
+const THEME = SCREEN('Choose a Theme', [
+  'Auto (match terminal)', 'Dark mode', 'Light mode', 'Dark mode (colorblind-friendly)',
+  'Light mode (colorblind-friendly)', 'Dark mode (ANSI colors only)', 'Light mode (ANSI colors only)',
+  // WHY [1, 0]: up to 2.1.325 the picker opened on "Dark mode"; the daily drift run of 2026-11-19 (latest CLI) found it
+  // opening on "Auto (match terminal)".
+], [1, 0]);
+const SIGN_IN = SCREEN('Select Login Method', [
+  'Claude account with subscription · Individual, Team, or Enterprise',
+  'Anthropic Console account · API usage billing',
+  '3rd-party platform · Bedrock, Microsoft Foundry, Google Vertex AI',
+], 0, {
+  numbered: true,
+  // WHY: Claude Code 2.1.325 shortened "Amazon Bedrock" to "Bedrock" and stopped cutting "billing" off at phone
+  // width (50 columns). Older captures (2.1.322) are kept, so both wordings stay accepted: the first list below
+  // is the 2.1.322 wide wording, the second its 50-column one ("…API usage" with "billing" missing, as printed).
+  older: [
+    [
+      'Claude account with subscription · Individual, Team, or Enterprise',
+      'Anthropic Console account · API usage billing',
+      '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+    ],
+    [
+      'Claude account with subscription · Individual, Team, or Enterprise',
+      'Anthropic Console account · API usage',
+      '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+    ],
+  ],
+});
+type Expect = typeof TRUST | ReturnType<typeof UNREADABLE> | ReturnType<typeof SCREEN>;
 
 // Every captured scenario → what each of its dialogs must read as. A fixture
 // missing from this table fails the "every capture is covered" test below, so a
@@ -67,6 +107,8 @@ const EXPECTED: Record<string, Expect[]> = {
   'bypass-untrusted': [TRUST, BYPASS],
   'untrusted-signed-in': [TRUST],
   'bypass-untrusted-signed-in': [TRUST, BYPASS],
+  // A brand-new install: theme picker, then the sign-in choice (recorded, never answered).
+  'first-install': [THEME, SIGN_IN],
 };
 
 const open: FixtureTerminal[] = [];
@@ -100,6 +142,18 @@ describe('startup-dialog captures', () => {
         it(`dialog ${i + 1} reads as ${'unreadable' in want ? 'unreadable (answer in terminal)' : `"${want.title}"`}`, async () => {
           const screen = await screenAt(load(file), `dialog-${i + 1}-visible`);
           const menu = parseInkSelect(screen);
+          if ('screen' in want) {
+            // The user gets buttons: a card with the expected title, and the options as printed.
+            expect(menu, `the app does not read this first-install screen:\n${screen}`).not.toBeNull();
+            expect(cardTitleFor(menu!, true, screen)).toEqual({ title: want.title, generic: false });
+            expect(menu!.title).toBe(want.title);
+            // The current wording, or any older one still accepted (see SIGN_IN).
+            const accepted = [want.options, ...want.older];
+            expect(accepted, 'unexpected option wording').toContainEqual(menu!.options);
+            expect(want.cursor).toContain(menu!.selectedIndex);
+            expect(menuToButtons(menu!).map((b) => b.label)).toEqual(menu!.options);
+            return;
+          }
           if ('unreadable' in want) {
             expect(menu).toBeNull();
             expect(readStartupDialog(screen)).toEqual({ heading: want.unreadable });
@@ -314,8 +368,83 @@ describe('the startup-dialog driver never guesses', () => {
 });
 
 describe('the unnumbered reader refuses what it cannot be sure of', () => {
-  it('no dialog footer → not a menu (a quoted list in the conversation)', () => {
-    expect(parseInkSelect(trustScreen(0, { footer: false }))).toBeNull();
+  it('a quoted list in the conversation (rows of reply under it) is not a menu', () => {
+    const quoted = trustScreen(0, { footer: false }) + '\n' + Array.from({ length: 8 }, (_, i) => ` reply line ${i}`).join('\n');
+    expect(parseInkSelect(quoted)).toBeNull();
+  });
+});
+
+describe('a first-run menu Claude Code draws without its usual footer', () => {
+  const footerless = trustScreen(0, { footer: false });
+  const menu = parseInkSelect(footerless)!;
+  // A screen nobody has taught the app about: no known title anywhere in it.
+  const unknownScreen = [RULE, ' Try the new thing?', '', ' It does something helpful.', '', ' ❯ Maybe later', '   Turn it on'].join('\n');
+  const unknown = parseInkSelect(unknownScreen)!;
+
+  it('is still read, and marked as read without the footer', () => {
+    expect(menu.options).toEqual(['No, exit', 'Yes, I trust this folder']);
+    expect(menu.dialog).toBe(false);
+    expect(menu.loose).toBe(true);
+    // Answered the same careful way as any unnumbered menu: one confirmed cursor move at a time.
+    expect(menuToButtons(menu).every((b) => b.pick?.signature === menu.signature)).toBe(true);
+  });
+
+  it('gets a card while the session is starting, titled with its own heading', () => {
+    expect(cardTitleFor(unknown, true, unknownScreen)).toEqual({ title: 'Try the new thing?', generic: false });
+  });
+
+  it('gets no card once the session has started', () => {
+    expect(cardTitleFor(unknown, false, unknownScreen)).toBeNull();
+  });
+
+  it('gets no card while Claude Code\'s message box is on screen', () => {
+    const withBox = unknownScreen + '\n' + RULE + '\n❯ \n' + RULE;
+    expect(cardTitleFor(unknown, true, withBox)).toBeNull();
+  });
+});
+
+describe('ordinary terminal text is never taken for a first-run menu', () => {
+  const BOX_END = '╰' + '─'.repeat(58) + '╯';
+
+  it('a quoted message from the conversation, straight under a box edge', () => {
+    const screen = [BOX_END, '> please do these:', '  fix the bug', '  add a test', '● On it.'].join('\n');
+    expect(parseInkSelect(screen)).toBeNull();
+    expect(readStartupDialog(screen)).toBeNull();
+  });
+
+  it('the same without a reply under it yet (no heading says what is asked)', () => {
+    expect(parseInkSelect([BOX_END, '> please do these:', '  fix the bug', '  add a test'].join('\n'))).toBeNull();
+  });
+
+  it('a multi-line draft in Claude Code\'s own message box', () => {
+    const screen = [' some reply', RULE, '❯ line one of my draft', '  line two', RULE, '  ? for shortcuts'].join('\n');
+    expect(parseInkSelect(screen)).toBeNull();
+  });
+
+  it('a numbered list with no footer gets no card while starting (a replayed conversation looks the same)', () => {
+    const screen = [RULE, ' Notes', '', ' ❯ 1. alpha', '   2. beta'].join('\n');
+    const menu = parseInkSelect(screen);
+    expect(menu && cardTitleFor(menu, true, screen)).toBeFalsy();
+  });
+});
+
+describe('the last safety net: something is asking, and nothing above could read it', () => {
+  it('a cursor row with no footer and no message box is reported as unsure, with its heading', () => {
+    const screen = [RULE, ' Pick your favourite', '', ' ❯ Only one row here'].join('\n');
+    expect(parseInkSelect(screen)).toBeNull();
+    expect(readStartupDialog(screen)).toEqual({ heading: 'Pick your favourite', unsure: true });
+  });
+
+  it('"Press Enter to continue" with no cursor is reported too', () => {
+    expect(readStartupDialog([RULE, ' Welcome', '', ' Press Enter to continue'].join('\n'))).toEqual({ heading: 'Welcome', unsure: true });
+  });
+
+  it('a screen that is only still drawing (no cursor row, no key asked for) is not', () => {
+    expect(readStartupDialog([RULE, ' Claude Code v2.1.300', ' Loading…'].join('\n'))).toBeNull();
+  });
+
+  it('the ordinary message box is not', () => {
+    expect(readStartupDialog([' some reply', RULE, '❯ hello', RULE, '  ? for shortcuts'].join('\n'))).toBeNull();
   });
 
   it('no box rule above → not a menu', () => {
@@ -339,8 +468,17 @@ describe('the unnumbered reader refuses what it cannot be sure of', () => {
     // (fine). Shorten it so the next word would land exactly in the 2-column
     // band the dialog's padding makes uncertain.
     const r = '─'.repeat(40);
-    const screen = [r, '  New MCP server found in this', '  project: demo', '', '    Use this MCP server', '    Use this and all future MCP serv', '    xy', '  ❯ Continue without', '', '  Enter to confirm · Esc to cancel'].join('\n');
+    const screen = [r, '  New MCP server found in this', '  project: demo', '', '    Use this MCP server', '    Use this and all future MCP serv', '    Xy', '  ❯ Continue without', '', '  Enter to confirm · Esc to cancel'].join('\n');
     expect(parseInkSelect(screen)).toBeNull();
+  });
+
+  it('a label wrapped inside the width band is rejoined when the rest starts in lower case (2.1.325 at 40 columns)', () => {
+    // Real 2.1.325 screen: "…all future MCP" + "servers" is 39 of 40 columns, which width maths alone cannot call.
+    const r = '─'.repeat(40);
+    const screen = [r, '  New MCP server found in this', '  project: demo', '  MCP servers may execute code or', '  access system resources. All tool', '  calls require approval. Learn more', '  in the MCP documentation.', '    Use this MCP server', '    Use this and all future MCP', '    servers in this project', '  ❯ Continue without using this MCP', '    server', '  Enter to confirm · Esc to cancel'].join('\n');
+    const menu = parseInkSelect(screen);
+    expect(menu!.options).toEqual(MCP_ONE.options);
+    expect(menu!.selectedIndex).toBe(2);
   });
 
   it('still reads the older NUMBERED trust dialog, and answers it by digit', () => {

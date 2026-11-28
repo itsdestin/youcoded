@@ -184,9 +184,104 @@ describe('portable compaction restore', () => {
     expect(JSON.stringify(followed)).toContain('completed step');
     expect(JSON.stringify(followed)).not.toContain('abandoned');
   });
-  it('declines an unbacked crash repair in the retained suffix', () => {
+  it('keeps a valid summary when its retained suffix needs a missing-result repair, without inventing an origin', () => {
     const use = event('use', 'tool-use', { toolUseId: 'c', toolName: 'Read', toolInput: {} });
-    expect(restorePortableHistory([old, use, summary('sum', ref(use), ref(old), [old, use])])).toBeNull();
+    const events = [old, use, summary('sum', ref(use), ref(old), [old, use])];
+    const before = structuredClone(events);
+    const restored = restorePortableHistory(events);
+    expect(restored?.messages.map(m => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(restored?.messages[0].content).toBe('[Earlier conversation summary]\nmemory');
+    expect((restored?.messages[2].content as any[])[0]).toMatchObject({
+      toolCallId: 'c', toolName: 'Read', output: { type: 'text', value: expect.stringContaining('completion unknown') },
+    });
+    expect(restored?.origins).toEqual([['sum'], ['use'], null]);
+    expect(restored?.eventUuids).toEqual(['sum', 'use']);
+    expect(JSON.stringify(restored?.messages)).not.toContain('SECRET-before-summary');
+    const session = new HarnessSession(makeOpts({}), async () => scriptedModel([]) as any);
+    session.seedHistory(restored!.messages, { restoreMode: 'reconstructed',
+      eventUuids: restored!.eventUuids, messageOrigins: restored!.origins,
+      transformation: { kind: 'summary', summaryEventUuid: 'sum' } });
+    // The valid incoming cut is usable, but no NEW cut may pretend that the
+    // synthetic result was persisted. Both potential suffixes fail closed.
+    expect(session.firstEventForCut(0)).toBeNull();
+    expect(session.firstEventForCut(1)).toBeNull();
+    expect(session.firstEventForCut(2)).toBeNull();
+    expect(events).toEqual(before);
+  });
+
+  it('keeps a valid summary while removing orphan outputs from a mixed retained parallel group', () => {
+    const use = event('use', 'tool-use', { toolUseId: 'c', toolName: 'Read', toolInput: {} });
+    const good = event('good', 'tool-result', { toolUseId: 'c', toolName: 'Read', toolResult: 'good output', isError: false });
+    const orphan = event('orphan', 'tool-result', { toolUseId: 'lost', toolName: 'Read', toolResult: 'orphan output', isError: false });
+    const source = [old, use, good, orphan];
+    const restored = restorePortableHistory([...source, summary('sum', ref(use), ref(old), source)]);
+    expect(restored?.messages.map(m => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(restored?.origins).toEqual([['sum'], ['use'], null]);
+    expect(JSON.stringify(restored?.messages)).toContain('good output');
+    expect(JSON.stringify(restored?.messages)).not.toContain('orphan output');
+    expect(JSON.stringify(restored?.messages)).not.toContain('SECRET-before-summary');
+  });
+});
+
+describe('rebuilt model memory pairing repair', () => {
+  const call = (id: string) => ev('tool-use', { toolUseId: id, toolName: 'Read', toolInput: { file_path: id } }, { uuid: `call-${id}` });
+  const result = (id: string, uuid = `result-${id}`) => ev('tool-result', {
+    toolUseId: id, toolName: 'Read', toolResult: `output-${uuid}`, isError: false,
+  }, { uuid });
+
+  it('omits lone saved outputs without inventing calls or modifying source events', () => {
+    const events = [result('lost'), ev('user-message', { text: 'continue' }, { uuid: 'user' })];
+    const before = structuredClone(events);
+    expect(rebuildHistoryWithOrigins(events)).toEqual({
+      messages: [{ role: 'user', content: 'continue' }], origins: [['user']],
+    });
+    expect(events).toEqual(before);
+  });
+
+  it('filters unmatched and duplicate parallel outputs, backfills missing results and marks changed origins unbacked', () => {
+    const events = [call('a'), call('b'), call('missing'), result('a'), result('lost'),
+      result('a', 'duplicate-a'), result('b')];
+    const before = structuredClone(events);
+    const { messages, origins } = rebuildHistoryWithOrigins(events);
+    expect(messages).toHaveLength(2);
+    const outputs = messages[1].content as any[];
+    expect(outputs.map(p => p.toolCallId)).toEqual(['a', 'b', 'missing']);
+    expect(outputs[0].output.value).toBe('output-result-a');
+    expect(outputs[1].output.value).toBe('output-result-b');
+    expect(outputs[2].output.value).toContain('completion unknown');
+    expect(origins).toEqual([['call-a', 'call-b', 'call-missing'], null]);
+    expect(events).toEqual(before);
+  });
+
+  it('reports unknown completion for a missing saved result and cautions against blind retry', () => {
+    const messages = rebuildHistory([call('unknown')]);
+    const text = (messages[1].content as any[])[0].output.value;
+    expect(text).toContain('completion unknown');
+    expect(text).toContain('may have run; inspect current state before retrying');
+    expect(text).not.toContain('never completed');
+    expect(text).not.toContain('Canceled:');
+  });
+
+  it('keeps valid pairs and their complete origins unchanged', () => {
+    const { messages, origins } = rebuildHistoryWithOrigins([call('a'), call('b'), result('b'), result('a')]);
+    expect((messages[1].content as any[]).map(p => p.toolCallId)).toEqual(['b', 'a']);
+    expect(origins).toEqual([['call-a', 'call-b'], ['result-b', 'result-a']]);
+    expect(origins).toHaveLength(messages.length);
+  });
+
+  it.each(['user', 'clear', 'skill'] as const)('never matches a result across a %s barrier', barrier => {
+    const boundary = barrier === 'user' ? ev('user-message', { text: 'new turn' }, { uuid: 'boundary' })
+      : barrier === 'clear' ? ev('context-clear', {}, { uuid: 'boundary' })
+      : ev('skill-invoked', { body: 'skill instructions', name: 'test' } as any, { uuid: 'boundary' });
+    const { messages, origins } = rebuildHistoryWithOrigins([call('a'), boundary, result('a')]);
+    expect(JSON.stringify(messages)).not.toContain('output-result-a');
+    expect(origins).toHaveLength(messages.length);
+    if (barrier === 'clear') expect(messages).toEqual([]);
+    else {
+      expect(messages.map(m => m.role)).toEqual(['assistant', 'tool', 'user']);
+      expect((messages[1].content as any[])[0].output.value).toContain('completion unknown');
+      expect(origins).toEqual([['call-a'], null, ['boundary']]);
+    }
   });
 });
 
@@ -517,7 +612,7 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
           { type: 'tool-call', toolCallId: 'c1', toolName: 'Bash', input: { command: 'sleep 9' } },
         ] },
         { role: 'tool', content: [
-          { type: 'tool-result', toolCallId: 'c1', toolName: 'Bash', output: { type: 'text', value: expect.stringContaining('the app was closed mid-execution') } },
+          { type: 'tool-result', toolCallId: 'c1', toolName: 'Bash', output: { type: 'text', value: expect.stringContaining('completion unknown') } },
         ] },
       ]);
       // Invariant: no dangling tool-call.
@@ -551,7 +646,7 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
     expect(rebuilt).toEqual([
       { role: 'user', content: 'go' },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'Edit', input: { file_path: 'a.ts' } }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'Edit', output: { type: 'text', value: expect.stringContaining('the app was closed mid-execution') } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'Edit', output: { type: 'text', value: expect.stringContaining('completion unknown') } }] },
       { role: 'user', content: 'again' },
       { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
     ]);

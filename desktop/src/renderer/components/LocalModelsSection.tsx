@@ -25,20 +25,24 @@ import { matchesQuery } from '../../shared/text-match';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { useScreenOpen } from '../shoot-mode';
+import { useGemmaTermsGate } from './GemmaTermsConfirm';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
+import { Tooltip } from './ui';
+import { formatGb, formatGbNumber } from '../../shared/format-bytes';
 
 // quants() decorates every option with a GPU-aware fit label.
 type QuantWithFit = QuantOption & { fit: FitEstimate };
 
-// Bytes → GB with one decimal (binary GiB, consistent with EngineCard's MB).
+// Bytes → GB with one decimal. WHY 1000-based (card #143, Destin 2026-11-12): the same number Hugging Face shows
+// (it was binary GiB, so a model read 74.2 GB here and 79.7 GB on its page). Shared with EngineCard.
 function gb(bytes: number): string {
-  return `${(bytes / 1073741824).toFixed(1)} GB`;
+  return formatGb(bytes);
 }
 
 // The number alone, for "74.2 of 113.0 GB" — one unit at the end of the phrase.
 function gbNum(bytes: number): string {
-  return (bytes / 1073741824).toFixed(1);
+  return formatGbNumber(bytes);
 }
 
 // Fit → a status color. These are theme-independent status colors (the app's
@@ -169,15 +173,27 @@ export function LocalModelBrowser() {
   const [curated, setCurated] = useState<CuratedModel[] | null>(null);
   const [installed, setInstalled] = useState<InstalledLocalModel[] | null>(null);
 
+  // WHY the two reads' failures are kept (error inventory 2026-09-10, Settings rows 59 and 96): a failed
+  // read became an empty list, so "Installed" and "Recommended" silently vanished and downloaded models
+  // looked gone. Lists already on screen stay (they are real); the failure is shown above them.
+  const [installedError, setInstalledError] = useState<string | null>(null);
+  const [curatedError, setCuratedError] = useState<string | null>(null);
+
   const refreshInstalled = useCallback(async () => {
-    try { setInstalled(await window.claude.models.installed() as InstalledLocalModel[]); }
-    catch { setInstalled([]); }
+    try { setInstalled(await window.claude.models.installed() as InstalledLocalModel[]); setInstalledError(null); }
+    catch (e) { setInstalled((prev) => prev ?? []); setInstalledError(plainMessage(e, 'The list did not come back.')); }
+  }, []);
+
+  const loadCurated = useCallback(() => {
+    window.claude.models.curated()
+      .then((c: any) => { setCurated(c); setCuratedError(null); })
+      .catch((e: unknown) => { setCurated((prev) => prev ?? []); setCuratedError(plainMessage(e, 'The list did not come back.')); });
   }, []);
 
   useEffect(() => {
     if (!supported) return;
     // Curated + installed load once; downloads stay live via the subscription.
-    void window.claude.models.curated().then((c: any) => setCurated(c)).catch(() => setCurated([]));
+    loadCurated();
     void refreshInstalled();
     const seen = new Set<string>();
     const off = window.claude.models.onDownloadProgress((p: DownloadProgress) => {
@@ -192,9 +208,11 @@ export function LocalModelBrowser() {
       }
     });
     return off;
-  }, [supported, refreshInstalled]);
+  }, [supported, refreshInstalled, loadCurated]);
 
   if (!supported) return null;
+
+  const loadError = installedError ?? curatedError;
 
   return (
     <ModelBrowser
@@ -203,6 +221,8 @@ export function LocalModelBrowser() {
       downloads={downloads}
       quantOptsByKeyRef={quantOptsByKeyRef}
       onRefreshInstalled={refreshInstalled}
+      loadError={loadError}
+      onRetryLoad={() => { if (installedError) void refreshInstalled(); if (curatedError) loadCurated(); }}
     />
   );
 }
@@ -248,13 +268,16 @@ function DownloadProgressRow({ dl }: { dl: DownloadProgress }) {
 // ── Model browser (recommended + installed + search, one filterable list) ────
 
 function ModelBrowser({
-  curated, installed, downloads, quantOptsByKeyRef, onRefreshInstalled,
+  curated, installed, downloads, quantOptsByKeyRef, onRefreshInstalled, loadError, onRetryLoad,
 }: {
   curated: CuratedModel[] | null;
   installed: InstalledLocalModel[] | null;
   downloads: Record<string, DownloadProgress>;
   quantOptsByKeyRef: React.MutableRefObject<Record<string, QuantWithFit>>;
   onRefreshInstalled: () => Promise<void>;
+  /** Why the installed or recommended list could not be read, or null. */
+  loadError?: string | null;
+  onRetryLoad?: () => void;
 }) {
   const [query, setQuery] = useState('');
   // Hugging Face results for the current query (null = not searched this query).
@@ -353,6 +376,9 @@ function ModelBrowser({
         <p className="text-2xs text-fg-muted px-1">Loading…</p>
       ) : (
         <div className="space-y-3">
+          {loadError && onRetryLoad && (
+            <ErrorState variant="inline" message={`Couldn't load the model list: ${loadError}`} onRetry={onRetryLoad} />
+          )}
           {/* Installed (+ in-progress) */}
           {installedFiltered.length > 0 && (
             <div className="space-y-2">
@@ -411,7 +437,7 @@ function ModelBrowser({
             </div>
           )}
 
-          {nothing && <p className="text-2xs text-fg-muted px-1">No models match “{query}”.</p>}
+          {nothing && !loadError && <p className="text-2xs text-fg-muted px-1">No models match “{query}”.</p>}
         </div>
       )}
     </div>
@@ -473,7 +499,10 @@ export function RepoCard({
     : undefined;
   const dl = chosen ? activeDownload(downloads, repo, chosen.quant) : undefined;
 
-  const startDefault = async () => {
+  // Card #45: a Gemma model asks first (Cancel / Download); everything else starts at once.
+  const gemmaGate = useGemmaTermsGate(repo, true);
+  const startDefault = () => gemmaGate.ask(() => void startDefaultNow());
+  const startDefaultNow = async () => {
     if (!chosen) return;
     setDlError(null);
     try { await window.claude.models.download(repo, chosen); }
@@ -543,6 +572,7 @@ export function RepoCard({
           </Button>
         )}
       </div>
+      {gemmaGate.dialog}
       {dl && <DownloadProgressRow dl={dl} />}
       {/* WHY ErrorState (small-fixes-1): this was a red box with nothing to press. The guide's
           rule is that a failed action's notice takes the place of the button it came from and
@@ -798,12 +828,14 @@ export function LocalModelRow({
                 buttons beside it, and the tail is what tells two builds apart.
                 Native title is the app's documented tool for a plain hover hint
                 (ui/AnchorTip.tsx header). */}
-            <p className="text-xs text-fg font-medium truncate flex items-center gap-1.5" title={model.id}>
-              <span className="truncate">{displayName(model)}</span>
-              {/* S-3 / round-2 P-6: an eye for a model that sees images, a page for
-                  text-only; the words live in the hover bubble. */}
-              {model.status === 'complete' && <ModalityMark vision={model.vision ?? 'none'} />}
-            </p>
+            <Tooltip text={model.id}>
+              <p className="text-xs text-fg font-medium truncate flex items-center gap-1.5">
+                <span className="truncate">{displayName(model)}</span>
+                {/* S-3 / round-2 P-6: an eye for a model that sees images, a page for
+                    text-only; the words live in the hover bubble. */}
+                {model.status === 'complete' && <ModalityMark vision={model.vision ?? 'none'} />}
+              </p>
+            </Tooltip>
             {subtitle && <p className="text-3xs text-fg-muted">{subtitle}</p>}
             {/* Its own line, in full — Destin, 2026-08-27 (A3). It is free to wrap;
                 the room came from the detail line above, which handed its state
@@ -1298,7 +1330,10 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
   // must reach the user instead of vanishing into an unhandledrejection.
   const [dlError, setDlError] = useState<string | null>(null);
 
-  const startDownload = async () => {
+  // Card #45: a Gemma model asks first (Cancel / Download); everything else starts at once.
+  const gemmaGate = useGemmaTermsGate(repo);
+  const startDownload = () => gemmaGate.ask(() => void startDownloadNow());
+  const startDownloadNow = async () => {
     setDlError(null); // clear any prior failure before retrying
     try {
       await window.claude.models.download(repo, q);
@@ -1326,6 +1361,7 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
           </Button>
         )}
       </div>
+      {gemmaGate.dialog}
       {dl && <DownloadProgressRow dl={dl} />}
       {/* Same as the repo card's own failed start above (small-fixes-1): the notice carries
           Try again in place of the hidden Download button. */}

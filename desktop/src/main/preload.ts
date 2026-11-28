@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame, webUtils } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
@@ -107,6 +107,7 @@ const IPC = {
   UPDATE_RESTART_TO_UPDATE: 'update:restart-to-update',
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
+  PICTURE_ACTION: 'shell:picture-action',
   OPEN_PATH: 'shell:open-path',
   PERMISSION_RESPOND: 'permission:respond',
   REMOTE_GET_CONFIG: 'remote:get-config',
@@ -177,8 +178,6 @@ const IPC = {
   THEME_MARKETPLACE_REFRESH_REGISTRY: 'theme-marketplace:refresh-registry',
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',
-  MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
-  MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
   MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
   MARKETPLACE_READ_COMPONENT: 'marketplace:read-component',
   FIRST_RUN_STATE: 'first-run:state',
@@ -357,6 +356,9 @@ const IPC = {
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   CLAUDE_CODE_STATUS: 'claude-code:status',
   CLAUDE_CODE_INSTALL: 'claude-code:install',
+  CLAUDE_CODE_SIGN_IN: 'claude-code:sign-in',
+  CLAUDE_CODE_CANCEL_SIGN_IN: 'claude-code:cancel-sign-in',
+  NETWORK_CHECK: 'network:check',
   SEARCH_LIST: 'search:list',
   SEARCH_SET_KEY: 'search:set-key',
   SEARCH_REMOVE_KEY: 'search:remove-key',
@@ -464,6 +466,9 @@ const IPC = {
   OFFICE_VERSIONS: 'office:versions',
   OFFICE_RESTORE: 'office:restore',
   OFFICE_SAVE_COPY: 'office:save-copy',
+  OFFICE_RENAME: 'office:rename',
+  OFFICE_DUPLICATE: 'office:duplicate',
+  OFFICE_FORGET_RECENT: 'office:forget-recent',
   OFFICE_JOURNAL_DONE: 'office:journal-done',
   OFFICE_OTHER_UNSAVED: 'office:other-unsaved',
   OFFICE_PROCEED: 'office:proceed',
@@ -484,6 +489,7 @@ const IPC = {
   DEFAULTS_SET: 'defaults:set',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  SETTINGS_REPAIR_NOTICE: 'settings:repair-notice',
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   ACCOUNT_START: 'account:start',
@@ -525,6 +531,7 @@ const IPC = {
   ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
   ARCADE_LEADERBOARD: 'arcade:leaderboard',
   ARCADE_RECORDS: 'arcade:records',
+  ARCADE_ROOM_TICKET: 'arcade:room-ticket',
   ARCADE_STATUS: 'arcade:status',
   ARCADE_SUBMIT_SCORE: 'arcade:submit-score',
   ARTIFACTS_APPEND_VERSION: 'artifacts:append-version',
@@ -1379,9 +1386,6 @@ contextBridge.exposeInMainWorld('claude', {
   // Phase 3: unified marketplace APIs (packages map, per-entry config)
   marketplace: {
     getPackages: (): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_PACKAGES),
-    getConfig: (id: string): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_CONFIG, { id }),
-    setConfig: (id: string, values: Record<string, any>): Promise<void> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_SET_CONFIG, { id, values }),
     // Phase 4 — user-initiated cache bust.
     invalidateCache: (): Promise<void> => ipcRenderer.invoke(IPC.MARKETPLACE_INVALIDATE_CACHE),
     // In-app file viewer — returns { content, source, path } or { error }.
@@ -1522,13 +1526,18 @@ contextBridge.exposeInMainWorld('claude', {
   dialog: {
     openFile: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE),
+    // WHY: Electron removed File.path (v32), so a dropped file's real location can only be read
+    // here, in the preload, via webUtils. Synchronous, no IPC. Returns '' if the file has no path.
+    pathForFile: (file: File): string => {
+      try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
+    },
     openFolder: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER),
     openSound: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_SOUND),
     readTranscriptMeta: (transcriptPath: string): Promise<{ model: string; contextPercent: number } | null> =>
       ipcRenderer.invoke(IPC.READ_TRANSCRIPT_META, { path: transcriptPath }),
-    saveClipboardImage: (): Promise<string | null> =>
+    saveClipboardImage: (): Promise<string | null | undefined> =>   // see backend-contract.ts for what each value means
       ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_IMAGE),
   },
   shell: {
@@ -1539,6 +1548,9 @@ contextBridge.exposeInMainWorld('claude', {
     // Reveal a file in the OS file manager (Finder / Explorer / Files).
     showItemInFolder: (filePath: string): Promise<void> =>
       ipcRenderer.invoke(IPC.SHOW_ITEM_IN_FOLDER, { filePath }),
+    // Copy a chat picture to the clipboard, or save it where the person picks (card #143 a). The computer fetches the bytes.
+    pictureAction: (action: 'copy' | 'save', src: string): Promise<{ ok: boolean; canceled?: boolean; reason?: string }> =>
+      ipcRenderer.invoke(IPC.PICTURE_ACTION, { action, src }),
     // Open a local file with the OS default app (HTML→browser, .docx→Word, …).
     // Returns the empty string on success, or an error message on failure.
     openPath: (filePath: string): Promise<string> =>
@@ -1641,6 +1653,8 @@ contextBridge.exposeInMainWorld('claude', {
   settings: {
     get: (field: string): Promise<unknown> => ipcRenderer.invoke(IPC.SETTINGS_GET, { field }),
     set: (field: string, value: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS_SET, { field, value }),
+    // Card #11 a: asked once at start-up; answers the backup's path the first time after a repair, then null.
+    takeRepairNotice: (): Promise<{ backupPath: string } | null> => ipcRenderer.invoke(IPC.SETTINGS_REPAIR_NOTICE),
   },
   // Fast mode + effort level — local-only state for /fast and /effort UI.
   modes: {
@@ -2251,8 +2265,8 @@ contextBridge.exposeInMainWorld('claude', {
     cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_CANCEL_SIGN_IN)),
   },
   // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
-  // Read-only on purpose — the other three verbs have no equivalent here,
-  // because Claude Code owns its login and the app cannot clear it.
+  // No sign-out verb on purpose: Claude Code owns its login and the app cannot clear it. Sign-in
+  // exists since card #236: signIn/cancelSignIn rerun the first-launch `claude auth login`.
   // `refresh: true` drops main's 60s cache first; the Cloud providers page
   // passes it so opening Settings always shows today's answer.
   claudeCode: {
@@ -2260,6 +2274,14 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS, opts),
     // First-run local models (F-5): the Settings card's Install Claude Code.
     install: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL),
+    // Card #236: sign in again. signIn() can THROW a sentence written for the screen, so it
+    // goes through unwrapInvokeError like the other providers' sign-ins.
+    signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CLAUDE_CODE_SIGN_IN)),
+    cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CLAUDE_CODE_CANCEL_SIGN_IN)),
+  },
+  // Card #236: the app's own connection check (never rejects; offline = both probes failed).
+  network: {
+    check: (): Promise<{ online: boolean }> => ipcRenderer.invoke(IPC.NETWORK_CHECK),
   },
   // WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades. list = the
   // fixed backend rows (hasKey flags); set/remove-key manage the encrypted key;
@@ -2291,6 +2313,8 @@ contextBridge.exposeInMainWorld('claude', {
     submitScore: (game: string, score: number) => ipcRenderer.invoke('arcade:submit-score', { game, score }),
     // Head-to-head records. `game` is optional — omitted means every game.
     records: (game?: string) => ipcRenderer.invoke('arcade:records', { game }),
+    // A one-time pass to join a two-player room (2026-11-09 final review F-3).
+    roomTicket: (game: string, room: string) => ipcRenderer.invoke('arcade:room-ticket', { game, room }),
   },
   permissions: {
     list: () => ipcRenderer.invoke('permissions:list'),
@@ -2379,7 +2403,7 @@ contextBridge.exposeInMainWorld('claude', {
     setBackend: (backend: string) => ipcRenderer.invoke(IPC.ENGINE_SET_BACKEND, { backend }),
     // Create-time / swap memory guard + [Reload Model] (2026-07-14).
     memoryCheck: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_MEMORY_CHECK, { modelId }),
-    load: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_LOAD, { modelId }),
+    load: (modelId: string, sessionId?: string) => ipcRenderer.invoke(IPC.MODELS_LOAD, { modelId, sessionId }),
     onDownloadProgress: (cb: (p: unknown) => void) => {
       const listener = (_e: unknown, p: unknown) => cb(p);
       ipcRenderer.on(IPC.MODELS_DOWNLOAD_PROGRESS, listener);
@@ -2675,6 +2699,10 @@ contextBridge.exposeInMainWorld('claude', {
     // After a restore, the editor holding the token reopens its file (EditorFrame).
     onChanged: (cb: (p: { path: string; token: string }) => void) => officePush(IPC.OFFICE_CHANGED, cb),
     saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke(IPC.OFFICE_SAVE_COPY, { token, mode, data }),
+    // Office Home's row actions (card #143).
+    rename: (p: string, newName: string) => ipcRenderer.invoke(IPC.OFFICE_RENAME, { path: p, newName }),
+    duplicate: (p: string) => ipcRenderer.invoke(IPC.OFFICE_DUPLICATE, { path: p }),
+    forgetRecent: (p: string) => ipcRenderer.invoke(IPC.OFFICE_FORGET_RECENT, { path: p }),
     // Before its window closes, its editors journal their newest edits (main/office/office-journal-sync.ts) — desktop only.
     onJournalRequest: (cb: (id: string) => void) => officePush(IPC.OFFICE_JOURNAL_REQUEST, cb),
     journalDone: (id: string) => ipcRenderer.send(IPC.OFFICE_JOURNAL_DONE, { id }),

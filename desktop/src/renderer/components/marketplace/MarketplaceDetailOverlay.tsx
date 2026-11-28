@@ -8,6 +8,7 @@
 // the top card and the labelled sections come from DetailPage.tsx; its header
 // comment says which guide rule each piece follows.
 
+import { announceFailed } from '../../utils/announce';
 import React, { useEffect, useState } from "react";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
@@ -31,6 +32,7 @@ import MarkdownContent from "../MarkdownContent";
 import { DetailActions, DetailIdentity, DetailPage, InstallFailed, type DetailSection } from "./DetailPage";
 import { CountChip, ThumbsChip } from "./FactChips";
 import { workbenchThemeLiked } from "../../workbench-mode";
+import { Tooltip } from '../ui';
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -106,7 +108,7 @@ export default function MarketplaceDetailOverlay({
         member={member}
         onInstall={() => mp.installSkill(entry.id).catch(() => undefined)}
         onUninstall={() => mp.uninstallSkill(entry.id).catch(() => undefined)}
-        onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch(() => undefined)}
+        onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch((e) => announceFailed('change your favorites', e))}
         onShare={onOpenShareSheet ? () => onOpenShareSheet(entry.id) : undefined}
       />
     );
@@ -130,7 +132,7 @@ export default function MarketplaceDetailOverlay({
       onInstall={() => mp.installTheme(entry.slug).catch(() => undefined)}
       onUninstall={() => mp.uninstallTheme(entry.slug).catch(() => undefined)}
       onApply={() => setTheme(entry.slug)}
-      onToggleFavorite={() => mp.favoriteTheme(entry.slug, !favorited).catch(() => undefined)}
+      onToggleFavorite={() => mp.favoriteTheme(entry.slug, !favorited).catch((e) => announceFailed('change your favorites', e))}
       onShare={onOpenThemeShare ? () => onOpenThemeShare(entry.slug) : undefined}
     />
   );
@@ -260,7 +262,17 @@ function SkillDetail({
   // Checked AFTER `installed` on purpose (Task 21): an installed item is described by
   // the locally scanned entry, which has no sourceType, and must keep its Uninstall.
   let actions: React.ReactNode = null;
-  if (isInstalling) {
+  // Plugin off-switch: the notice REPLACES the buttons it stands in for (guide "Status and
+  // notices": a failed action replaces the buttons it came from). No Install, Update or
+  // enable control — nothing here can switch it back on; Remove is its one action, filled.
+  const turnedOff = installed && !!entry.blocked;
+  if (turnedOff) {
+    actions = (
+      <Callout tone="danger" actions={<Button size="sm" onClick={onUninstall}>Remove</Button>}>
+        YouCoded turned this plugin off because it was found to be unsafe. Your settings for it are kept.
+      </Callout>
+    );
+  } else if (isInstalling) {
     actions = <DetailActions><InstallingButton /></DetailActions>;
   } else if (installed) {
     actions = (
@@ -298,7 +310,7 @@ function SkillDetail({
   const identity = (
     <DetailIdentity
       name={entry.displayName}
-      status={installed ? <Pill tone="ok">Installed</Pill> : undefined}
+      status={turnedOff ? <Pill tone="danger">Turned off</Pill> : installed ? <Pill tone="ok">Installed</Pill> : undefined}
       quickActions={
         // Favourite drives the command drawer's starred list, and the share sheet needs
         // local files — so both stay gated on installed, as before.
@@ -620,7 +632,9 @@ function ThemeDetail({
   const swatches = entry.previewTokens ? (
     <div className="flex gap-2 flex-wrap" aria-label="Theme colours">
       {Object.entries(entry.previewTokens).map(([name, color]) => (
-        <span key={name} title={name} className="inline-block w-8 h-8 rounded-md border border-edge-card" style={{ background: color as string }} />
+        <Tooltip key={name} text={name}>
+          <span className="inline-block w-8 h-8 rounded-md border border-edge-card" style={{ background: color as string }} />
+        </Tooltip>
       ))}
     </div>
   ) : null;

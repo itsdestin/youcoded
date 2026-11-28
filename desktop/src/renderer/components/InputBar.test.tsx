@@ -85,6 +85,27 @@ describe('InputBar — context-menu image paste', () => {
     expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
   });
 
+  // WHY: Electron removed File.path, so a drop must resolve paths through dialog.pathForFile
+  // (webUtils in the preload). Without it every dropped file was silently ignored on desktop.
+  it('attaches a dropped file using the preload path bridge', async () => {
+    const pathForFile = vi.fn(() => '/home/me/report.pdf');
+    (window as any).claude.dialog.pathForFile = pathForFile;
+    const box = renderComposer();
+    const container = box.closest('.input-bar-container') as HTMLElement;
+    const file = new File(['x'], 'report.pdf');   // no .path, like modern Electron
+    fireEvent.drop(container, { dataTransfer: { types: ['Files'], files: [file] } });
+    expect(pathForFile).toHaveBeenCalledWith(file);
+    expect(await screen.findByRole('button', { name: 'Remove report.pdf' })).toBeInTheDocument();
+  });
+
+  it('still reads File.path when there is no preload bridge (remote/Android)', async () => {
+    const box = renderComposer();
+    const container = box.closest('.input-bar-container') as HTMLElement;
+    const file = Object.assign(new File(['x'], 'old.txt'), { path: '/tmp/old.txt' });
+    fireEvent.drop(container, { dataTransfer: { types: ['Files'], files: [file] } });
+    expect(await screen.findByRole('button', { name: 'Remove old.txt' })).toBeInTheDocument();
+  });
+
   it('atomically fills exact queued text and attachment chips once before React paints and refuses a newer draft/session', () => {
     const ref=React.createRef<InputBarHandle>();
     const composer=(id:string)=><ChatProvider><SkillProvider><InputBar ref={ref} sessionId={id} provider="claude" /></SkillProvider></ChatProvider>;
@@ -139,6 +160,44 @@ describe('InputBar — context-menu image paste', () => {
 
     await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+  });
+
+  // A clipboard as the browser hands it to a paste event: the listed items plus getData by type.
+  const clipboard = (types: string[], data: Record<string, string> = {}) => ({
+    items: types.map((type) => ({ type, kind: type.startsWith('image/') ? 'file' : 'string' })),
+    getData: (type: string) => data[type] ?? '',
+  });
+
+  it('Ctrl+V of a browser "Copy image" (picture plus an <img> snippet) attaches the picture', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/chrome-copy.png');
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['text/html', 'image/png'], { 'text/html': '<meta charset="utf-8"><img src="https://example.com/cat.png" alt="cat">' }) });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Remove chrome-copy.png' })).toBeInTheDocument();
+  });
+
+  it('Ctrl+V of a picture hands the pasted file itself to the bridge (the phone route)', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/uploads/phone.png');
+    const box = renderComposer();
+    const file = new File([new Uint8Array([1])], 'image.png', { type: 'image/png' });
+    fireEvent.paste(box, { clipboardData: { items: [{ type: 'image/png', kind: 'file', getAsFile: () => file }], getData: () => '' } });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledWith(file));
+    expect(await screen.findByRole('button', { name: 'Remove phone.png' })).toBeInTheDocument();
+  });
+
+  it('a picture paste that the bridge answers with undefined shows no failure notice', async () => {
+    saveClipboardImage.mockResolvedValue(undefined as any);
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['image/png']) });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t attach/i)).not.toBeInTheDocument();
+  });
+
+  it('a text paste never calls the picture bridge', () => {
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['text/plain'], { 'text/plain': 'hello' }) });
+    expect(saveClipboardImage).not.toHaveBeenCalled();
   });
 
   it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
@@ -641,6 +700,15 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
     act(() => { ref.current!.fillDraft('the edited queued message'); });
     expect(textarea.value).toBe('the edited queued message');
     expect(ref.current!.hasDraft()).toBe(true);
+  });
+
+  it('fillDraft() with files puts the words in the box and the files back as chips', () => {
+    const ref = renderWithRef();
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    act(() => { ref.current!.fillDraft('compare these', ['/home/u/report.pdf']); });
+    expect(textarea.value).toBe('compare these');
+    expect(ref.current!.readDraftPayload()).toEqual({ text: 'compare these', attachments: ['/home/u/report.pdf'] });
+    expect(screen.getByText('report.pdf')).toBeTruthy();
   });
 });
 

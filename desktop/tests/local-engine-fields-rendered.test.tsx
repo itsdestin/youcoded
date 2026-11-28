@@ -198,7 +198,7 @@ describe('the engine card', () => {
 describe('T25: which engine builds the card pushes, and which it merely offers', () => {
   afterEach(() => { cleanup(); });
 
-  const ROCM = { backend: 'rocm', label: 'Try ROCm (AMD) — reads faster, writes slower', state: 'ready' as const };
+  const ROCM = { backend: 'rocm', label: 'Try ROCm (AMD) — usually slower in real use', state: 'ready' as const };
   const CUDA = { backend: 'cuda', label: 'Switch to CUDA (faster on NVIDIA)', state: 'ready' as const };
 
   it('ROCm is not in the card body at all — it is inside Advanced, which is shut', async () => {
@@ -218,7 +218,7 @@ describe('T25: which engine builds the card pushes, and which it merely offers',
     await renderAdvanced({ ...RUNNING, backendOptions: [ROCM] });
     const words = screen.getByTestId('engine-advanced').textContent ?? '';
     expect(words).toMatch(/Not recommended/);
-    expect(words).toMatch(/writes its reply more slowly than Vulkan/);
+    expect(words).toMatch(/usually slower than Vulkan/);
     // The claim that was measured false, in either of its spellings.
     expect(words).not.toMatch(/much faster than Vulkan/);
     expect(words).not.toMatch(/faster on AMD/);

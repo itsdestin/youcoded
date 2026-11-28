@@ -10,17 +10,20 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTheme } from '../state/theme-context';
 import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
-import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
+import { deriveSettingsRowState, isSyncAlarm, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { BackupLogo } from './BackupLogo';
 import SyncSetupWizard, { githubBackupWorks, WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { additionalBackupsSummary, timeAgo } from './sync-additional-summary';
 import ConnectGithubModal from './ConnectGithubModal';
 import type { PastSession } from '../../shared/types';
 import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncStatusData } from './sync-dot-state';
@@ -35,6 +38,7 @@ import { RemovedProjectsCard } from './RemovedProjectsCard';
 // WHY its own file (final review F53): SyncPanel grew past its line budget on this branch; the
 // devices list was a self-contained piece, moved unchanged.
 import { DevicesTab, type DeviceRow } from './SyncDevicesTab';
+import { Tooltip } from './ui';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -133,17 +137,6 @@ interface SyncStatus {
 }
 
 // --- Helpers ---
-
-function timeAgo(epoch: number): string {
-  const seconds = Math.floor(Date.now() / 1000 - epoch);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 
 // Map the derived sync display state to a status-dot tailwind class.
@@ -444,8 +437,49 @@ interface SyncPopupProps {
 function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupProps) {
   // Always mounted when open (parent uses {open && <SyncPopup>}) — so open=true is correct here.
   useEscClose(true, onClose);
+  const narrow = useNarrowViewport();
   const [status, setStatus] = useState<SyncStatus | null>(initialStatus);
   const [logLines, setLogLines] = useState<string[]>([]);
+  // WHY (error inventory 2026-09-10, Settings row 75): a log that could not be read said "No sync log
+  // entries yet." - the same words as a log that is genuinely empty. The failure is now kept and shown.
+  const [logError, setLogError] = useState<string | null>(null);
+  // WHY (card #134, error inventory Settings rows for Back up all now / Pause / Remove / Edit / Dismiss / rename device /
+  // all-backups toggle): each of these ended in `catch {}`, so a failed action looked like a button that did nothing, and a
+  // failed save looked saved. One notice at the top of the main view says which action failed, with the real reason under
+  // Details and Try again re-running that same action. A success clears it.
+  const [actionFailure, setActionFailure] = useState<{ message: string; details?: string; retry: () => void } | null>(null);
+  // The latest handlers and in-flight flags, for Try again: a retry must act on CURRENT state (not what the panel looked
+  // like when the failure happened) and must never overlap an action that is already running.
+  const syncingRef = useRef(false);
+  const toggleBusyRef = useRef(false);
+  const additionalToggleRef = useRef<() => Promise<void>>(async () => {});
+  // N2 (Destin): scroll the failure notice into view when a NEW failure arrives. The effect depends on the notice object, which
+  // is created once per failure, so ordinary re-renders and later successes do not scroll. Reduced motion (the OS setting or the
+  // app's Reduced effects) jumps instead of animating.
+  const failureRef = useRef<HTMLDivElement>(null);
+  const { reducedEffects } = useTheme();
+  useEffect(() => {
+    if (!actionFailure) return;
+    const osReduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const el = failureRef.current;
+    if (!el) return;
+    const behavior = osReduced || reducedEffects ? 'auto' : 'smooth';
+    // Scroll ONLY the popup's own scroller (never the page behind it): scrollIntoView would also move every scrollable ancestor.
+    // The popup's header sits outside that scroller, so nothing sticky can cover the notice; 8px of air above it.
+    const scroller = el.closest('.dialog-scroll') as HTMLElement | null;
+    if (scroller && typeof scroller.scrollTo === 'function') {
+      const box = el.getBoundingClientRect();
+      const view = scroller.getBoundingClientRect();
+      if (box.top >= view.top && box.bottom <= view.bottom) return; // already fully in view: no needless movement
+      const top = scroller.scrollTop + (box.top - view.top) - 8;
+      scroller.scrollTo({ top: Math.max(0, top), behavior });
+    } else {
+      el.scrollIntoView?.({ block: 'start', behavior });
+    }
+  }, [actionFailure]); // eslint-disable-line react-hooks/exhaustive-deps -- reducedEffects is read at the moment of a new failure only
+  const failAction = useCallback((message: string, e: unknown, retry: () => void) => {
+    setActionFailure({ message, details: plainMessage(e, ''), retry });
+  }, []);
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -598,23 +632,30 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
   // Force sync all sync-enabled backends
   const handleForceSync = useCallback(async () => {
+    if (syncingRef.current) return; // Try again cannot start a second run while one is going
+    syncingRef.current = true;
     setSyncing(true);
     try {
-      await claude.sync.force();
+      const res = await claude.sync.force();
+      // `force` answers { success:false, error } instead of throwing; it used to be dropped here.
+      if (res && res.success === false) failAction("Couldn't back up everything", res.error ? { message: res.error } : '', handleForceSync);
+      else setActionFailure(null);
       await refreshStatus();
       const log = await claude.sync.getLog(30);
       setLogLines(log);
-    } catch {}
+    } catch (e) { failAction("Couldn't back up everything", e, handleForceSync); }
+    syncingRef.current = false;
     setSyncing(false);
-  }, [claude, refreshStatus]);
+  }, [claude, refreshStatus, failAction]);
 
   const handleDismiss = useCallback(async (code: string) => {
     try {
       await claude.sync.dismissWarning(code);
+      setActionFailure(null);
       // Fix: filter by w.code now that warnings are SyncWarning objects, not strings.
       setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w.code !== code) } : prev);
-    } catch {}
-  }, [claude]);
+    } catch (e) { failAction("Couldn't dismiss that warning", e, () => { void handleDismiss(code); }); }
+  }, [claude, failAction]);
 
   // Per-backend actions
   // WHY (Destin, batch 1 deck E-1 then E-1b): a bare "Error" that vanished after two seconds
@@ -658,17 +699,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleToggleSync = useCallback(async (id: string, syncEnabled: boolean) => {
     try {
       await claude.sync.updateBackend(id, { syncEnabled });
+      setActionFailure(null); // a later success replaces an older failure notice
       await refreshStatus();
-    } catch {}
-  }, [claude, refreshStatus]);
+    } catch (e) { failAction(syncEnabled ? "Couldn't resume this backup" : "Couldn't pause this backup", e, () => { void handleToggleSync(id, syncEnabled); }); }
+  }, [claude, refreshStatus, failAction]);
 
   const handleRemoveBackend = useCallback(async (id: string) => {
     try {
       await claude.sync.removeBackend(id);
+      setActionFailure(null);
       await refreshStatus();
-    } catch {}
+    } catch (e) { failAction("Couldn't remove this backup", e, () => { void handleRemoveBackend(id); }); }
     setMenuOpenId(null);
-  }, [claude, refreshStatus]);
+  }, [claude, refreshStatus, failAction]);
 
   // Wizard preselect: when a warning fix-action opens the wizard for a specific backend,
   // we stash the backend id+type here so SyncSetupWizard jumps straight to the right flow.
@@ -837,9 +880,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleRenameDevice = useCallback(async (id: string, name: string) => {
     const fn = (window as any).claude?.syncSpaces?.renameDevice;
     if (typeof fn !== 'function') return;
-    try { await fn(id, name); } catch {}
+    try {
+      const res = await fn(id, name);
+      // The handler answers { ok:false } for a failed rename; the old name simply came back with no word (card #134).
+      if (res && res.ok === false) failAction("Couldn't rename this device", res.error ? { message: res.error } : '', () => { void handleRenameDevice(id, name); });
+      else setActionFailure(null);
+    } catch (e) { failAction("Couldn't rename this device", e, () => { void handleRenameDevice(id, name); }); }
     await loadDevices(); // re-fetch so the fold-on-read authoritative name is shown
-  }, [loadDevices]);
+  }, [loadDevices, failAction]);
   // Returns a plain-words failure note, or null on success — DevicesTab renders it.
   // Discarding the result would be wrong: both handlers answer { ok:false } for a
   // real failure and { ok:false, error } for the self-guard, so silence would leave
@@ -909,23 +957,37 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // backend, ON -> resume every paused backend. Non-destructive (never removes a
   // backend). With zero backends, turning ON just reveals the inline picker
   // (additionalIntent) — actually adding a backend is what persists anything.
-  const handleAdditionalToggle = useCallback(async () => {
+  const runAdditionalToggle = useCallback(async () => {
     const list = status?.backends ?? [];
     const on = list.some(b => b.syncEnabled) || additionalIntent;
+    // A rejection mid-loop used to escape as an unhandled error, leaving some backups changed and some not with no word.
+    // The status refresh runs either way so the rows show what really happened; Try again re-runs the toggle.
+    const runAll = async (enabled: boolean) => {
+      try {
+        for (const b of list) if (enabled ? !b.syncEnabled : !!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: enabled });
+        setActionFailure(null);
+        return true;
+      } catch (e) { failAction("Couldn't change every backup. Some may have changed", e, () => { void additionalToggleRef.current(); }); return false; }
+    };
     if (on) {
       // Turn OFF: pause all currently-active backends and drop the picker intent.
-      for (const b of list) if (b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: false });
-      setAdditionalIntent(false);
+      if (await runAll(false)) setAdditionalIntent(false);
       await refreshStatus();
     } else if (list.length === 0) {
       // Turn ON with nothing connected: reveal the inline Drive/iCloud picker.
       setAdditionalIntent(true);
     } else {
       // Turn ON with paused backends: resume them all.
-      for (const b of list) if (!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: true });
+      await runAll(true);
       await refreshStatus();
     }
-  }, [status, additionalIntent, claude, refreshStatus]);
+  }, [status, additionalIntent, claude, refreshStatus, failAction]);
+  const handleAdditionalToggle = useCallback(async () => {
+    if (toggleBusyRef.current) return; // a second tap (or Try again) while it is running does nothing
+    toggleBusyRef.current = true;
+    try { await runAdditionalToggle(); } finally { toggleBusyRef.current = false; }
+  }, [runAdditionalToggle]);
+  additionalToggleRef.current = handleAdditionalToggle; // Try again always runs the latest one, on current state
 
   // Recent sync events for DISPLAY only. `hub-status` entries drive the
   // "Instant sync" status line below (that's their surface); `projects-changed`
@@ -1056,10 +1118,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           <EditBackendForm
             backend={editingBackend}
             onSave={async (updates) => {
-              try {
-                await claude.sync.updateBackend(editingId, updates);
-                await refreshStatus();
-              } catch {}
+              const save = async () => {
+                try {
+                  await claude.sync.updateBackend(editingId, updates);
+                  setActionFailure(null);
+                  await refreshStatus();
+                } catch (e) { failAction("Couldn't save your changes to this backup", e, () => { void save(); }); }
+              };
+              await save();
               setView('main');
               setEditingId(null);
             }}
@@ -1069,6 +1135,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         // WHY space-y-4 (fix batch 1, 2026-09-24): design guide Settings
         // spacing, 16px between groups — was space-y-6 (24px).
         <div className="space-y-4">
+            {actionFailure && (
+              <div ref={failureRef} className="scroll-mt-2">
+                <ErrorState variant="inline" message={actionFailure.message} details={actionFailure.details || undefined}
+                  onRetry={() => { const retry = actionFailure.retry; setActionFailure(null); retry(); }} />
+              </div>
+            )}
 
             {/* ============================================================
                 PRIMARY — Cross-device backup & sync box (redesign 2026-07-15).
@@ -1307,7 +1379,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         <div
                           role="tablist"
                           aria-label="Synced content"
-                          className="flex gap-2"
+                          // WHY flex-wrap + tighter phone gap (Destin, 2026-11-01: "conversations pill inaccessible"): on a phone the
+                          // third pill ran off the card's edge where it could not be tapped; now it drops to a second line if needed.
+                          className="flex flex-wrap gap-2 max-sm:gap-1.5"
                           onKeyDown={(e) => {
                             // Left/Right arrow roving between the three pills.
                             if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
@@ -1439,9 +1513,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               // WHY its own label (nothing-bare-2#N2-5, Destin: "additional backups now
               // appear to be under main backups"): once the first card has a label,
               // every card on the page needs one, or the next reads as filed under it.
-              return (<div>
-                <SectionLabel className="mb-2">Additional backups</SectionLabel>
-                <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+              // WHY folded on a phone (density-review D-4): the tallest section, set up once, pushed this popup past one
+              // screen. The row summarises it and opens itself on a problem, so a failure is never hidden behind it.
+              const anyError = list.some(b => b.lastError != null) || Object.keys(uploadFailure).length > 0;
+              const summary = additionalBackupsSummary(list, masterOn, anyError);
+              const body = (<>
                   {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
                       a boxed row here read as a card inside the card. */}
                   <SettingRow
@@ -1523,17 +1599,18 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                 unsupported GitHub backup: Upload now and the rest would do nothing;
                                 its Remove sits in its notice below. */}
                             {!unsupported && <div className="relative shrink-0">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
-                                className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted"
-                                title="Manage"
-                              >
-                                {/* App settings gear (same SVG as HeaderBar). */}
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
-                              </button>
+                              <Tooltip text="Manage">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
+                                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted"
+                                >
+                                  {/* App settings gear (same SVG as HeaderBar). */}
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  </svg>
+                                </button>
+                              </Tooltip>
                               {menuOpenId === b.id && (
                                 /* Overflow menu — .layer-surface for theme-consistent look + glass. */
                                 <div className="layer-surface absolute right-0 top-7 w-44 py-1" style={{ zIndex: 10 }} onClick={(e) => e.stopPropagation()}>
@@ -1631,7 +1708,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       )}
                     </div>
                   )}
-                </div></div>
+              </>);
+              if (narrow) return <FoldRow title="Additional backups" description={summary} defaultOpen={anyError}><div className="space-y-1.5">{body}</div></FoldRow>;
+              return (<div>
+                <SectionLabel className="mb-2">Additional backups</SectionLabel>
+                <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>{body}</div></div>
               );
             })()}
 
@@ -1677,7 +1758,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     return (
                       <Callout
                         key={detailsKey}
-                        tone={w.level === 'danger' ? 'danger' : 'warning'}
+                        tone={isSyncAlarm(w) ? 'danger' : w.level === 'danger' ? 'info' : 'warning'} // never set up: calm, not red (isSyncAlarm)
                         title={w.title}
                         actions={actions}
                       >
@@ -1712,13 +1793,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               onToggle={async (next) => {
                 setShowLog(next);
                 if (next) {
-                  try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
+                  try { const log = await claude.sync.getLog(30); setLogLines(log); setLogError(null); }
+                  catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); }
                 }
               }}
             >
                 <div>
+                  {logError && (
+                    <ErrorState
+                      variant="inline"
+                      message={`Couldn't load the sync log: ${logError}`}
+                      onRetry={async () => {
+                        try { setLogLines(await claude.sync.getLog(30)); setLogError(null); }
+                        catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); }
+                      }}
+                    />
+                  )}
                   {logLines.length === 0 ? (
-                    <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
+                    !logError && <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
                   ) : (
                     // WHY two boxes (2026-10-15, the one scroll fade): the fade is a mask, so on the
                     // bordered box it would fade the border and fill too. The outer box frames;
@@ -1753,7 +1845,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       group is never bare text. */}
                   <Button
                     variant="secondary"
-                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); } catch {} }}
+                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); setLogError(null); } catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); } }}
                     className="w-full mt-1.5"
                   >
                     Refresh

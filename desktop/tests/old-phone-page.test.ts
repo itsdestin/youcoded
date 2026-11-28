@@ -44,7 +44,7 @@ describe('an old phone page against the new host', () => {
     oldShim = await import('./fixtures/old-remote-shim/remote-shim');
     oldShim.installShim();
   });
-  afterEach(() => { delete (globalThis as any).WebSocket; vi.resetModules(); });
+  afterEach(() => { vi.useRealTimers(); delete (globalThis as any).WebSocket; vi.resetModules(); });
 
   async function host() {
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -56,10 +56,9 @@ describe('an old phone page against the new host', () => {
   }
 
   it('the old page asks for a snapshot with a seq and no version, and the new host answers it with the session list and a degraded snapshot holding one refresh notice per conversation', async () => {
-    // WHY the host is built BEFORE the old page connects: the old page gives a restore 10 real seconds to be answered, then shows
-    // "may be out of date" on its own. Importing the host after connecting let a slow, loaded run burn that time, and the strip then
-    // showed a third state (restoring, incomplete, incomplete). Nothing slow may sit between connecting and the answer.
-    const { ws } = await host();
+    // WHY fake timeouts: the old page's 10 s "no snapshot came" timer fired on a loaded machine before the snapshot was
+    // handed over, announcing 'incomplete' twice (verify.sh, load ~100). Frozen time makes the order the test's, not the machine's.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const p = oldShim.connect('pw', false);
     const sock = FakeWebSocket.instances[0];
     sock.open();
@@ -73,6 +72,7 @@ describe('an old phone page against the new host', () => {
     expect(ready.payload.seq).toBeDefined();
     expect(ready.payload.protocolVersion).toBeUndefined();          // what makes it recognisable as old
 
+    const { ws } = await host();
     ws.emit('message', JSON.stringify(ready));
     await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r));
     expect(ws.frames.map((f) => f.type)).toEqual(['session:created', 'session:created', 'chat:hydrate']);

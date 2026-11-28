@@ -501,6 +501,17 @@ describe('ChatGptAuth: saved credential recovery', () => {
 });
 
 describe('ChatGptAuth: the sign-in round', () => {
+  // WHY: on the phone a finished sign-in must bring YouCoded back in front of the browser (onSignedIn -> app).
+  it('calls onSignedIn once when a sign-in succeeds, and never when it does not', async () => {
+    const onSignedIn = vi.fn();
+    const auth = h.build({ onSignedIn });
+    expect(await auth.signIn()).toBe(true);
+    expect(onSignedIn).not.toHaveBeenCalled();
+    await completeSignIn(auth);
+    await auth.waitForSignIn();
+    expect(onSignedIn).toHaveBeenCalledTimes(1);
+  });
+
   it('signIn opens the authorize URL, reads as waiting, and a good callback signs in — nothing token-shaped touches the account file', async () => {
     const auth = h.build();
     expect(auth.status()).toEqual({ state: 'signed-out' });
@@ -1030,7 +1041,8 @@ describe('ChatGptAuth: accessToken', () => {
       await expect(auth.accessToken()).rejects.toThrow(CHATGPT_SIGN_IN_EXPIRED_MESSAGE);
       expect(h.secrets.has(ref)).toBe(false);
       expect(fs.existsSync(h.file)).toBe(false);
-      expect(auth.status()).toEqual({ state: 'signed-out' });
+      // Card #236: a refused renewal reads "expired", not plain "Not signed in".
+      expect(auth.status()).toEqual({ state: 'signed-out', expired: true });
       expect(h.clock.intervals()).toHaveLength(0);
       await auth.dispose();
     }
@@ -1291,6 +1303,13 @@ describe('ChatGptAuth: fetch()', () => {
     expect(refreshCalls()).toHaveLength(1);
     expect(h.secrets.has(ref)).toBe(false);
     expect(fs.existsSync(h.file)).toBe(false);
+    expect(auth.status()).toEqual({ state: 'signed-out', expired: true });
+  });
+
+  it('a deliberate sign-out reads plain signed-out, never expired', async () => {
+    await h.seedSignedIn();
+    const auth = h.build();
+    await auth.signOut();
     expect(auth.status()).toEqual({ state: 'signed-out' });
   });
 

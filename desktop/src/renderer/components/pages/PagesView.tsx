@@ -167,7 +167,9 @@ function PageCard({ page, onOpen, onSettings, pinFull }: { page: PageSummary; on
           <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-5 h-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
+          <Tooltip text={page.name}>
+            <div className="text-sm font-medium text-fg truncate">{page.name}</div>
+          </Tooltip>
           <div className="text-xs text-fg-muted line-clamp-2">{page.description}</div>
         </div>
         {/* Edit in chat moved into Page settings (step 1 review, S-card-gear). */}

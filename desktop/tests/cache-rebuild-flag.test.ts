@@ -9,6 +9,7 @@
 // invisible: requests keep succeeding, the bill is just higher.
 import { describe, it, expect } from 'vitest';
 import { makeSession, scriptModel, drainTurn } from './helpers/harness-fakes';
+import { FAKE_SUMMARY } from './helpers/harness-fakes';
 
 const turnUsage = (events: any[]) => events.filter((e) => e.type === 'turn-complete').map((e) => e.data.usage);
 
@@ -27,7 +28,7 @@ describe('turn-complete usage.expectedRebuild', () => {
       // WHY: reserve the summary output separately; a 6k history cannot
       // produce a complete handoff inside a 4k window.
       contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
-      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'here is the answer' }]),
     });
     await drainTurn(session, 'continue');
     expect(events.filter((e) => e.type === 'compact-summary')).toHaveLength(1);

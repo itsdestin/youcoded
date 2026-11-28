@@ -55,6 +55,7 @@ import { resolveStaticFile } from './remote-static-path';
 import { log } from './logger';
 import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED, DEVICE_EXPIRY_DAYS } from '../shared/remote-close-codes';
 import { AuthThrottle, VerificationQueue } from './remote-auth-throttle';
+import { failedMessageAnswer } from './remote-failed-answer';
 
 const AUTH_TIMEOUT_MS = 5000;
 // The most an unauthenticated socket may buffer before it signs in. The auth
@@ -671,7 +672,7 @@ export class RemoteServer {
   getDeviceList(): RemoteDeviceView[] {
     const online = new Set<string>();
     for (const c of this.clients) online.add(c.deviceId);
-    this.devices.expireStale(Date.now(), online); // a stale device never shows in Settings; a connected one is never stale
+    this.devices.expireStale(Date.now(), online); // a stale device is signed out here (and shows as a muted 'signed out' row); a connected one is never stale
     return this.devices.list(online);
   }
 
@@ -685,6 +686,8 @@ export class RemoteServer {
    * list that keeps offline devices.
    */
   unpairDevice(deviceId: string): boolean {
+    // WHY first: an expired phone is already signed out, so "Remove" on its muted row only clears the row.
+    if (this.devices.dismissExpired(deviceId)) return true;
     const revoked = this.devices.revoke(deviceId);
     if (!revoked) return false;
     // Contract R10 (batch 3): removing a device also ends its right to download.
@@ -1098,7 +1101,7 @@ export class RemoteServer {
     // what an older page that expects a snapshot has no way to use.
     const drop = () => { this.removeClient(client); };
     ws.on('pong', () => { client.missedPings = 0; client.lastHeardAt = Date.now(); });
-    ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); void this.handleMessage(client, raw as Buffer | string); });
+    ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); this.handleMessage(client, raw as Buffer | string).catch((err) => this.respondToFailure(client, raw as Buffer | string, err)); });
     ws.on('close', (code: number, reason: Buffer) => {
       const why = reason && reason.length ? ` (${reason.toString()})` : '';
       // Silence before the drop separates "the phone went away" from "the phone was talking
@@ -1368,6 +1371,10 @@ export class RemoteServer {
   }
 
   // --- Helpers ---
+
+  // A throwing handler is answered at once (card #134; see remote-failed-answer.ts), unless it had already answered that request.
+  private respondToFailure(client: AuthenticatedClient, raw: Buffer | string, err: unknown): void { const a = failedMessageAnswer(raw, err); if (a && !this.wasAnswered(a.id)) this.respond(client, a.type, a.id, a.payload); }
+  private wasAnswered(id: string): boolean { return (this.completedRequests.get(id.split(':')[0] ?? '') ?? []).some((e) => e.id === id); }
 
   /** Returns how many characters were sent (0 when the socket had closed). */
   private respond(client: AuthenticatedClient, type: string, id: string, payload: any): number {

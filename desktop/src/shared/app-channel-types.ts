@@ -59,6 +59,7 @@ export interface AppChannelTypes {
   'arcade:status': { request: void; response: Answer<ArcadeOps['status']> | ArcadeUnavailable };
   'arcade:leaderboard': { request: { game: string }; response: Answer<ArcadeOps['leaderboard']> | ArcadeUnavailable };
   'arcade:submit-score': { request: { game: string; score: number }; response: Answer<ArcadeOps['submitScore']> | ArcadeUnavailable };
+  'arcade:room-ticket': { request: { game: string; room: string }; response: Answer<ArcadeOps['roomTicket']> | ArcadeUnavailable };
   'arcade:records': { request: { game?: string }; response: Answer<ArcadeOps['records']> | ArcadeUnavailable };
 
   // ── Zoom (the computer's window; a phone paired to it may drive it too, as before) ──
@@ -87,6 +88,7 @@ export interface AppChannelTypes {
   'shell:open-changelog': { request: void; response: Nothing };
   'shell:open-external': { request: { url: string }; response: Nothing };
   'shell:show-item-in-folder': { request: { filePath: string }; response: Nothing };
+  'shell:picture-action': { request: { action: 'copy' | 'save'; src: string }; response: { ok: boolean; canceled?: boolean; reason?: string } };
   'shell:open-path': { request: { filePath: string }; response: string };
   'dialog:open-file': { request: void; response: string[] };
   'dialog:open-sound': { request: void; response: string | null };

@@ -23,6 +23,9 @@ jobs:
           - os: macos-latest
             artifact: desktop/release/*.dmg
             name: macos
+          # WHY ubuntu-latest again (card #247, 2026-11-11): pinned to 24.04 for one commit while the
+          # 26.04 rpm was unproven. It is now proven to install on Fedora-family systems (see the
+          # note on the `formats` job in desktop-ci.yml), and the package checks run on this same image.
           - os: ubuntu-latest
             artifact: |
               desktop/release/*.AppImage
@@ -129,6 +132,10 @@ jobs:
         run: node scripts/refresh-bundled-plugin-pins.mjs --check
 
       - name: Run tests
+        # WHY: this job fetched the Office add-on with --required above; the yc-early tests skip
+        # without it, so this makes a missing bundle a red failure instead of a silent skip.
+        env:
+          YC_OFFICE_ADDON_REQUIRED: "1"
         run: npm test
 
       - name: Install Linux build deps
@@ -312,7 +319,7 @@ jobs:
           fi
 
       - name: Upload installers to release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3
         with:
           # Includes youcoded-release.json + .sig when signing ran above.
           files: artifacts/**/*

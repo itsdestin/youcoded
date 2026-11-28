@@ -10,7 +10,7 @@
 // - Registers its EditorView in editor-registry so build-menu computes line
 //   numbers via state.doc.lineAt() — the DOM is virtualized and any
 //   textContent counting emits plausible WRONG citations (§5.3).
-// - Soft-keyboard: scrollMargins feeds --vvp-offset (Android overlays the
+// - Soft-keyboard: scrollMargins feeds --kb-offset (Android overlays the
 //   keyboard WITHOUT resizing the layout viewport, so CM6's own scrollIntoView
 //   math believes a cursor behind the keyboard is visible — §12.7). Do NOT
 //   "fix" this by shrinking the root container; that was reverted as jitter.
@@ -33,7 +33,7 @@ import type { ArtifactViewProps } from './types';
 // (CM6 invokes this on every scroll computation) so it always reflects the
 // live viewport without a listener of its own.
 function vvpOffsetPx(): number {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue('--vvp-offset').trim();
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--kb-offset').trim(); // any keyboard, not only the chat's (useVisualViewport.ts)
   const n = parseFloat(raw);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }

@@ -40,13 +40,17 @@ const VIEW = '1600x1000';
 const CROP = '1600x840+0+0';
 
 // Everything that has to be TRUE before the shutter, as one expression: the
-// live demo has swapped in (otherwise the window is an empty poster), and the
-// intro has released the hero. Waiting on this instead of sleeping is what
+// demo window's still picture has loaded (otherwise the window is empty), and
+// the intro has released the hero. Waiting on this instead of sleeping is what
 // stops the capture from landing mid-intro with the headline half-swapped —
 // which it did twice before this became a --wait.
-const READY = "document.querySelector('.embed') && "
-  + "document.querySelector('.embed').classList.contains('live') && "
-  + "!document.body.classList.contains('intro-mode')";
+// WHY the still and not the live demo (2026-11-13): the page no longer starts
+// the demo on its own -- it waits for the visitor's pointer, because starting
+// it froze the page (see the speed pass in index.html). The still is a
+// photograph of the same app in the same look, so the card looks the same.
+const READY = "(function(){var p=document.querySelector('.embed-poster');"
+  + "return !!p && p.complete && p.naturalWidth > 0 && "
+  + "!document.body.classList.contains('intro-mode');})()";
 
 // Then pin the two things that are still moving at shutter time. cycler-static
 // is the page's OWN reduced-motion path for the headline, so the card gets the

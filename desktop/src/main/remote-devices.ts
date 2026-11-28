@@ -27,13 +27,18 @@ export interface RemoteDevice {
   lastUsedAt: number;
   /** 'expired' = signed out for 90 days of non-use (the phone is told so); null = unpaired by hand. */
   revokedReason: 'expired' | null;
+  /**
+   * The owner cleared an expired row from the list. WHY a flag and not a delete: the record must stay so a
+   * phone that comes back is still told "signed out after 90 days" rather than treated as a stranger.
+   */
+  dismissed: boolean;
 }
 
 /** Destin 2026-10-31: a paired device unused for 90 days must enter the password again. */
 const DEVICE_EXPIRY_MS = DEVICE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
 /** What the panel is allowed to see. Never the hash. */
-export type RemoteDeviceView = Pick<RemoteDevice, 'id' | 'name' | 'createdAt' | 'lastSeenAt'> & { online: boolean };
+export type RemoteDeviceView = Pick<RemoteDevice, 'id' | 'name' | 'createdAt' | 'lastSeenAt'> & { online: boolean; expired: boolean };
 
 export type PairedCredential = { deviceId: string; secret: string };
 
@@ -79,6 +84,7 @@ export class RemoteDeviceStore {
           // 90 days at the upgrade means nobody is signed out the day they update.
           lastUsedAt: d.lastUsedAt == null ? (migrated = true, now) : Number(d.lastUsedAt) || now,
           revokedReason: d.revokedReason === 'expired' ? 'expired' : null,
+          dismissed: d.dismissed === true,
         });
       }
     } catch { /* no store yet */ }
@@ -105,6 +111,7 @@ export class RemoteDeviceStore {
       revokedAt: null,
       lastUsedAt: now,
       revokedReason: null,
+      dismissed: false,
     };
     this.devices.set(device.id, device);
     this.save();
@@ -230,12 +237,27 @@ export class RemoteDeviceStore {
     return !device || device.revokedAt !== null;
   }
 
-  /** Contract row R11: every device that has paired stays listed until it is unpaired. */
+  /**
+   * Contract row R11: every device that has paired stays listed until it is unpaired.
+   * WHY expired rows are listed too (card #216): a phone signed out after 90 unused days used to just vanish,
+   * so the owner never learned why it was gone. It now stays as a muted row (the screen says why) until the
+   * owner clears it. A hand-unpaired device (revokedReason null) still disappears, exactly as before.
+   */
   list(onlineIds: ReadonlySet<string> = new Set()): RemoteDeviceView[] {
     return [...this.devices.values()]
-      .filter(d => d.revokedAt === null)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-      .map(d => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, online: onlineIds.has(d.id) }));
+      .filter(d => d.revokedAt === null || (d.revokedReason === 'expired' && !d.dismissed))
+      // Live devices first (newest first), expired ones sink to the bottom of the list.
+      .sort((a, b) => (Number(a.revokedAt !== null) - Number(b.revokedAt !== null)) || b.lastSeenAt - a.lastSeenAt)
+      .map(d => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, online: onlineIds.has(d.id), expired: d.revokedAt !== null }));
+  }
+
+  /** Clear an expired row from the list. The record stays (see `dismissed`). False when it is not a listed expired row. */
+  dismissExpired(deviceId: string): boolean {
+    const device = this.devices.get(deviceId);
+    if (!device || device.revokedReason !== 'expired' || device.revokedAt === null || device.dismissed) return false;
+    device.dismissed = true;
+    this.save();
+    return true;
   }
 
   /** Every device loses access — what a password change means. */

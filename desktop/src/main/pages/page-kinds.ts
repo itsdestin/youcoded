@@ -87,7 +87,7 @@ async function savedKeyCredential(deps: CredentialDeps, service: string, address
   const record = await deps.store.savedKey(service, address);
   // A multi-part sign-in saved by a recipe is never sent as one plain key.
   if (!record || record.parts?.length) return null;
-  const value = await deps.store.keyValue(record).catch(() => null);
+  const value = await deps.store.keyValue(record).catch(() => null); // benign: a key that cannot be read counts as not saved, and the page asks for it again
   return value ? { in: record.in, param: record.param, value: record.in === 'header' ? applyScheme(record.scheme, value) : value, secret: value } : null;
 }
 
@@ -103,7 +103,7 @@ async function partsCredential(deps: CredentialDeps, c: Of<'key'>): Promise<Page
   // finding 8): another page's single key, or a different set of parts, under
   // the same service and address would otherwise be sent in the wrong places.
   if (!record || partsLayout(record.parts) !== partsLayout(c.parts)) return null;
-  const raw = await deps.store.keyValue(record).catch(() => null);
+  const raw = await deps.store.keyValue(record).catch(() => null); // benign: a key that cannot be read counts as not saved, and the page asks for it again
   let values: Record<string, unknown>;
   try { values = raw ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { return null; }
   const headers: Record<string, string> = {};

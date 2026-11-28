@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { announceFailed } from '../utils/announce';
 import { memoWhileClosed } from './memo-while-closed';
 import type { SkillEntry, CommandEntry } from '../../shared/types';
 import SkillCard from './SkillCard';
@@ -7,10 +8,11 @@ import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useDrawerResize } from '../hooks/useDrawerResize';
 import { useEscClose } from '../hooks/use-esc-close';
-import { isAndroid } from '../platform';
 import { CARD_LEVEL_1, EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
+import { prefersTouchInput } from '../utils/touch-input';
+import { Tooltip } from './ui';
 
 interface Props {
   open: boolean;
@@ -81,7 +83,9 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   useEffect(() => {
     if (!open || searchMode) return;
     setSearch('');
-    if (isAndroid()) return;
+    // WHY prefersTouchInput, not isAndroid(): isAndroid() read false in the real app, and a touchscreen laptop
+    // has the same problem — the on-screen keyboard covered half the list (2026-11-01 phone test).
+    if (prefersTouchInput()) return;   // already true in the phone app (utils/touch-input.ts)
     // Small delay to let the transition start before focusing
     const t = setTimeout(() => searchRef.current?.focus(), 50);
     return () => clearTimeout(t);
@@ -146,27 +150,27 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   const renderCommandCard = (entry: CommandEntry) => {
     const clickable = entry.clickable;
     return (
-      <button
-        key={`cmd:${entry.name}`}
-        type="button"
-        onClick={clickable ? () => onSelectCommand(entry) : undefined}
-        disabled={!clickable}
-        title={!clickable ? entry.disabledReason : undefined}
-        // Change 22: command cards share the drawer grid with SkillCard, so they
-        // move to the same surface — migrating one and not the other splits the
-        // grid into two card species. WHY CARD_LEVEL_1 (final-review#GM-1): the same
-        // first-level card as SkillCard and Settings, so it separates from the panel drawer.
-        className={`${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          clickable
-            ? 'card-interactive cursor-pointer'
-            : 'opacity-50 cursor-not-allowed'
-        }`}
-      >
-        <span className="font-mono text-sm text-fg">{entry.name}</span>
-        <span className="text-xs text-fg-muted mt-1 line-clamp-2">
-          {entry.description || (clickable ? '' : entry.disabledReason)}
-        </span>
-      </button>
+      <Tooltip key={`cmd:${entry.name}`} text={(!clickable ? entry.disabledReason : undefined) ?? ''}>
+        <button
+          type="button"
+          onClick={clickable ? () => onSelectCommand(entry) : undefined}
+          disabled={!clickable}
+          // Change 22: command cards share the drawer grid with SkillCard, so they
+          // move to the same surface — migrating one and not the other splits the
+          // grid into two card species. WHY CARD_LEVEL_1 (final-review#GM-1): the same
+          // first-level card as SkillCard and Settings, so it separates from the panel drawer.
+          className={`${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            clickable
+              ? 'card-interactive cursor-pointer'
+              : 'opacity-50 cursor-not-allowed'
+          }`}
+        >
+          <span className="font-mono text-sm text-fg">{entry.name}</span>
+          <span className="text-xs text-fg-muted mt-1 line-clamp-2">
+            {entry.description || (clickable ? '' : entry.disabledReason)}
+          </span>
+        </button>
+      </Tooltip>
     );
   };
 
@@ -197,7 +201,7 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         key={skill.id}
         skill={skill}
         onClick={onSelect}
-        favorite={{ filled: isFav, onToggle: () => setFavorite(favId, !isFav) }}
+        favorite={{ filled: isFav, onToggle: () => { void setFavorite(favId, !isFav).catch((e) => announceFailed('change your favorites', e)); } }}
         pluginBadge={pluginBadge}
       />
     );
@@ -236,13 +240,11 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
           tests/drawer-card-glass.test.ts. */}
       <div
         ref={resize.drawerRef}
-        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
-          open ? 'translate-y-0' : 'translate-y-full'
-        }`}
+        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out`}
         // WHY a set height, not a 45vh cap (LB-3, 2026-10-01): it opens at 70% and the
         // handle moves it, so the box keeps its height even when few skills are listed.
-        // The height eases only on a click-to-full; while dragging it follows the pointer.
-        style={{ height: resize.height, transitionProperty: resize.dragging ? 'transform' : 'transform, height' }}
+        // It is laid out at FULL height and slid down, opening, closing and resizing alike (useDrawerResize.ts — why).
+        style={resize.style}
       >
         {open && !searchMode && <ScreenMark name="chat/skills" />}
         {open && searchMode && <ScreenMark name="chat/commands" />}
@@ -295,26 +297,28 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
             {/* Pencil — opens Your library (favorites/installed management).
                 Falls back to the legacy Skill Manager when the redesign flag
                 is off; onOpenLibrary is only supplied in that mode. */}
-            <button
-              onClick={() => { onClose(); (onOpenLibrary ?? onOpenManager)(); }}
-              className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
-              title={onOpenLibrary ? "Your library — favorites & installed" : "Manage skills"}
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            <Tooltip text={onOpenLibrary ? "Your library — favorites & installed" : "Manage skills"}>
+              <button
+                onClick={() => { onClose(); (onOpenLibrary ?? onOpenManager)(); }}
+                className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </Tooltip>
             {/* Market stall — jump straight to the marketplace discovery
                 view. Heroicons "building-storefront" outline. */}
-            <button
-              onClick={() => { onClose(); onOpenMarketplace(); }}
-              className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
-              title="Open marketplace"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349M3.75 21V9.349m0 0a3.001 3.001 0 0 0 3.75-.615A2.993 2.993 0 0 0 9.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 0 0 2.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 0 0 3.75.614m-16.5 0a3.004 3.004 0 0 1-.621-4.72l1.189-1.19A1.5 1.5 0 0 1 5.378 3h13.243a1.5 1.5 0 0 1 1.06.44l1.19 1.189a3 3 0 0 1-.621 4.72M6.75 18h3.75a.75.75 0 0 0 .75-.75V13.5a.75.75 0 0 0-.75-.75H6.75a.75.75 0 0 0-.75.75v3.75c0 .414.336.75.75.75Z" />
-              </svg>
-            </button>
+            <Tooltip text="Open marketplace">
+              <button
+                onClick={() => { onClose(); onOpenMarketplace(); }}
+                className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349M3.75 21V9.349m0 0a3.001 3.001 0 0 0 3.75-.615A2.993 2.993 0 0 0 9.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 0 0 2.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 0 0 3.75.614m-16.5 0a3.004 3.004 0 0 1-.621-4.72l1.189-1.19A1.5 1.5 0 0 1 5.378 3h13.243a1.5 1.5 0 0 1 1.06.44l1.19 1.189a3 3 0 0 1-.621 4.72M6.75 18h3.75a.75.75 0 0 0 .75-.75V13.5a.75.75 0 0 0-.75-.75H6.75a.75.75 0 0 0-.75.75v3.75c0 .414.336.75.75.75Z" />
+                </svg>
+              </button>
+            </Tooltip>
           </div>
         </div>
 
@@ -326,7 +330,14 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         {/* Padding lives on an inner wrapper so the scrolling element itself has
             no padding — the fade then meets the drawer's outer edges.
             The drawer's own overflow:hidden + rounded-t-xl clips the top corners. */}
-        <div ref={scrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
+        <div
+          ref={scrollRef}
+          className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1"
+          // WHY: the drawer's bottom `hiddenPx` is below the screen (it slides rather than resizing), so the list is
+          // padded by that much to end on screen, and its fade ends at the screen's edge. While a drag reveals more,
+          // the fade's strip is dropped so the cards coming into view are not hidden under it until the finger lifts.
+          style={{ paddingBottom: resize.hiddenPx, ['--scroll-mask-under' as string]: `${resize.dragging ? 0 : resize.hiddenPx}px` }}
+        >
           <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row

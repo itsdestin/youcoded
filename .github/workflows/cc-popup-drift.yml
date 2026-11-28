@@ -28,6 +28,8 @@ permissions:
 jobs:
   drift:
     runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.check.outputs.verdict }}
     timeout-minutes: 60
     defaults:
       run:
@@ -50,10 +52,44 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
-      # One retry before failing: a slow runner can miss a screen's deadline
-      # once. A real change fails both runs the same way.
+      # One retry before deciding: a slow runner can miss a deadline once; a real change fails both runs the same way.
+      # The verdict (ok / changed / broken / check-failed) goes to the alert job; exit codes are in the script's header.
       - name: Score the latest Claude Code's pop-ups with the app's detector
+        id: check
         run: |
-          node test-conpty/check-popup-drift.mjs --latest --jobs 3 && exit 0
-          echo "::warning::First run reported a difference or failed — retrying once to rule out a flake."
-          node test-conpty/check-popup-drift.mjs --latest --jobs 3
+          set +e
+          node test-conpty/check-popup-drift.mjs --latest --jobs 3; code=$?
+          case "$code" in 0) ;; *)
+            echo "::warning::First run ended with code $code — retrying once to rule out a flake."
+            node test-conpty/check-popup-drift.mjs --latest --jobs 3; code=$? ;;
+          esac
+          [ "$code" = 0 ] && { echo "verdict=ok" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$code" = 1 ] && { echo "verdict=broken" >> "$GITHUB_OUTPUT"; exit 1; }
+          echo "verdict=check-failed" >> "$GITHUB_OUTPUT"; exit 1
+
+  # Ping Destin's phone through the shared alert (.github/actions/drift-alert): when users are affected (new, or a
+  # repeat saying how long it has lasted), once when that clears, and when the check itself broke. Harmless changes
+  # send nothing. WHY its own job: the job above runs an untrusted package and is given no secrets on purpose; this one
+  # runs only that action from the repository. Silent when the NTFY_TOPIC secret is not set.
+  alert:
+    needs: drift
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read    # this workflow's run history: a new problem, or day N of the same one
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/drift-alert
+      - uses: ./.github/actions/drift-alert
+        with:
+          verdict: ${{ needs.drift.outputs.verdict }}
+          check-name: pop-ups
+          workflow-file: cc-popup-drift.yml
+          broken-title: "YouCoded: sends may be refused or lost"
+          broken-body: "The newest Claude Code changed its pop-ups in a way YouCoded misreads: chat messages may be refused or typed into the wrong place. YouCoded needs an update."
+          ntfy-topic: ${{ secrets.NTFY_TOPIC }}
+          github-token: ${{ github.token }}

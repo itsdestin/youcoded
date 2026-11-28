@@ -15,6 +15,7 @@ import { DEFAULT_TAG_COLOR, TAG_COLORS, type TagColor } from '../../../shared/ta
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, InputGroup, SectionLabel, SettingRow, TextInput, Toggle } from '../ui';
 import { TagChip } from './TagChip';
+import { Tooltip } from '../ui';
 
 export function TagCloud({ registry, appliedIds, onToggle }: {
   registry: TagRegistryApi;
@@ -116,13 +117,15 @@ function ColourRow({ value, onChange, label }: { value: TagColor; onChange: (c: 
             style={{ backgroundColor: `var(--${c})`, borderColor: `var(--${c})` }} />
         ))}
         {/* Any colour: a rainbow ring around the picked colour (or the rainbow alone). */}
-        <label title="Any colour"
-          className={`relative w-5 h-5 rounded-full cursor-pointer overflow-hidden ${custom ? 'ring-2 ring-offset-2 ring-offset-inset ring-fg-dim' : ''}`}
-          style={{ background: custom ? `radial-gradient(${value} 45%, transparent 47%), conic-gradient(red, yellow, lime, cyan, blue, magenta, red)` : 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)' }}>
-          <input type="color" aria-label="Pick any colour" value={custom ? value : '#888888'}
-            onChange={(e) => onChange(e.target.value as TagColor)}
-            className="absolute inset-0 opacity-0 cursor-pointer" />
-        </label>
+        <Tooltip text="Any colour">
+          <label
+            className={`relative w-5 h-5 rounded-full cursor-pointer overflow-hidden ${custom ? 'ring-2 ring-offset-2 ring-offset-inset ring-fg-dim' : ''}`}
+            style={{ background: custom ? `radial-gradient(${value} 45%, transparent 47%), conic-gradient(red, yellow, lime, cyan, blue, magenta, red)` : 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)' }}>
+            <input type="color" aria-label="Pick any colour" value={custom ? value : '#888888'}
+              onChange={(e) => onChange(e.target.value as TagColor)}
+              className="absolute inset-0 opacity-0 cursor-pointer" />
+          </label>
+        </Tooltip>
       </div>
     </div>
   );

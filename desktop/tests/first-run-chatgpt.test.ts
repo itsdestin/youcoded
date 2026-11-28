@@ -47,6 +47,11 @@ vi.mock('os', async (importOriginal) => {
   return { ...real, default: { ...real, homedir: () => home }, homedir: () => home };
 });
 vi.mock('../src/main/logger', () => ({ log: vi.fn() }));
+// The setup staircase's one-time reports: captured so the "fixed word only" block below can read them.
+const noteMilestone = vi.hoisted(() => vi.fn());
+vi.mock('../src/main/analytics-service', () => ({ noteMilestone }));
+// Card #236: every sign-in asks the app's own online check first; these files test what happens AFTER it says yes.
+vi.mock('../src/main/network-check', () => ({ checkInternet: vi.fn(async () => true) }));
 // prerequisite-installer imports 'electron'; nothing in it is exercised here.
 vi.mock('../src/main/prerequisite-installer', () => ({
   detectNode: vi.fn(), detectGit: vi.fn(), detectClaude: vi.fn(), detectAuth: vi.fn(),
@@ -100,6 +105,55 @@ function authPrereq(m: FirstRunManager) {
 
 beforeEach(() => { rmSync(SCRATCH_HOME, { recursive: true, force: true }); });
 afterEach(() => { rmSync(SCRATCH_HOME, { recursive: true, force: true }); });
+
+describe('FirstRunManager — sign-in with no internet', () => {
+  const OFFLINE = 'No internet connection. Connect, then try again.';
+
+  it('all three sign-ins stop before opening anything and put the buttons back with the amber no-internet line', async () => {
+    for (const run of [
+      (m: FirstRunManager, auth: ReturnType<typeof fakeAuth>) => m.handleChatGptLogin(auth),
+      (m: FirstRunManager, auth: ReturnType<typeof fakeAuth>) => m.handleOpenRouterLogin(auth as any),
+      (m: FirstRunManager) => m.handleOAuthLogin(),
+    ]) {
+      const m = managerAtAuth();
+      m.checkInternet = async () => false;
+      const auth = fakeAuth('signed-in');
+      await run(m, auth);
+      const s = m.getState();
+      expect(s.lastError).toBe(OFFLINE);
+      expect(s.lastErrorOffline).toBe(true);
+      expect(s.authMode).toBe('none');
+      expect(authPrereq(m).status).toBe('waiting');
+      expect(auth.signIn).not.toHaveBeenCalled(); // no browser, no port
+    }
+  });
+
+  it('shows the waiting screen while the check runs, and a Cancel pressed meanwhile wins over the slow answer', async () => {
+    const m = managerAtAuth();
+    let answer: (online: boolean) => void = () => {};
+    let during: FirstRunState | null = null;
+    m.checkInternet = () => new Promise<boolean>((r) => { during = JSON.parse(JSON.stringify(m.getState())); answer = r; });
+    const auth = fakeAuth('signed-in');
+    const run = m.handleChatGptLogin(auth);
+    await vi.waitFor(() => expect(during).not.toBeNull());
+    expect(during!.authMode).toBe('chatgpt'); // not a blank screen
+    await m.cancelAuth();
+    answer(false); // the slow check finally says offline
+    await run;
+    expect(m.getState()).toMatchObject({ authMode: 'none', lastError: undefined }); // the buttons Cancel put back, no amber line
+    expect(auth.signIn).not.toHaveBeenCalled();
+  });
+
+  it('the amber flag goes away as soon as anything else sets or clears the error', async () => {
+    const m = managerAtAuth();
+    m.checkInternet = async () => false;
+    await m.handleChatGptLogin(fakeAuth('signed-in'));
+    expect(m.getState().lastErrorOffline).toBe(true);
+    m.checkInternet = async () => true;
+    await m.handleChatGptLogin(fakeAuth('timed-out')); // a different failure replaces the line
+    expect(m.getState()).toMatchObject({ lastError: 'Sign-in timed out. Try again?', lastErrorOffline: undefined });
+  });
+});
 
 describe('FirstRunManager.handleChatGptLogin', () => {
   it('shows the waiting line and marks auth in progress before the browser opens, with the 5-minute window', async () => {
@@ -236,6 +290,57 @@ describe('FirstRunManager.handleOpenRouterLogin', () => {
     const m = managerAtAuth();
     await m.handleOpenRouterLogin(auth('cancelled', "YouCoded couldn't open your browser for the sign-in."));
     expect(m.getState().lastError).toBe("YouCoded couldn't open your browser for the sign-in.");
+  });
+});
+
+// Every way setup can go wrong or be abandoned reports ONE fixed word, never the error text (which can hold a key,
+// a path or a user name). Before 2026-11-25 these left an install looking like it had simply stopped.
+describe('FirstRunManager — setup problems are reported by a fixed word only', () => {
+  const sent = () => noteMilestone.mock.calls.map((c) => c[0] as string).filter((n) => n.startsWith('setup_failed_'));
+  const SECRET = 'sk-or-v1-SECRET /home/someone';
+  const deps = (check: { ok: boolean; verdict?: string; message: string }) => ({
+    providers: {
+      list: vi.fn(async () => []), upsert: vi.fn(async () => 'p1'), setKey: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}), testConnection: vi.fn(async () => check),
+    },
+  }) as any;
+  beforeEach(() => noteMilestone.mockClear());
+
+  it('no internet at sign-in → internet', async () => {
+    const m = managerAtAuth(); m.checkInternet = async () => false;
+    await m.handleOpenRouterLogin(fakeAuth('signed-in') as any);
+    expect(sent()).toEqual(['setup_failed_internet']);
+  });
+  it('a refused key → key, and the key itself is never sent', async () => {
+    const m = managerAtAuth();
+    await m.handleNativeApiKey(SECRET, 'openrouter', deps({ ok: false, verdict: 'rejected', message: `refused ${SECRET}` }));
+    expect(sent()).toEqual(['setup_failed_key']);
+  });
+  it('an OpenRouter sign-in that errors → openrouter; one the person cancels → cancelled', async () => {
+    const m = managerAtAuth();
+    await m.handleOpenRouterLogin(fakeAuth({ error: SECRET }) as any);
+    await m.handleOpenRouterLogin(fakeAuth('cancelled') as any);
+    expect(sent()).toEqual(['setup_failed_openrouter', 'setup_failed_cancelled']);
+  });
+  it("the wait screen's Cancel → cancelled", async () => {
+    const m = managerAtAuth();
+    let answer!: (o: Outcome) => void;
+    const a = { signIn: vi.fn(async () => true), waitForSignIn: vi.fn(() => new Promise<Outcome>((r) => (answer = r))), cancelSignIn: vi.fn(async () => { answer('cancelled'); return true; }) };
+    const run = m.handleChatGptLogin(a);
+    await vi.waitFor(() => expect(a.waitForSignIn).toHaveBeenCalled());
+    await m.cancelAuth(); await run;
+    expect(sent()).toEqual(['setup_failed_cancelled']);
+  });
+  it('a local app that does not answer → local', async () => {
+    const m = managerAtAuth();
+    await m.handleConnectLocalApp('http://127.0.0.1:1234', 'LM Studio', deps({ ok: false, message: 'no answer' }));
+    expect(sent()).toEqual(['setup_failed_local']);
+  });
+  it('too little free space → disk', async () => {
+    const { checkDiskSpace } = await import('../src/main/prerequisite-installer');
+    vi.mocked(checkDiskSpace).mockReturnValueOnce({ sufficient: false, availableMB: 120 } as any);
+    await new FirstRunManager().run();
+    expect(sent()).toEqual(['setup_failed_disk']);
   });
 });
 

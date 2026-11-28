@@ -1,6 +1,6 @@
 # YouCoded Privacy Policy
 
-**Effective date:** November 5, 2026
+**Effective date:** November 19, 2026
 
 YouCoded is made and published by **Destin's Adventures, LLC**, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This page explains, in plain words, what information the YouCoded app sends off your device, who gets it, how long it is kept, and what you can switch off.
 
@@ -48,7 +48,7 @@ If you find something in the app that contradicts this list, treat it as a priva
 
 **Two one-time messages:**
 
-- **Setup progress, on a new install only.** Once each, with the same code, version and platform: that the app was opened for the first time, that setup finished, that a first message was sent, and, if a setup step failed, that step's name (for example `node`). Never the error text, file paths or anything you typed. Installs from before this was added never send them.
+- **Setup progress, on a new install only.** Once each, with the same code, version and platform: that the app was opened for the first time, that setup finished, that a first message was sent, and, if a setup step failed or was cancelled, a one-word name for it (for example `node`, `key` or `cancelled`). Never the error text, file paths or anything you typed. Installs from before this was added never send them.
 - **Turning the count off.** When you switch it off, the app sends one last notice saying so, with the version and platform but **without** the device code, and then nothing more.
 
 **What our server adds:** Your country and region (for example, US state), worked out by Cloudflare from your internet address.
@@ -109,7 +109,7 @@ If you add friends, the YouCoded server stores:
 
 ### 3.5 Games
 
-**Playing a live game (Connect 4, chess).** Your in-game name (your YouCoded display name, or your GitHub username if you have not set one) and your moves and in-game chat are relayed through a game room hosted on PartyKit (which runs on Cloudflare) to the other player. The room is discarded when the game ends. We do not save moves or chat.
+**Playing a live game (Connect 4, chess).** Your in-game name (your YouCoded display name, or your GitHub username if you have not set one) and your moves and in-game chat are relayed through a game room on YouCoded's own server (hosted by Cloudflare) to the other player. The room is discarded when the game ends. We do not save moves or chat.
 
 **What IS saved (only if signed in).**
 
@@ -124,7 +124,7 @@ Cross-device sync is optional and has to be switched on. It needs a YouCoded acc
 
 **What the YouCoded server receives for this (a "live signal" connection, only while sync is on and you are signed in):**
 
-- **Your computer's name** (the name your operating system gives it, such as "Destin's Z13" or "Sam's MacBook"). *This often contains a person's real name.* It is shown on your other devices in "Your devices".
+- **Your computer's name** (the name your operating system gives it, such as "Alex's laptop" or "Sam's MacBook"). *This often contains a person's real name.* It is shown on your other devices in "Your devices".
 - **A device ID** (a random ID the app creates for that computer).
 - **Which sessions are open and which computer is holding each** (session IDs, the holding computer's name and ID, and a five-minute timer). This prevents two computers from continuing the same conversation at once and corrupting it.
 - **A "something changed here" signal.** It carries the name of the sync repository that changed. For a project folder, that name is built from the **project's folder name** (lowercased and tidied) plus a short code, so a project called "Tax Return 2026" shows as "tax-return-2026" plus a code. For your Personal sync, it is a fixed name.
@@ -161,7 +161,7 @@ These fetch public files. They do not send anything about you beyond what any we
 - **Announcements and changelog.** An announcement file is fetched from GitHub at launch and hourly while the app runs, and the changelog when you open it.
 - **Marketplace, themes, integrations, model lists, search settings.** Public lists and files from `raw.githubusercontent.com` and `api.youcoded.ai` (marketplace), plus public model lists from `models.dev` and OpenRouter.
 - **Theme fonts.** If a theme uses a Google web font in the document editors, the app downloads the font from Google Fonts.
-- **Setup downloads.** First-run setup downloads Claude Code (from claude.ai), Node.js (nodejs.org), the GitHub command line tool and Git for Windows (from GitHub), and on Android runtime packages (Termux mirrors). Voice input and local-AI models are downloaded from Hugging Face, npm and GitHub, only if you choose them.
+- **Setup downloads.** First-run setup downloads Claude Code (from claude.ai), Node.js (nodejs.org), and the GitHub command line tool and Git for Windows (from GitHub). The Android app carries Claude Code and the programs it needs inside the app and downloads none of them at setup. Voice input and local-AI models are downloaded from Hugging Face, npm and GitHub, only if you choose them.
 
 ### 3.10 Features you choose that talk to other companies
 
@@ -195,12 +195,11 @@ Anyone can stop their own browser from being counted by opening `https://youcode
 
 Each has its own policy for what it does with the data it receives:
 
-- **Cloudflare** hosts YouCoded's server, database, the live connections (online status, sync signals), the daily count store, the safety check on reviews, and the game rooms (through PartyKit). It sees every request, including your internet address, and keeps request logs. Cloudflare keeps YouCoded's server logs for 3 days. [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
+- **Cloudflare** hosts YouCoded's server, database, the live connections (online status, sync signals), the daily count store, the safety check on reviews, and the game rooms. It sees every request, including your internet address, and keeps request logs. Cloudflare keeps YouCoded's server logs for 3 days. [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
 - **GitHub** hosts the app's source code and releases, the marketplace and theme lists, and the sign-in; and it holds your private sync repositories and any bug report you send. [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 - **Anthropic**, **OpenAI**, **Google**, **OpenRouter** (and the models behind it) and other AI providers you choose receive your prompts. [Anthropic](https://www.anthropic.com/privacy), [OpenAI](https://openai.com/consumer-privacy/), [OpenRouter data collection](https://openrouter.ai/docs/guides/privacy/data-collection).
 - **Google (Drive, Fonts)**, **Apple (iCloud)** if you choose them.
-- **PartyKit** runs the live game rooms.
-- **Hugging Face, npm, Node.js, Termux**: download sources for optional components.
+- **Hugging Face, npm, Node.js**: download sources for optional components.
 - **Exa, Tavily, DuckDuckGo, Plaid** and any MCP servers or integrations you connect.
 
 YouCoded does not sell data, run ads, or have commercial data partners. Within YouCoded, only the project owner can read the server's data.

@@ -360,6 +360,18 @@ describe('update service downloads', () => {
     expect(started).not.toHaveBeenCalled();
   });
 
+  // WHY (card #186): an install owned by another pacman package (AUR youcoded-bin) cannot take the
+  // official file, so the main process itself must refuse, even when the click lands before startup
+  // finished working out the install facts (the call is made straight after load, not after a check).
+  it('refuses to download for an install managed by another package, even straight after startup', async () => {
+    mocks.kind = 'pacman-other';
+    const s = await load();
+    await s.fetchLatestRelease();
+    await expect(s.download()).rejects.toMatchObject({ code: 'unsupported-platform', message: expect.stringContaining('package manager') });
+    expect(started).not.toHaveBeenCalled();
+    expect(s.getUpdateStatus()).toMatchObject({ managed_by_other_package: true });
+  });
+
   it('never sweeps the pending download, however old, but sweeps other stale files', async () => {
     writePendingJson();
     mocks.release = release('2.1.0'); // a NEWER release is out, so the pending file is not "the latest's file" and only the pending record protects it

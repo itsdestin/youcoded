@@ -30,10 +30,23 @@ describe('No folder sessions', () => {
     }
   });
 
-  it('leaves every other cwd alone, empty included', () => {
+  it('leaves every other cwd alone, empty included, on a computer', () => {
     const a = { cwd: '/some/project' };
     expect(resolveNoFolderCwd(a, '/ud')).toBe(a);
     const b = { cwd: '' };
     expect(resolveNoFolderCwd(b, '/ud')).toBe(b);
+  });
+
+  it('on the phone, a new session with no folder opens in the app-owned empty folder, not the app home', () => {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-no-folder-'));
+    try {
+      const out = resolveNoFolderCwd({ cwd: '' }, userData, { emptyIsNoFolder: true });
+      expect(out.cwd).toBe(path.join(userData, NO_FOLDER_DIR_NAME));
+      // A resume names its own folder; an empty one there keeps the session manager's fallback.
+      const resume = { cwd: '', resumeSessionId: 'abc' };
+      expect(resolveNoFolderCwd(resume, userData, { emptyIsNoFolder: true })).toBe(resume);
+    } finally {
+      fs.rmSync(userData, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
 });

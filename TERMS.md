@@ -37,7 +37,7 @@ We do not knowingly collect personal data from children under 13 — see [PRIVAC
 YouCoded operates a few small backend services that the app talks to:
 
 - **Marketplace Worker** — a Cloudflare Worker at `wecoded-marketplace.workers.dev` (and related domains) that serves the plugin registry and accepts ratings and install pings.
-- **Multiplayer game backend** — PartyKit rooms (on Cloudflare) used only while a game lobby or active game is in progress.
+- **Multiplayer game backend** — game rooms on YouCoded's own server (hosted by Cloudflare), used only while a game lobby or active game is in progress.
 - **Analytics endpoint** — described in detail in [PRIVACY.md](./PRIVACY.md). Opt-out at any time in the app.
 - **Static registries** — the theme and plugin registry data hosted via GitHub `raw.githubusercontent.com`.
 

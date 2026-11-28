@@ -21,7 +21,7 @@ export type InstallResult =
 /** A removed plugin/prompt, or the refusal for one the app ships with (`bundled`). */
 export type SkillUninstallResult = { type: 'plugin' | 'prompt' } | { ok: false; error: 'bundled'; type: 'plugin' };
 
-export interface SkillUpdateResult { ok: boolean; newVersion?: string; error?: string; missingRequiredFields?: string[] }
+export interface SkillUpdateResult { ok: boolean; newVersion?: string; error?: string }
 
 export interface SkillIntegrationInfo {
   optionalIntegrations: Array<{

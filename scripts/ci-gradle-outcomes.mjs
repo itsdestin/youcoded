@@ -26,8 +26,9 @@ export function parseGradleOutcomes(text) {
 }
 
 function capitalScope(scope) {
-  if (!['debug', 'releaseTest'].includes(scope)) throw new Error('Unknown Android scope');
-  return scope === 'debug' ? 'Debug' : 'ReleaseTest';
+  // WHY: debug is the only APK scope now (the releaseTest build was removed 2026-11-10).
+  if (scope !== 'debug') throw new Error('Unknown Android scope');
+  return 'Debug';
 }
 
 export function producerViolations(scope, { tasks }) {

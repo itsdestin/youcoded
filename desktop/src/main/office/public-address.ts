@@ -26,6 +26,11 @@ const RANGES: [string, number, 'ipv4' | 'ipv6', string][] = [
   ['fec0::', 10, 'ipv6', 'site-local'],
   ['ff00::', 8, 'ipv6', 'multicast'],
   ['64:ff9b:1::', 48, 'ipv6', 'local NAT64'],
+  // WHY refused whole (card #35): a Teredo address (2001:0::/32) is a tunnel that hides an IPv4
+  // address in scrambled form, so 2001:0:…:80ff:fffe is really 127.0.0.1 and used to pass as
+  // public. Teredo is retired and no real website is served from it, so the whole range is
+  // refused rather than unscrambled — nothing a person would legitimately fetch is lost.
+  ['2001::', 32, 'ipv6', 'Teredo tunnel'],
 ];
 
 // One list per reason, so the log can say which class was refused. WHY node's BlockList: it

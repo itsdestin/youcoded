@@ -2,7 +2,7 @@
 // historical failure class pinned: an unsuccessful handoff must not quietly
 // rewrite the tool result the model already saw.
 import { describe, it, expect } from 'vitest';
-import { makeSession, scriptModel } from './helpers/harness-fakes';
+import { FAKE_SUMMARY, makeSession, scriptModel } from './helpers/harness-fakes';
 import { pruneToolOutputs, type CompactionConfig } from '../src/main/harness/compaction';
 import type { ModelMessage } from 'ai';
 
@@ -31,7 +31,7 @@ describe('prune is not a routine compaction operation', () => {
 
   it('does not prune the accepted result even if a summary copy is shortened', async () => {
     const session = makeSession({ contextLength: 8192,
-      model: scriptModel([{ text: '## Goal\n- Continue.' }]) });
+      model: scriptModel([{ text: FAKE_SUMMARY }]) });
     const original = history();
     session.seedHistory(original);
     expect(await session.compactNow()).toEqual({ ok: true });

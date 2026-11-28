@@ -11,7 +11,14 @@ import type { NativeTool, ToolResultPayload } from './types';
 const optionSchema = z.object({ label: z.string().min(1), description: z.string().optional() });
 const questionSchema = z.object({
   question: z.string().min(1),
-  header: z.string().min(1).max(12),
+  // WHY the forgiving cut (2026-11-01 phone test, page-builder): a model wrote the 13-letter header "Save location",
+  // the strict 12-character limit rejected the whole call, and its retry ("Location") left TWO identical question rows
+  // in the step list while only one card ever showed. A header that is a little too long is trimmed, not refused;
+  // the schema the model is shown still says 12.
+  header: z.preprocess(
+    (v) => (typeof v === 'string' && v.length > 12 ? v.slice(0, 12).trimEnd() : v),
+    z.string().min(1).max(12),
+  ),
   options: z.array(optionSchema).min(2).max(4),
   multiSelect: z.boolean(),
 });

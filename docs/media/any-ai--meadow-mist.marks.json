@@ -1,0 +1,134 @@
+{
+ "fps": 24,
+ "width": 1440,
+ "height": 900,
+ "duration": 18.443,
+ "actions": [
+  {
+   "i": 0,
+   "kind": "hold",
+   "mark": null,
+   "start": 0.026,
+   "end": 0.327
+  },
+  {
+   "i": 1,
+   "kind": "click",
+   "mark": null,
+   "start": 0.327,
+   "end": 0.794
+  },
+  {
+   "i": 2,
+   "kind": "_why",
+   "mark": null,
+   "start": 0.994,
+   "end": 2.6
+  },
+  {
+   "i": 3,
+   "kind": "key",
+   "mark": null,
+   "start": 3,
+   "end": 3.006
+  },
+  {
+   "i": 4,
+   "kind": "waitForText",
+   "mark": null,
+   "start": 3.307,
+   "end": 3.8
+  },
+  {
+   "i": 5,
+   "kind": "click",
+   "mark": null,
+   "start": 4.399,
+   "end": 5.081
+  },
+  {
+   "i": 6,
+   "kind": "waitFor",
+   "mark": null,
+   "start": 5.382,
+   "end": 5.384
+  },
+  {
+   "i": 7,
+   "kind": "click",
+   "mark": null,
+   "start": 5.885,
+   "end": 7.049
+  },
+  {
+   "i": 8,
+   "kind": "waitFor",
+   "mark": null,
+   "start": 7.249,
+   "end": 7.25
+  },
+  {
+   "i": 9,
+   "kind": "click",
+   "mark": null,
+   "start": 7.65,
+   "end": 8.129
+  },
+  {
+   "i": 10,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 8.33,
+   "end": 9.654
+  },
+  {
+   "i": 11,
+   "kind": "key",
+   "mark": null,
+   "start": 10.055,
+   "end": 10.061
+  },
+  {
+   "i": 12,
+   "kind": "waitForText",
+   "mark": null,
+   "start": 10.36,
+   "end": 11.501
+  },
+  {
+   "i": 13,
+   "kind": "click",
+   "mark": null,
+   "start": 12.401,
+   "end": 12.902
+  },
+  {
+   "i": 14,
+   "kind": "typeSlow",
+   "mark": null,
+   "start": 13.102,
+   "end": 14.824
+  },
+  {
+   "i": 15,
+   "kind": "key",
+   "mark": null,
+   "start": 15.224,
+   "end": 15.228
+  },
+  {
+   "i": 16,
+   "kind": "waitForText",
+   "mark": null,
+   "start": 15.528,
+   "end": 16.361
+  },
+  {
+   "i": 17,
+   "kind": "hold",
+   "mark": null,
+   "start": 16.662,
+   "end": 18.167
+  }
+ ]
+}

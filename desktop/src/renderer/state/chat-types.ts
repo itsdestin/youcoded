@@ -48,7 +48,9 @@ export type AssistantTurnSegment =
       // Native runtime streams text as per-token deltas merged by partId
       // (same semantics as reasoning). CC's transcript path sends whole
       // blocks with no partId — those keep appending as separate segments.
-      partId?: string; sourceUuid?: string; sourceTimestamp?: number; lastSourceUuid?: string; lastSourceTimestamp?: number }
+      partId?: string; sourceUuid?: string; sourceTimestamp?: number; lastSourceUuid?: string; lastSourceTimestamp?: number;
+      /** Claude Code's error label when CC wrote this text itself (card #236). */
+      apiError?: string }
   // Reasoning / extended-thinking content with a text payload. The native
   // harness (Phase 2) streams these for thinking models; CC's transcript
   // path may also carry thinking text in future. Rendered as a collapsible
@@ -267,7 +269,10 @@ export type TimelineEntry =
   // bubble, so a note can never outlive the doubt it describes.
   // `sendTransport: 'queue'` = a Claude Code send handed to the host queue (never given the terminal's retry Enter); `boundUuid` = the transcript line the
   // host says it became, so the bubble is confirmed by identity even when Claude Code recorded different words.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty' | 'queue'; boundUuid?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
+  // `sendStale` (2026-11-18): the screen gave up waiting for this bubble's echo (stale-sends.ts). It stays pending, so a late echo still
+  // confirms it, but it is no longer held at the bottom under every later reply (appendAbovePending). `sentAfterTurn`: the reply it was
+  // drawn after ('' = none), where a settled bubble goes back to (local-user-message.ts).
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty' | 'queue'; boundUuid?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true; sendStale?: true; sentAfterTurn?: string }
   | { kind: 'assistant-turn'; turnId: string; afterMarkerId?: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -429,6 +434,8 @@ export interface SessionChatState {
   /** While modelState==='loading': bytes resident in RAM so far, for the
    *  "N GB / M GB" progress bar. null when not loading / progress unavailable. */
   modelLoadedBytes: number | null;
+  /** While loading with no byte measurement: past loads' duration here (ms). */
+  modelLoadExpectedMs: number | null;
   /** True once this session's model has been seen fully 'loaded' at least once.
    *  Distinguishes "unloaded because it slept after use" (→ show the Reload
    *  prompt) from "unloaded because it hasn't finished its FIRST load yet" (a
@@ -507,6 +514,8 @@ export interface SessionChatState {
   /** The "Background" chip's list: every background command / watcher of this
    *  session, independent of which cards are loaded. See state/background-commands.ts. */
   backgroundCommands: import('./background-commands').BackgroundCommands;
+  /** The Browser's open approval card for this conversation (host's `session:live browser-ask`); a phone draws its card from this. Absent = none. */
+  browserAsk?: import('../../shared/browser-types').BrowserPrompt | null;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -537,6 +546,7 @@ export function createSessionChatState(): SessionChatState {
     modelState: null,
     modelInfo: null,
     modelLoadedBytes: null,
+    modelLoadExpectedMs: null,
     modelEverResident: false,
     seenUuids: new Set(),
     queuedMessages: [],
@@ -596,6 +606,15 @@ export type ChatAction =
       dismissed?: true;
     }
   | {
+      // The screen stopped waiting for these sent bubbles' echo (stale-sends.ts): each is settled, noted or released from the bottom.
+      type: 'SENDS_STALE';
+      sessionId: string;
+      /** `message.id` of each stale bubble (not every bubble has a sendId). */
+      messageIds: string[];
+      /** The clock the hook judged ages by, so the reducer stays pure. */
+      now: number;
+    }
+  | {
       // "Send again": the unconfirmed bubble goes, and the same words go out as a new send with its own bubble (one-core R5-4b).
       type: 'SEND_DISCARD';
       sessionId: string;
@@ -635,6 +654,8 @@ export type ChatAction =
       sessionId: string;
       queueId: string;
     }
+  /** The host's `session:live browser-ask`: the Browser's card for this conversation, or null once it closes. */
+  | { type: 'BROWSER_ASK_CHANGED'; sessionId: string; prompt: import('../../shared/browser-types').BrowserPrompt | null }
   | {
       type: 'SHOW_PROMPT';
       sessionId: string;
@@ -673,6 +694,7 @@ export type ChatAction =
       modelId: string;
       sizeBytes: number | null;
       loadedBytes?: number | null;
+      loadExpectedMs?: number | null;
     }
   | {
       // Native runtime only: a provider/stream failure ended the turn.
@@ -946,6 +968,8 @@ export type ChatAction =
       // Native runtime: per-token delta id. Same partId → merge into the last
       // text segment (mirrors reasoning). CC omits it → whole-block append.
       partId?: string;
+      /** Claude Code's error label on a reply CC wrote itself (card #236). */
+      apiError?: string;
       parentAgentToolUseId?: string;
       agentId?: string;
     }
@@ -1252,6 +1276,7 @@ export interface SerializedSessionChatState {
   modelState?: import('../../shared/engine-types').EngineModelState | null;
   modelInfo?: { modelId: string; sizeBytes: number | null } | null;
   modelLoadedBytes?: number | null;
+  modelLoadExpectedMs?: number | null;
   modelEverResident?: boolean;
   // Optional so a pre-field snapshot from an older host still deserializes.
   seenUuids?: string[];
@@ -1274,6 +1299,7 @@ export interface SerializedSessionChatState {
   // Optional so a pre-field snapshot from an older host still deserializes.
   ccBackgroundOutcomes?: Record<string, import('../../shared/types').CcBackgroundRun>;
   backgroundCommands?: import('./background-commands').BackgroundCommands;
+  browserAsk?: import("../../shared/browser-types").BrowserPrompt | null;
 }
 
 export interface SerializedChatState {
@@ -1307,6 +1333,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         modelState: s.modelState,
         modelInfo: s.modelInfo,
         modelLoadedBytes: s.modelLoadedBytes,
+        modelLoadExpectedMs: s.modelLoadExpectedMs,
         modelEverResident: s.modelEverResident,
         seenUuids: Array.from(s.seenUuids),
         queuedMessages: s.queuedMessages,
@@ -1318,6 +1345,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         sessionContext: s.sessionContext,
         ccBackgroundOutcomes: s.ccBackgroundOutcomes,
         backgroundCommands: s.backgroundCommands,
+        browserAsk: s.browserAsk ?? null,
       },
     ]);
   }
@@ -1352,6 +1380,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       stallWarning: ser.stallWarning ?? null,
       // Older hosts predate stalledSince — default null so a pre-field snapshot hydrates.
       stalledSince: ser.stalledSince ?? null,
+      // Older hosts predate browserAsk — absent means no card (card #205).
+      browserAsk: ser.browserAsk ?? null,
       // Deliberately NOT serialized: prefill is an in-flight condition of THIS
       // client's stream. A hydrating client (remote reconnect, window restore) is
       // not mid-prefill, and restoring a stale "Reading your prompt…" would be a
@@ -1366,6 +1396,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       modelState: ser.modelState ?? null,
       modelInfo: ser.modelInfo ?? null,
       modelLoadedBytes: ser.modelLoadedBytes ?? null,
+      modelLoadExpectedMs: ser.modelLoadExpectedMs ?? null,
       modelEverResident: ser.modelEverResident ?? false,
       // Older hosts predate seenUuids — default to an empty Set (not undefined,
       // which would crash the reducer's .has() dedup check).

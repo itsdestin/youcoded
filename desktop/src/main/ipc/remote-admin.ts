@@ -77,12 +77,32 @@ export const remoteAdminChannels: MainChannelDef[] = [
       const remoteConfig = config();
       const remoteServer = deps?.server;
       const wasEnabled = remoteConfig.enabled;
-      if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
-      if (typeof updates.keepAwakeHours === 'number') {
-        remoteConfig.keepAwakeHours = updates.keepAwakeHours;
-        deps?.applyKeepAwake(updates.keepAwakeHours);
+      const wasKeepAwake = remoteConfig.keepAwakeHours;
+      // WHY applyKeepAwake is inside the guarded region (round 4 review): it used to run before the try, so if it threw, `enabled` and
+      // `keepAwakeHours` were already changed in memory and nothing put them back. Now anything that throws while applying or saving
+      // restores the previous values, and the ORIGINAL error is what reaches the screen.
+      let touchedKeepAwake = false;
+      try {
+        if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
+        if (typeof updates.keepAwakeHours === 'number') {
+          touchedKeepAwake = true;
+          remoteConfig.keepAwakeHours = updates.keepAwakeHours;
+          deps?.applyKeepAwake(updates.keepAwakeHours);
+        }
+        remoteConfig.save();
+      } catch (err) {
+        // Card #134 round 4: the running process had already taken the new values, so the screen ("last saved") and reality
+        // disagreed. Put the previous values back (and re-apply keep-awake) and let the rejection reach the screen, which says
+        // "Couldn't save …" and keeps showing the old value. Each restore step is guarded on its own: a throwing restore or log
+        // must never replace the original error.
+        remoteConfig.enabled = wasEnabled;
+        if (touchedKeepAwake) {
+          remoteConfig.keepAwakeHours = wasKeepAwake;
+          try { deps?.applyKeepAwake(wasKeepAwake); } catch { /* the original error is the one to report */ }
+        }
+        try { console.error('[remote] saving the remote access settings failed:', err instanceof Error ? err.message : err); } catch { /* same */ }
+        throw err;
       }
-      remoteConfig.save();
 
       // Fix: flipping this toggle used to persist `enabled` and stop there. remoteServer.start() ran exactly once, at boot
       // (main.ts), when the flag was still false — so turning remote access on did nothing until the app was restarted,

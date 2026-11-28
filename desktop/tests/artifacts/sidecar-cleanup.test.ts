@@ -12,7 +12,7 @@ import {
 } from '../../src/main/artifacts/artifact-store';
 import {
   runCleanup, restoreArchive, surveyProject, noteProjectActive, _resetCleanupSchedulingForTests,
-  sidecarFile, ledgerFile, archiveDir, preCleanupBackup,
+  sidecarFile, ledgerFile, archiveDir, preCleanupBackup, _setVolumeCheckerForTests,
 } from '../../src/main/artifacts/sidecar-cleanup';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -59,7 +59,9 @@ async function twoStrikes(extra: Parameters<typeof runCleanup>[1] = {}) {
   return runCleanup(root, { nowMs: T0 + 8 * DAY, limits: LIMITS, ...extra });
 }
 
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-cleanup-')); _resetSidecarCacheForTests(); });
+// WHY the stub: these folders live in the OS temp dir (often a RAM disk), which the real volume check rightly
+// refuses; volume-safety.test.ts covers that check, and the last test here covers how the cleanup obeys it.
+beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-cleanup-')); _resetSidecarCacheForTests(); _setVolumeCheckerForTests(() => async () => ({ safe: true })); });
 afterEach(() => { _resetCleanupSchedulingForTests(); vi.useRealTimers(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('runCleanup — the happy path and its gates', () => {
@@ -244,6 +246,20 @@ describe('restoreArchive — the undo path', () => {
     expect(onDisk().artifacts.filter((a) => a.id.startsWith('D'))).toHaveLength(dead.length);
   });
 
+  it('restores an outside file even when a different outside file with the same name is present', async () => {
+    seed();
+    const ext = (id: string, abs: string): ArtifactRecord => ({ ...record(id, 'REPORT.md', 1), kind: 'external', absolutePath: abs });
+    const sc = onDisk();
+    sc.artifacts.push(ext('E-live', '/tmp/a/REPORT.md'));
+    fs.writeFileSync(sidecarFile(root), JSON.stringify(sc));
+    _resetSidecarCacheForTests();
+    fs.mkdirSync(archiveDir(root), { recursive: true });
+    fs.writeFileSync(path.join(archiveDir(root), '0001-manual.jsonl.gz'),
+      zlib.gzipSync(JSON.stringify(ext('E-archived', '/docs/b/REPORT.md')) + '\n'));
+    expect((await restoreArchive(root, { ids: ['E-archived'] })).restored).toBe(1);
+    expect(onDisk().artifacts.filter((a) => a.path === 'REPORT.md').map((a) => a.id).sort()).toEqual(['E-archived', 'E-live']);
+  });
+
   it('with no archive it restores nothing and says so', async () => {
     seed();
     expect(await restoreArchive(root)).toMatchObject({ status: 'restored', restored: 0 });
@@ -262,7 +278,9 @@ describe('surveyProject — what the disk says', () => {
     const p = await surveyProject(root, recs);
     expect(p.get('present')).toMatchObject({ exists: true });
     expect(p.get('missing')).toMatchObject({ exists: false, errorCode: 'ENOENT', ancestor: { path: root, sameDevice: true, readable: true } });
-    expect(p.get('underfile')).toMatchObject({ exists: false, errorCode: 'ENOTDIR', ancestor: { path: root } });
+    // Windows reports a file-where-a-folder-should-be as ENOENT (POSIX says ENOTDIR); the app treats both
+    // as "missing" and still finds the right ancestor, so only the code differs by OS.
+    expect(p.get('underfile')).toMatchObject({ exists: false, errorCode: process.platform === 'win32' ? 'ENOENT' : 'ENOTDIR', ancestor: { path: root } });
     expect(p.get('rel')).toMatchObject({ target: null, exists: false });
   });
 
@@ -427,5 +445,26 @@ describe('archive files, durable restore, last look at commit, and offline-drive
     } } });
     expect(r.status).toBe('conflict');
     expect(fs.readdirSync(archiveDir(root)).filter((n) => n.endsWith('.jsonl.gz'))).toEqual([]);
+  });
+});
+
+describe('volume safeguard', () => {
+  it('skips a project that is not on a fixed local disk: nothing archived, no strike or run date written', async () => {
+    seed();
+    _setVolumeCheckerForTests(() => async () => ({ safe: false, reason: 'on a USB disk' }));
+    expect((await runCleanup(root, { nowMs: T0, limits: LIMITS })).status).toBe('volume-not-fixed');
+    expect((await runCleanup(root, { nowMs: T0 + 8 * DAY, limits: LIMITS })).status).toBe('volume-not-fixed');
+    expect(fs.existsSync(ledgerFile(root))).toBe(false);
+    expect(readArchive()).toHaveLength(0);
+  });
+
+  it('keeps records whose files sit on an unsafe volume even though they are missing', async () => {
+    seed();
+    // Only the gone/ folder is "on another drive": its missing files must not be archived.
+    _setVolumeCheckerForTests(() => async (t) => (t.includes(`${path.sep}gone${path.sep}`) ? { safe: false, reason: 'drive missing' } : { safe: true }));
+    const r = await twoStrikes();
+    expect(r.status).not.toBe('archived');
+    expect(readArchive()).toHaveLength(0);
+    expect(onDisk().artifacts).toHaveLength(32);
   });
 });

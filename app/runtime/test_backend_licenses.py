@@ -11,7 +11,7 @@ class BackendLicensesTest(unittest.TestCase):
         script = Path(__file__).with_name("build-backend.sh").read_text()
         # WHY: execute the shell's real trim section, without installing npm or compiling
         # the app; this catches legal-file deletion even when it is moved between commands.
-        trim = script.split('say "trimming"', 1)[1].split('tar czf', 1)[0]
+        trim = script.split('say "trimming"', 1)[1].split('# --- pack ---', 1)[0]
         legal_files = [
             "jose/LICENSE.md", "jszip/LICENSE.markdown",
             "@mozilla/readability/LICENSE.md", "vendor/docs/NOTICE",

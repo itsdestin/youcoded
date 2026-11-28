@@ -164,13 +164,13 @@ export async function resolveInside(root: string, segs: string[]): Promise<{ roo
   const rootReal = canonicalize(await fs.promises.realpath(root).catch(() => ''), null);
   if (!rootReal) return refuse('That folder is no longer there.');
   const target = path.join(rootReal, ...segs);
-  const real = await fs.promises.realpath(target).catch(() => null);
+  const real = await fs.promises.realpath(target).catch(() => null); // benign: a path that does not exist is answered as not found below
   if (real) {
     const c = canonicalize(real, null);
     return within(c, rootReal) ? { rootReal, real: c, exists: true } : refuse('That file is outside what this page may reach.');
   }
   if (segs.length === 0) return refuse('That folder is no longer there.');
-  const parentReal = await fs.promises.realpath(path.join(rootReal, ...segs.slice(0, -1))).catch(() => null);
+  const parentReal = await fs.promises.realpath(path.join(rootReal, ...segs.slice(0, -1))).catch(() => null); // benign: a parent that does not exist is answered as not found below
   if (!parentReal) return refuse('That folder is no longer there.');
   const p = canonicalize(parentReal, null);
   if (!within(p, rootReal)) return refuse('That file is outside what this page may reach.');
@@ -213,13 +213,13 @@ export async function openForWrite(root: string, segs: string[], ctx: GuardConte
 
 /** Open a resolved path and prove it is the regular file that was checked. */
 async function openChecked(real: string, flags: number, folderLevel: boolean): Promise<Opened | Refused> {
-  const before = await fs.promises.lstat(real).catch(() => null);
+  const before = await fs.promises.lstat(real).catch(() => null); // benign: a file that vanished is refused below
   if (!before?.isFile()) return refuse('Only ordinary files can be opened by a page.');
   let fh: fs.promises.FileHandle;
   try { fh = await fs.promises.open(real, flags | NOFOLLOW | NONBLOCK); } catch { return refuse('That file could not be opened.'); }
-  const st = await fh.stat().catch(() => null);
+  const st = await fh.stat().catch(() => null); // benign: a file that cannot be read is refused below
   if (!st || !st.isFile() || st.dev !== before.dev || st.ino !== before.ino || (folderLevel && st.nlink > 1)) {
-    await fh.close().catch(() => {});
+    await fh.close().catch(() => {}); // benign: closing a handle that is being refused anyway
     return refuse('That file changed while it was being opened, so the app stopped.');
   }
   return { fh, real, size: st.size, dev: st.dev, ino: st.ino };
@@ -244,7 +244,7 @@ export async function listInside(root: string, segs: string[], ctx: GuardContext
   for (let i = 0; i < kept.length; i += 32) {
     const batch = await Promise.all(kept.slice(i, i + 32).map(async (d) => {
       if (d.isDirectory()) return { name: d.name, kind: 'folder' as const };
-      const st = await fs.promises.stat(path.join(r.real, d.name)).catch(() => null);
+      const st = await fs.promises.stat(path.join(r.real, d.name)).catch(() => null); // benign: an entry that vanished mid-listing is left out
       return st ? { name: d.name, kind: 'file' as const, size: st.size, modified: st.mtime.toISOString() } : null;
     }));
     for (const e of batch) if (e) out.push(e);

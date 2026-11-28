@@ -53,6 +53,33 @@ let yesterdayStart = 0;
 let thisYear = 0;
 
 /**
+ * The full local date and time, for a hover hint behind a short label: "Nov 11, 2026, 2:34 PM" (in the
+ * computer's own language and order). Accepts epoch-ms OR an ISO string, like formatRelativeTime.
+ * Returns '' for a missing or unreadable time, so a caller's hint simply does not appear rather than
+ * saying "Invalid Date".
+ *
+ * WHY (card #39): document comments show only "5h ago", which says nothing exact once a comment is
+ * days old or when two comments need ordering.
+ */
+export function formatFullDateTime(when: number | string | null | undefined): string {
+  if (when == null || when === '') return '';
+  const ms = typeof when === 'number' ? when : Date.parse(when);
+  // 0 counts as missing (as in formatRelativeTime); a number past the calendar's range is an invalid Date,
+  // which Intl's format() would throw on.
+  if (!Number.isFinite(ms) || ms <= 0 || Number.isNaN(new Date(ms).getTime())) return '';
+  // WHY cached, rebuilt only on a time-zone change: building an Intl formatter is the costly part
+  // (see formatBubbleTime above), and a zone change (travel) must still show the new zone's time.
+  const offset = new Date().getTimezoneOffset();
+  if (!fullDateTimeFormat || offset !== fullDateTimeOffset) {
+    fullDateTimeFormat = new Intl.DateTimeFormat([], { dateStyle: 'medium', timeStyle: 'short' });
+    fullDateTimeOffset = offset;
+  }
+  return fullDateTimeFormat.format(ms);
+}
+let fullDateTimeFormat: Intl.DateTimeFormat | null = null;
+let fullDateTimeOffset = NaN;
+
+/**
  * Compact relative-time label ("just now", "5m ago", "3h ago", "2d ago", then
  * a locale date). Accepts epoch-ms OR an ISO string — the artifact sidecar
  * stores ISO while session lists carry epoch, and this was previously

@@ -17,6 +17,8 @@ vi.mock("node-machine-id", () => ({
 
 // Release builds are stamped official; the checked-in default is false.
 let official = true;
+// WHY mocked: the real logger appends to ~/.claude/desktop.log, which a test must never touch.
+vi.mock("./logger", () => ({ log: vi.fn() }));
 vi.mock("./official-build", () => ({ get OFFICIAL_BUILD() { return official; } }));
 
 const STATE_FILE = path.join(os.homedir(), ".claude", "youcoded-analytics.json");
@@ -257,13 +259,23 @@ describe("analytics-service setup milestones and the opt-out notice", () => {
     expect(JSON.parse(fs.readFileSync(STATE_FILE, "utf8")).optIn).toBe(false);
   });
 
-  it("a damaged analytics file is treated as an existing install, never a new one", async () => {
+  it("a damaged analytics file means analytics OFF: nothing is sent, and it is never mistaken for a new install", async () => {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
     fs.writeFileSync(STATE_FILE, "{not json");
     const svc = await importFresh();
     await svc.runAnalyticsOnLaunch();
-    expect(to("/app/heartbeat")).toHaveLength(1);
+    expect(to("/app/heartbeat")).toHaveLength(0);
     expect(to("/app/milestone")).toHaveLength(0);
+    expect(svc.getOptIn()).toBe(false);
+  });
+
+  it("a file that parses but has no on/off answer also means OFF", async () => {
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.writeFileSync(STATE_FILE, "{}");
+    const svc = await importFresh();
+    await svc.runAnalyticsOnLaunch();
+    expect(to("/app/heartbeat")).toHaveLength(0);
+    expect(svc.getOptIn()).toBe(false);
   });
 
   it("turning analytics off sends one notice without the device hash, once", async () => {
@@ -299,21 +311,30 @@ describe("analytics-service daily heartbeat while open", () => {
     vi.setSystemTime(new Date(Date.UTC(2026, 8, 16, 20, 0, 0)));
     const svc = await importFresh();
     const beats = () => to("/app/heartbeat").length;
+    // WHY wait for the next wake-up to exist before moving the fake clock: after a heartbeat is sent, the run
+    // still does real file work (the setup-milestone flush) and only then schedules its next wake-up. On a slow
+    // Windows runner the clock used to jump ahead first, so the wake-up was set from 23:00 and midnight was
+    // never reached (nightly 2026-11-25: "expected 1 to be 2").
+    const nextWakeUpSet = () => vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
 
     svc.startDailyHeartbeat();
     await vi.waitFor(() => expect(beats()).toBe(1));
+    await nextWakeUpSet();
 
     // Same day: the next wake-up only looks at the clock.
     await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
     expect(beats()).toBe(1);
+    await nextWakeUpSet();
 
     // Past UTC midnight: the new day's heartbeat goes out.
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     await vi.waitFor(() => expect(beats()).toBe(2));
+    await nextWakeUpSet();
 
     // A further full day of wake-ups adds exactly one more.
     await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
     await vi.waitFor(() => expect(beats()).toBe(3));
+    await nextWakeUpSet();
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(beats()).toBe(3);
   });

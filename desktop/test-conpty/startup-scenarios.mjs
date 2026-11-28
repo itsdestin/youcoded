@@ -9,12 +9,20 @@
 //   args     extra claude arguments
 //   files    { relPath: content } written into the folder first
 //   auth     true = needs the access-token copy (skipped with --no-auth, e.g. in CI)
+//   fresh    true = a brand-new install: do NOT mark onboarding complete, so Claude
+//            Code shows the theme picker and the sign-in method screen first.
+//            (A "Security notes" screen follows sign-in and cannot be reached
+//            signed-out, so it is covered only by hand-written screens in tests.)
 //   cols/rows terminal size
 //   steps    what to do with each dialog, in order:
 //              { pick: '<exact option label>' }  arrows (verified) then Enter
 //              { keys: '<bytes>', expect: 'stays' }  type keys; the dialog must NOT change
 //              { keys: '\u001b' }                 type keys (e.g. Esc) and let it act
 //              { record: true }                  record it, answer nothing, stop
+//              { screen: true, keys?: '<bytes>' } a first-install screen (no footer, so
+//                                                 not a "dialog"): wait until its question
+//                                                 and options hold still, record them, then
+//                                                 optionally type keys. Last step = recorded, never answered.
 //   until    'main-prompt' (wait for Claude Code's input box) | 'exit' | 'none'
 //
 // None of these sends a message to a model: they stop at, or before, the input box.
@@ -63,6 +71,16 @@ export const SCENARIOS = [
   { name: 'untrusted-signed-in', folder: 'plain', auth: true, steps: [TRUST_YES], until: 'main-prompt' },
   { name: 'bypass-untrusted-signed-in', folder: 'plain', auth: true, args: ['--dangerously-skip-permissions'], steps: [TRUST_YES, BYPASS_YES], until: 'main-prompt' },
 ];
+
+// First install (WHY: on 2026-11-01 a fresh phone install hung on "Initializing
+// session…" because of these screens, and nothing watched them). Accepts the
+// default theme with Enter, then records the sign-in method screen WITHOUT
+// answering it — no sign-in is ever started, no credential is copied, no model is called.
+const FIRST_INSTALL_STEPS = [{ screen: true, keys: '\r' }, { screen: true }];
+SCENARIOS.push(
+  { name: 'first-install', folder: 'plain', fresh: true, steps: FIRST_INSTALL_STEPS, until: 'none' },
+  { name: 'first-install', folder: 'plain', fresh: true, cols: 50, rows: 30, steps: FIRST_INSTALL_STEPS, until: 'none' },
+);
 
 export const DEFAULT_COLS = 100;
 export const DEFAULT_ROWS = 35;

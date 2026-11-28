@@ -569,7 +569,11 @@ process.on('message', (msg) => {
         onPtyData(data);
       });
 
-      ptyProcess.onExit(({ exitCode }) => {
+      ptyProcess.onExit(({ exitCode: reportedCode, signal }) => {
+        // WHY (card #134, error inventory Backend row 5): node-pty reports a kill by signal (out-of-memory kill, crash)
+        // with exit code 0 and the signal separately, so the app read it as a clean finish and the tab vanished with
+        // no notice. A signal is reported as 128 + the signal number, the shell convention, so it is never 0.
+        const exitCode = signal ? 128 + Number(signal) : reportedCode;
         if (exitReported) return;
         exitReported = true;
         cancelBounce();

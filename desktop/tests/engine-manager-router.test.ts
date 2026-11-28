@@ -142,7 +142,7 @@ describe('the slot count', () => {
       // pidOnPort matches the fake child's pid so ensureRunning's "is this
       // really our child on the port" identity guard passes; short deadline/poll
       // so a broken test fails fast instead of waiting out the real 30s default.
-      supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 2_000, readyPollMs: 5 },
+      supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 2_000, readyPollMs: 5 },
     });
   }
 
@@ -402,6 +402,9 @@ describe('per-model settings', () => {
     // No retries on purpose: stopAll() now abandons every pending apply, so nothing
     // writes here after it (CI follow-ups Plan A, Task 3). If ENOTEMPTY ever returns,
     // the cancellation regressed — fix that, do not put the retries back.
+    // The other async writer under .youcoded/engine is engine.log; stopAll() ->
+    // supervisor.stop() now awaits its close (CI flake: ENOTEMPTY in T23), so this
+    // removal needs no wait of its own.
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -451,7 +454,7 @@ describe('per-model settings', () => {
     return new EngineManager(home, userData, PORT, {
       fetchImpl,
       probeChip: async () => ({ vendor: null, gfxTarget: null }),
-      supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 2_000, readyPollMs: 5 },
+      supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 2_000, readyPollMs: 5 },
       configApplyPollMs: 2,
       // FAR longer than any wait in this file, deliberately. `vi.waitFor`'s
       // suite-wide default is 15 seconds (tests/setup-waitfor.ts), so a short
@@ -920,9 +923,12 @@ describe('per-model settings', () => {
         }
         return { ok: true, status: 200, json: async () => ({ data: [] }) } as any;
       });
-      mgr = makeManager(fetchImpl, { supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 5_000, readyPollMs: 5 } });
+      mgr = makeManager(fetchImpl, { supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 5_000, readyPollMs: 5 } });
       const booting = mgr.registryHook().ensureRunning();
-      setImmediate(() => {
+      // The crash is staged once the first child EXISTS: the supervisor now reads model
+      // headers (MTP) before it spawns, so a fixed next-tick crash could land before the
+      // listeners are attached.
+      void vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1)).then(() => {
         // The engine's own words for "I could not read that file at all" — no
         // model is named, so there is no section to drop and T7 boots without it.
         first.stderr!.emit('data', Buffer.from(
@@ -980,7 +986,7 @@ describe('per-model settings', () => {
       await plantConfig();
       mgr = makeManager(makeFetch(), {
         supervisorOpts: {
-          pidOnPort: () => 4242, readyDeadlineMs: 2_000, readyPollMs: 5,
+          pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 2_000, readyPollMs: 5,
           writePresetImpl: () => { throw new Error("EACCES: permission denied, open '/home/you/.youcoded/engine/models.ini'"); },
         },
       });
@@ -1167,6 +1173,21 @@ describe('per-model settings', () => {
     });
   });
 
+  // The loading request is not a chat: it goes to the spare slot, so loading a
+  // model for a new chat never lands on another chat's saved reading (slot-pins.ts).
+  it('loading a model sends its request to the spare slot, never a chat\'s', async () => {
+    plantInstall();
+    await plantConfig();
+    const fetchImpl = makeFetch();
+    mgr = makeManager(fetchImpl);
+    await mgr.loadModel('alpha');
+    await vi.waitFor(() => {
+      const call = fetchImpl.mock.calls.find((c: any[]) => String(c[0]).includes('/chat/completions'));
+      expect(JSON.parse(call[1].body).id_slot).toBe(3);
+    });
+    expect(mgr.registryHook().slotFor!('alpha', 'a-chat')).not.toBe(3);
+  });
+
   describe('lastLoadError has TWO sources, and both reach the model', () => {
     it('source 1 — the router\'s own message when a load of that model fails', async () => {
       plantInstall();
@@ -1217,10 +1238,13 @@ describe('per-model settings', () => {
         if (url.endsWith('/health')) return { ok: true, status: 200 } as any;
         return { ok: true, status: 200, json: async () => ({ data: [] }) } as any;
       });
-      mgr = makeManager(fetchImpl, { supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 5_000, readyPollMs: 5 } });
+      mgr = makeManager(fetchImpl, { supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 5_000, readyPollMs: 5 } });
 
       const booting = mgr.registryHook().ensureRunning();
-      setImmediate(() => {
+      // The crash is staged once the first child EXISTS: the supervisor now reads model
+      // headers (MTP) before it spawns, so a fixed next-tick crash could land before the
+      // listeners are attached.
+      void vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1)).then(() => {
         first.stderr!.emit('data', Buffer.from(
           '0.00.050.247 E srv    llama_server: failed to initialize router models: '
           + "option 'not-a-real-flag' not recognized in preset 'alpha'"
@@ -1341,7 +1365,7 @@ describe('engine:set-config', () => {
       // A chip probe that answers instantly: status() warms it, and the real one
       // shells out to nvidia-smi / ldconfig.
       probeChip: async () => ({ vendor: null, gfxTarget: null }),
-      supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 2_000, readyPollMs: 5 },
+      supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 2_000, readyPollMs: 5 },
       // A suite cannot spend the real ten minutes proving the bound exists.
       configApplyPollMs: 2,
       configApplyMaxWaitMs: 5_000,
@@ -1905,7 +1929,7 @@ describe('the vision catalog', () => {
     });
     const m = new EngineManager(home, userData, 9999, {
       fetchImpl: fetchImpl as any,
-      supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 2_000, readyPollMs: 5 },
+      supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 2_000, readyPollMs: 5 },
     });
     await m.registryHook().ensureRunning();
     return m;

@@ -159,6 +159,8 @@ export const IPC = {
   UPDATE_RESTART_TO_UPDATE: 'update:restart-to-update', // () -> { restarting } (desktop only)
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
+  // Card #143 a: right-click on a chat picture — Copy image / Save image as (computer's own windows only).
+  PICTURE_ACTION: 'shell:picture-action',
   // Open a local file with the OS default app (HTML→browser, .docx→Word, etc.).
   // Desktop-only: Android has no desktop shell; remote-shim no-ops it.
   OPEN_PATH: 'shell:open-path',
@@ -261,8 +263,6 @@ export const IPC = {
   // Unified marketplace — packages + update + config (Phase 3)
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',
-  MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
-  MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
   // Phase 4 — force-refresh the featured/index caches without waiting for
   // the 24h TTL. Useful right after /feature curation lands.
   MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
@@ -574,13 +574,20 @@ export const IPC = {
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   // ---- Claude Code's own sign-in, read LIVE (2026-09-09) ----
   // → ClaudeAccountStatus (shared/claude-account-types.ts). Payload
-  // `{refresh?: true}` drops the cache first. There is no sign-in/sign-out verb
-  // here on purpose: Claude Code owns its login, and the app has never had a
-  // way to clear it (the card says to use /logout in a terminal).
+  // `{refresh?: true}` drops the cache first. There is no sign-OUT verb on purpose:
+  // Claude Code owns its login and the app cannot clear it (the card says to use
+  // /logout in a terminal). Sign-IN exists since card #236: CLAUDE_CODE_SIGN_IN below.
   CLAUDE_CODE_STATUS: 'claude-code:status',
   // Install Claude Code on demand (first-run local models, F-5): setup no longer
   // installs it for everyone, so Settings offers it. Desktop and remote desktop only.
   CLAUDE_CODE_INSTALL: 'claude-code:install',
+  // Sign in to Claude Code again (card #236): opens the browser through `claude auth login`
+  // and answers true once it is open (a THROWN sentence when no link appeared); cancel stops it.
+  // The end of the sign-in is read from CLAUDE_CODE_STATUS, like the other providers.
+  CLAUDE_CODE_SIGN_IN: 'claude-code:sign-in',
+  CLAUDE_CODE_CANCEL_SIGN_IN: 'claude-code:cancel-sign-in',
+  // The app's own "is this computer online?" check (card #236) -> { online }.
+  NETWORK_CHECK: 'network:check',
   // ---- WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades ----
   // list = the fixed upgradeable-backend rows (hasKey flags); set/remove-key
   // manage the encrypted key; test = never-throws connectivity check.
@@ -749,6 +756,9 @@ export const IPC = {
   OFFICE_VERSIONS: 'office:versions',
   OFFICE_RESTORE: 'office:restore',
   OFFICE_SAVE_COPY: 'office:save-copy',
+  OFFICE_RENAME: 'office:rename',
+  OFFICE_DUPLICATE: 'office:duplicate',
+  OFFICE_FORGET_RECENT: 'office:forget-recent',
   OFFICE_JOURNAL_DONE: 'office:journal-done',
   OFFICE_OTHER_UNSAVED: 'office:other-unsaved',
   OFFICE_PROCEED: 'office:proceed',
@@ -776,6 +786,7 @@ export const IPC = {
   DEFAULTS_SET: 'defaults:set',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  SETTINGS_REPAIR_NOTICE: 'settings:repair-notice',
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   ACCOUNT_START: 'account:start',
@@ -821,6 +832,7 @@ export const IPC = {
   // Listed here so the contract is the COMPLETE set of names; R3 gives each a table entry.
   ARCADE_LEADERBOARD: 'arcade:leaderboard',
   ARCADE_RECORDS: 'arcade:records',
+  ARCADE_ROOM_TICKET: 'arcade:room-ticket',
   ARCADE_STATUS: 'arcade:status',
   ARCADE_SUBMIT_SCORE: 'arcade:submit-score',
   ARTIFACTS_APPEND_VERSION: 'artifacts:append-version',
@@ -1000,6 +1012,7 @@ export interface ChannelTypes extends ConversationQueueChannelTypes, BrowserChan
   'defaults:set': { request: Partial<SessionDefaults>; response: SessionDefaults | null };
   'settings:get': { request: { field: string }; response: unknown };
   'settings:set': { request: { field: string; value: unknown }; response: boolean };
+  'settings:repair-notice': { request: void; response: { backupPath: string } | null };
   'modes:get': { request: void; response: ModelModes };
   'modes:set': { request: Partial<ModelModes>; response: ModelModes | null };
   'analytics:get-opt-in': { request: void; response: boolean };
@@ -1200,10 +1213,12 @@ interface ClaudeApi {
   on: BridgeListeners;
   dialog: {
     openFile: () => Promise<string[]>;
+    /** Desktop only: a dropped file's on-disk path (Electron removed File.path). Absent on remote/Android. */
+    pathForFile?: (file: File) => string;
     openFolder: () => Promise<string | null>;
     openSound: () => Promise<string | null>;
     readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;
-    saveClipboardImage: () => Promise<string | null>;
+    saveClipboardImage: (pasted?: File) => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = nothing to attach (SILENT). `pasted` = the picture from the paste event: only remote/phone uses it (desktop reads its own clipboard)
   };
   shell: {
     openChangelog: () => Promise<void>;
@@ -1213,6 +1228,8 @@ interface ClaudeApi {
     // the cast. Already real — preload.ts's shell.openPath, unrelated to
     // this feature.
     openPath: (filePath: string) => Promise<string>;
+    // Card #143 a: chat picture right-click — the computer fetches the picture, then copies or saves it.
+    pictureAction: (action: 'copy' | 'save', src: string) => Promise<{ ok: boolean; canceled?: boolean; reason?: string }>;
   };
   // Task 9: preload bridge for reading the xterm screen buffer from the main
   // process (used by useAttentionClassifier and the Android terminal-data parity
@@ -1608,7 +1625,7 @@ interface ClaudeApi {
     onDownloadProgress: (cb: (p: any) => void) => () => void;
     // Create-time / swap memory guard + [Reload Model] (2026-07-14).
     memoryCheck: (modelId: string) => Promise<{ verdict: 'ok' | 'tight' | 'too-large'; headline: string; detail: string }>;
-    load: (modelId: string) => Promise<boolean>;
+    load: (modelId: string, sessionId?: string) => Promise<boolean>;
     // 2026-09-05 local-engine upgrades. Real on every surface now.
     /** One model's engine settings as STORED (deck Q-2). The stored shape,
      *  not the four fields the dialog writes: the dialog also shows whether

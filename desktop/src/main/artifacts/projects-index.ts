@@ -22,7 +22,7 @@ import { trackedArtifacts } from './visible-artifacts';
 import { isAbsoluteRecorded } from './write-authorization';
 import { discoverProjectFiles, discoveredFileRecord } from './project-file-discovery';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
-import { readFolders, type SavedFolder } from '../saved-folders';
+import { readFolders, homeIsAppPrivate, withoutPrivateHome, type SavedFolder } from '../saved-folders';
 import { isRemovedFromLists } from '../folders-service';
 import { getManagedRoots } from '../sync-spaces/service';
 import { listPastSessions } from '../session-browser';
@@ -113,10 +113,12 @@ async function countAllFiles(projectRoot: string): Promise<{ count: number; trun
  *  and the remote WebSocket server. */
 export async function listProjectsIndex(opts?: { withCounts?: boolean }): Promise<{ ok: true; projects: any[] }> {
   let saved: SavedFolder[] = readFolders();
-  if (saved.length === 0) {
+  if (saved.length === 0 && !homeIsAppPrivate()) {
     // Mirror the folder picker's first-use seed so a fresh install isn't empty.
     saved = [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now() }];
   }
+  // Same as the picker: the phone never shows its app-private home as a project (saved-folders.ts).
+  saved = withoutPrivateHome(saved);
   // Managed sync projects always appear in Project View, exactly like the
   // session picker's FOLDERS_LIST synthesizes them (2026-07-13 dogfood fix): a
   // project materialized by cross-device discovery is created in the main

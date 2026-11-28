@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Button } from '../ui';
+import { Button, ErrorState } from '../ui';
 import { ProviderIcon } from '../ProviderIcon';
+import { deviceNoun } from '../../platform';
 
 /**
  * The sign-in step, explained (first-run deck L-3, Destin 2026-10-04: "walk the users
@@ -23,6 +24,8 @@ interface Group {
   summary: string;
   facts: { kind: FactKind; text: string }[];
   ways: { id: WayIn; label: string }[];
+  /** Shown but not pressable: the row's line under the title says why. */
+  unavailable?: boolean;
 }
 
 // WHY these words: every fact is something the user can check for themselves, and none
@@ -61,7 +64,7 @@ function groups(chatGpt: boolean): Group[] {
       summary: 'Download a model and run it yourself.',
       facts: [
         { kind: 'cost', text: 'Free. Needs a few GB of space.' },
-        { kind: 'privacy', text: 'Nothing leaves your computer.' },
+        { kind: 'privacy', text: 'Nothing leaves this computer.' },
         { kind: 'good', text: 'Working offline. Slower and simpler than the big models.' },
       ],
       ways: [{ id: 'local', label: 'Use a local model' }],
@@ -102,7 +105,7 @@ function WayIcon({ id }: { id: WayIn }) {
 
 function Facts({ facts }: { facts: Group['facts'] }) {
   return (
-    <ul className="flex flex-col gap-1.5 text-sm text-fg-2">
+    <ul className="flex flex-col gap-1.5 max-sm:gap-1 text-sm max-sm:text-sm-tight text-fg-2">
       {facts.map((f) => (
         <li key={f.kind} className="flex gap-2.5 leading-snug"><FactIcon kind={f.kind} />{f.text}</li>
       ))}
@@ -112,9 +115,16 @@ function Facts({ facts }: { facts: Group['facts'] }) {
 
 // WHY the Button primitive with brand classes: every control goes through its primitive;
 // `brand-way` (brand.css) gives the white, logo-led sign-in button its look.
-function Ways({ ways, onPick }: { ways: Group['ways']; onPick: (w: WayIn) => void }) {
+function Ways({ ways, onPick, offline, lastWay }: { ways: Group['ways']; onPick: (w: WayIn) => void; offline?: boolean; lastWay?: WayIn | null }) {
+  // Card #236 (review R-16): with no internet the login buttons are no use, so the notice
+  // takes their place — the guide's "a failed action replaces the buttons it came from".
+  // Try again repeats the sign-in that was pressed.
+  if (offline) {
+    const again = ways.find((w) => w.id === lastWay)?.id ?? ways[0].id;
+    return <ErrorState message="No internet connection. Connect, then try again." onRetry={() => onPick(again)} />;
+  }
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 max-sm:gap-1.5">
       {ways.map((w) => (
         <Button key={w.id} variant="secondary" size="lg" className="brand-way w-full" onClick={() => onPick(w.id)}>
           <WayIcon id={w.id} />
@@ -129,7 +139,7 @@ function Head({ g, big = false }: { g: Group; big?: boolean }) {
   return (
     <div className="flex items-start gap-3">
       <div className="flex-1 min-w-0">
-        <h3 className={`brand-heading text-fg ${big ? 'text-xl' : 'text-lg'}`}>{g.title}</h3>
+        <h3 className={`brand-heading text-fg ${big ? 'text-xl max-sm:text-lg' : 'text-lg'}`}>{g.title}</h3>
         <p className="text-sm text-fg-dim">{g.summary}</p>
       </div>
       <span className="brand-badge shrink-0">{g.badge}</span>
@@ -138,29 +148,44 @@ function Head({ g, big = false }: { g: Group; big?: boolean }) {
 }
 
 /** Pick a kind first, then its facts and buttons on a second page. */
-function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) => void; initial: Group['id'] | null }) {
+function Guided({ list, onPick, initial, offline, lastWay }: { list: Group[]; onPick: (w: WayIn) => void; initial: Group['id'] | null; offline?: boolean; lastWay?: WayIn | null }) {
   const [open, setOpen] = useState<Group['id'] | null>(initial);
   const g = list.find((x) => x.id === open);
   if (g) {
     return (
-      <section className="brand-card w-full p-6 flex flex-col gap-5">
+      <section className="brand-card w-full p-6 max-sm:p-4 flex flex-col gap-5 max-sm:gap-3">
         <button type="button" onClick={() => setOpen(null)} className="self-start text-sm text-fg-dim hover:text-fg transition-colors">‹ All options</button>
         <Head g={g} big />
         <Facts facts={g.facts} />
-        <Ways ways={g.ways} onPick={onPick} />
+        <Ways ways={g.ways} onPick={onPick} offline={offline} lastWay={lastWay} />
       </section>
     );
   }
   return (
-    <div className="w-full flex flex-col gap-3">
-      {list.map((x) => (
-        <button key={x.id} type="button" onClick={() => setOpen(x.id)} className="brand-card brand-card--press w-full p-5 text-left flex items-center gap-4">
+    <div className="w-full flex flex-col gap-3 max-sm:gap-2">
+      {list.map((x) => x.unavailable ? (
+        // WHY a row that cannot be pressed (Destin, 2026-11-25): on a phone every other choice costs money, and
+        // dropping the free row hid that a free way exists at all; a greyed "Coming soon" row says it is on its way.
+        // Its badge stays visible on a narrow screen: it is the row's whole point.
+        <div key={x.id} aria-disabled="true" className="brand-card w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3 select-none">
+          {/* WHY dim colours, not a whole-row opacity (review): opacity on top of the dim summary text fell under readable contrast. */}
+          <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg opacity-50">
+            {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
+          </span>
+          <span className="flex-1 min-w-0">
+            <span className="block brand-heading text-lg max-sm:text-base text-fg-dim">{x.title}</span>
+            <span className="block text-sm max-sm:text-sm-tight text-fg-dim">{x.summary}</span>
+          </span>
+          <span className="brand-badge shrink-0">{x.badge}</span>
+        </div>
+      ) : (
+        <button key={x.id} type="button" onClick={() => setOpen(x.id)} className="brand-card brand-card--press w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3">
           <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg">
             {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
           </span>
           <span className="flex-1 min-w-0">
-            <span className="block brand-heading text-lg text-fg">{x.title}</span>
-            <span className="block text-sm text-fg-dim">{x.summary}</span>
+            <span className="block brand-heading text-lg max-sm:text-base text-fg">{x.title}</span>
+            <span className="block text-sm max-sm:text-sm-tight text-fg-dim">{x.summary}</span>
           </span>
           {/* Narrow window: the badge waits for the second page, so the row's words get the room. */}
           <span className="brand-badge shrink-0 max-sm:hidden">{x.badge}</span>
@@ -171,9 +196,16 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
   );
 }
 
-export function SignInChoices({ chatGpt, onPick }: { chatGpt: boolean; onPick: (w: WayIn) => void }) {
+export function SignInChoices({ chatGpt, onPick, offline, lastWay }: { chatGpt: boolean; onPick: (w: WayIn) => void; offline?: boolean; lastWay?: WayIn | null }) {
+  // WHY the local-model row cannot be opened on a phone: the phone cannot run a model yet (the old page spun on
+  // "Checking this computer…" forever, 2026-11-01 test, #11), so it shows as "Coming soon" instead (2026-11-25).
+  // A phone paired to a computer is not 'phone' here, so that case is unchanged.
   // `?signInPick=<kind>` is the workbench's photo switch for the second page; the real
   // app's address never carries it, so it always opens on the three rows.
   const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
-  return <Guided list={groups(chatGpt)} onPick={onPick} initial={pick} />;
+  const phone = deviceNoun() === 'phone';
+  const list = groups(chatGpt).map((g) => (g.id === 'local' && phone
+    ? { ...g, title: 'Free on this phone', badge: 'Coming soon', summary: 'Local models not yet available on mobile', unavailable: true }
+    : g));
+  return <Guided list={list} onPick={onPick} initial={pick} offline={offline} lastWay={lastWay} />;
 }

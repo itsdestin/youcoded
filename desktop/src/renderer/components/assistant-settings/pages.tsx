@@ -78,6 +78,9 @@ export interface PageDef {
   /** The Browser page exists only on the computer's own window
    *  (capabilities.assistantBrowser — false on phones, Android and remote). */
   needsBrowser?: boolean;
+  /** WHY (2026-11-01, card #177): a phone's own backend cannot run a local model (the page spun forever), so the
+   *  page is hidden when this screen IS the phone. A phone browser managing a computer still sees it. */
+  hiddenOnPhone?: boolean;
   render: (ctx: PageContext) => React.ReactNode;
 }
 
@@ -376,6 +379,7 @@ export const PAGES: PageDef[] = [
     id: 'local',
     label: 'Local models',
     needsNative: true,
+    hiddenOnPhone: true,
     info: LOCAL_MODELS_INFO,
     icon: <Icon><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Icon>,
     render: () => <LocalModelsBlock withHeader={false} />,

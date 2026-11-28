@@ -128,6 +128,11 @@ class MuslSectionTests(unittest.TestCase):
             shutil.copyfile(SCRIPT.with_name(name), self.here / name)
         (self.here / 'pins.env').write_text('fixture input pins\n')
         (self.here / 'runtime-redistribution.py').write_text('# fixture record command\n')
+        # Alpine's patch step is the real script's job; the fixture stands in for it (argv: apply <src> <version>)
+        # and provides the manifest the cache key reads.
+        (self.here / 'alpine-musl-patches.py').write_text('import pathlib, sys\nassert sys.argv[1] == "apply"\n')
+        (self.here / 'alpine-musl-patches').mkdir()
+        (self.here / 'alpine-musl-patches' / 'manifest.json').write_text('{"alpine": "fixture-r0", "patches": []}\n')
         self.cache = self.root / 'downloads'
         self.cache.mkdir()
         self.sysroot = self.cache / 'sysroot'
@@ -169,7 +174,7 @@ class MuslSectionTests(unittest.TestCase):
         evidence = out / 'evidence/sysroot'
         evidence.mkdir(parents=True)
         (evidence / 'inputs.json').write_text('{"fixed": "exact sysroot input lock"}\n')
-        values = {'HERE': self.here, 'CACHE': self.cache, 'SR': self.sysroot, 'OUT': out, 'JNI': jni, 'MUSL_VERSION': 'fixture'}
+        values = {'HERE': self.here, 'CACHE': self.cache, 'SR': self.sysroot, 'OUT': out, 'JNI': jni, 'MUSL_VERSION': 'fixture', 'ALPINE_BRANCH': 'v3.24'}
         prefix = 'set -euo pipefail\n' + '\n'.join(f'{key}={shlex.quote(str(value))}' for key, value in values.items()) + '\nsay() { :; }\n'
         env = {**self.env, 'YOUCODED_COMMON_NATIVE_CACHE': str(self.root / 'run-local-native') if enabled else '', 'YOUCODED_COLLECT_SOURCES': '1' if collect else '0'}
         subprocess.run(['bash', '-c', prefix + self.section], env=env, check=True, capture_output=True, text=True)
@@ -178,7 +183,7 @@ class MuslSectionTests(unittest.TestCase):
         return jni / 'libldmusl.so'
 
     def test_opt_in_reuses_compile_but_keeps_sources_for_every_variant(self):
-        for variant in ('debug', 'releaseTest', 'release'):
+        for variant in ('debug', 'release'):
             self.build(variant)
         self.assertEqual(self.count.read_text().splitlines(), ['compiled'])
 

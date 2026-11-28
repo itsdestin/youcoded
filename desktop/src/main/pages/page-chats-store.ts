@@ -47,14 +47,14 @@ export class PageChatsStore {
   private save(): void {
     const body = JSON.stringify({ v: 1, chats: this.chats ?? [] });
     // One write at a time, in order; a failed write is retried by the next change.
-    this.saving = this.saving.catch(() => {}).then(async () => {
+    this.saving = this.saving.catch(() => {}).then(async () => { // benign: the earlier save already told its own caller; this only keeps the queue moving
       await fs.mkdir(path.dirname(this.file()), { recursive: true });
       await atomicWrite(this.file(), body);
     });
   }
 
   /** Resolves once every change so far is on disk (tests, and a clean quit). */
-  whenSaved(): Promise<void> { return this.saving.catch(() => {}); }
+  whenSaved(): Promise<void> { return this.saving.catch(() => {}); } // benign: the earlier save already told its own caller; this only keeps the queue moving
 
   /** A session was just started for a page (new, or resuming `conversationId`). */
   async started(pageId: string, sessionId: string, provider: 'claude' | 'native', cwd: string, conversationId?: string): Promise<void> {

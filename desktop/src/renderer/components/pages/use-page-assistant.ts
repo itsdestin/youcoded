@@ -57,7 +57,7 @@ export function usePageAssistant(page: PageSummary | null) {
 
   const refreshChats = useCallback(async (): Promise<PageAssistantChat[]> => {
     if (!pageId) return [];
-    const list = (await bridge()?.assistantChats?.(pageId).catch(() => [])) ?? [];
+    const list = (await bridge()?.assistantChats?.(pageId).catch(() => [])) ?? []; // benign: no chat list shows the empty state
     setChats(list);
     return list;
   }, [pageId]);
@@ -68,7 +68,7 @@ export function usePageAssistant(page: PageSummary | null) {
     setStatus('starting');
     setError(null);
     try {
-      const defaults = await window.claude.defaults?.get?.().catch(() => null);
+      const defaults = await window.claude.defaults?.get?.().catch(() => null); // benign: no saved defaults means the built-in defaults are used
       const runtime = defaultRuntime();
       const binding = runtime === 'native' ? loadLastBinding() : null;
       if (runtime === 'native' && !binding) { if (mine === epoch.current) fail(NO_MODEL); return; }
@@ -98,7 +98,7 @@ export function usePageAssistant(page: PageSummary | null) {
     setError(null);
     let held = false;
     try {
-      const defaults = await window.claude.defaults?.get?.().catch(() => null);
+      const defaults = await window.claude.defaults?.get?.().catch(() => null); // benign: no saved defaults means the built-in defaults are used
       const info = await runLeaseTakeoverGate({
         claudeSessionId: chat.conversationId,
         // WHY never take over from here: moving a chat off another device is a decision the main window's
@@ -127,7 +127,7 @@ export function usePageAssistant(page: PageSummary | null) {
   const openChat = useCallback(async (chat: PageAssistantChat) => {
     if (chat.live && chat.sessionId) { epoch.current += 1; show(chat.sessionId); return; }
     if (chat.provider === 'claude') { await resume(chat); return; }
-    const rows = await window.claude.session.browse().catch(() => []) as Array<{ sessionId: string; projectSlug?: string; projectPath?: string; provider?: string }>;
+    const rows = await window.claude.session.browse().catch(() => []) as Array<{ sessionId: string; projectSlug?: string; projectPath?: string; provider?: string }>; // benign: no conversation list means nothing to match; a new chat is started instead
     const row = rows.find((r) => r.sessionId === chat.conversationId);
     if (row?.projectSlug && row.projectPath) {
       window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {

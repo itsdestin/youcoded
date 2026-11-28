@@ -34,6 +34,7 @@ import type {
   PageAssistantChat, PageVersionsAnswer,
 } from '../../shared/pages-types';
 import { MAX_PAGE_PROGRAM_INPUT, PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
+import { reportFailure } from '../report-failure';
 
 const DEBOUNCE_MS = 300;
 
@@ -128,7 +129,7 @@ class PagesService {
       access: (pageId) => this.filesAccess(pageId),
       // A newly remembered file shows in Page settings → Files, so the list goes out again.
       rememberFile: async (pageKey, lineId, name, filePath) => {
-        const id = (await deps.connections?.rememberFile(pageKey, lineId, name, filePath).catch(() => null)) ?? null;
+        const id = (await deps.connections?.rememberFile(pageKey, lineId, name, filePath).catch(() => null)) ?? null; // benign: a file that cannot be remembered is still handed to the page, just not kept for next time
         if (id) this.schedule();
         return id;
       },
@@ -167,7 +168,7 @@ class PagesService {
     // Already gone (its folder removed by hand, or deleted in another window), or a built-in page with no
     // folder of its own: there is nothing to remove, but automations still linked to it are dealt with.
     if (!dir) {
-      await this.deps.automationsForDeletedPage?.(id, deleteAutomations).catch(() => {});
+      await this.deps.automationsForDeletedPage?.(id, deleteAutomations).catch((err) => reportFailure({ what: "update a deleted page's automations", cause: err, where: 'Pages' })); // WHY reported: otherwise automations stay linked to a page that is gone, with no trace of why
       return this.listAndWatch();
     }
     // WHY re-checked here: this removes a whole folder, so it must be one directly inside a Pages folder
@@ -178,8 +179,8 @@ class PagesService {
     const trash = this.deps.fileDialogs?.trash;
     if (trash) await trash(dir).catch(() => fsp.rm(dir, { recursive: true, force: true }));
     else await fsp.rm(dir, { recursive: true, force: true });
-    await this.versions.forget(id).catch(() => { /* leftovers are harmless and unreachable */ });
-    await this.assistantChats.forgetPage(id).catch(() => {});
+    await this.versions.forget(id).catch(() => { /* benign: leftovers are harmless and unreachable */ });
+    await this.assistantChats.forgetPage(id).catch(() => {}); // benign: leftover chat-list rows for a deleted page are unreachable
     await this.deps.automationsForDeletedPage?.(id, deleteAutomations).catch((err) => log('WARN', 'Pages', 'automations of a deleted page were not updated', { error: String(err) }));
     const pages = await this.listAndWatch();
     this.deps.broadcast(pages);
@@ -519,14 +520,14 @@ class PagesService {
   /** `pages:forget-file` — Page settings → Files: the page must ask for that file again. */
   async forgetFile(id: string, connectionId: string, fileId: string): Promise<PageSummary[]> {
     const pageKey = await this.store.approvalKeyFor(id);
-    if (pageKey && this.deps.connections) await this.deps.connections.forgetFile(pageKey, connectionId, fileId).catch(() => { /* already gone */ });
+    if (pageKey && this.deps.connections) await this.deps.connections.forgetFile(pageKey, connectionId, fileId).catch(() => { /* benign: already gone */ });
     return this.listAndWatch();
   }
 
   /** `pages:forget-open-site` — links from this page to that site ask again. */
   async forgetOpenSite(id: string, site: string): Promise<PageSummary[]> {
     const pageKey = await this.store.approvalKeyFor(id);
-    if (pageKey && this.deps.connections) await this.deps.connections.removeOpenSite(pageKey, site).catch(() => { /* already gone */ });
+    if (pageKey && this.deps.connections) await this.deps.connections.removeOpenSite(pageKey, site).catch(() => { /* benign: already gone */ });
     return this.listAndWatch();
   }
 

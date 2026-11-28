@@ -2,10 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
-// WHY (2026-09-29 one-core R1): startOAuthLogin used to read Electron's `app` itself; it now takes
-// the flag so prerequisite-installer.ts (also loaded by the native runtime) needs no Electron.
-import { app } from 'electron';
 import { log } from './logger';
+import { returnToApp } from './headless/host-bridge';
+// WHY: first launch and "Sign in again" open Claude's login through the same function (1.3.4 bug:
+// two copies of these steps drifted and the newer one broke in the installed app).
+import { openClaudeLogin, NO_LOGIN_LINK_MESSAGE } from './claude-sign-in';
 import {
   FirstRunState,
   FirstRunStep,
@@ -29,6 +30,10 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
 import { writeSetupDownload } from './first-run-local';
 import { noteMilestone } from './analytics-service';
+import { checkInternet } from './network-check';
+
+/** The line under the sign-in buttons when the app's own check says there is no connection (card #236). */
+const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
 
 // WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
 // first-run:submit-api-key channel row names it); re-exported so existing imports keep working.
@@ -74,9 +79,12 @@ export interface OpenRouterSignInAuth {
 
 // The wizard's ChatGPT sign-in window (design §9.1, review R2-11): a first
 // ChatGPT sign-in on a fresh machine is an email code or 2FA away, and this
-// screen has no Cancel — so 5 minutes, not Claude's 2 and not the Settings
+// screen has no Cancel — so 5 minutes (Claude's too, since 2026-11-25), not the Settings
 // card's 10.
 export const CHATGPT_FIRST_RUN_TIMEOUT_MS = 300_000;
+// WHY Claude's sign-in now gets the same 5 minutes (Destin, 2026-11-25): a brand-new person may have to make an
+// account or wait for an emailed code, and 2 minutes timed them out mid-way ("localhost refused to connect").
+export const CLAUDE_FIRST_RUN_TIMEOUT_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -168,6 +176,27 @@ export class FirstRunManager extends EventEmitter {
   private authRound = 0;
   private activeSignIn: { cancelSignIn(): Promise<boolean> } | null = null;
   private stopOAuth: (() => void) | null = null;
+  /** Test hook (card #236): the app's own online check. */
+  checkInternet: () => Promise<boolean> = checkInternet;
+
+  /** WHY (card #236): before a sign-in opens a browser or spawns anything, ask whether this computer is
+   *  online. Offline puts the buttons back with the amber "No internet" line (`lastErrorOffline`) instead of a
+   *  spinner that can only time out. Returns true when it stopped the sign-in. A check that cannot say
+   *  counts as online (never invent a problem). */
+  private async stoppedForNoInternet(round: number): Promise<boolean> {
+    // WHY the caller has already put the waiting screen up (review F7): a slow-failing network took up
+    // to 5 s with nothing on screen. And after the wait, a Cancel pressed meanwhile (authRound moved
+    // on) must win: the screen is already back on the buttons, so we neither write offline state nor
+    // let the caller carry on to open the browser.
+    const online = await this.checkInternet().catch(() => true);
+    if (round !== this.authRound) return true;
+    if (online) return false;
+    this.updatePrereq('auth', { status: 'waiting' });
+    this.updateState({ authMode: 'none', lastError: OFFLINE_SIGN_IN_MESSAGE, lastErrorOffline: true });
+    log('INFO', 'first-run', 'Sign-in not started: no internet connection');
+    this.noteSetupFailure('internet');
+    return true;
+  }
 
   /**
    * Returns true if this is the first run (setup not yet completed).
@@ -228,6 +257,7 @@ export class FirstRunManager extends EventEmitter {
         this.updateState({
           lastError: `Insufficient disk space: ${disk.availableMB} MB available (need >= 500 MB)`,
         });
+        this.noteSetupFailure('disk');
         this.running = false;
         return;
       }
@@ -245,6 +275,7 @@ export class FirstRunManager extends EventEmitter {
       if (step === 'AUTHENTICATE' || (step as string) === 'ENABLE_DEVELOPER_MODE') {
         this.state.authMode = 'none';
         this.state.lastError = undefined;
+        this.state.lastErrorOffline = undefined; // card #236: goes with lastError
         await this.detectAll();
       } else {
         await this.runStep(step);
@@ -253,6 +284,7 @@ export class FirstRunManager extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'Unexpected error in run()', { error: msg });
       this.updateState({ lastError: msg });
+      this.noteSetupFailure('error');
     } finally {
       this.running = false;
     }
@@ -438,6 +470,7 @@ export class FirstRunManager extends EventEmitter {
     const round = ++this.authRound;
     this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...', lastError: undefined });
     this.updatePrereq('auth', { status: 'installing' });
+    if (await this.stoppedForNoInternet(round)) return { url: null };
 
     // Node first (2026-10-02): Claude Code sessions run through it, and this
     // click is the moment a person has chosen Claude Code. The card's
@@ -483,17 +516,21 @@ export class FirstRunManager extends EventEmitter {
     // Cancelled while Claude Code was installing: keep the install, skip the login.
     if (round !== this.authRound) return { url: null };
 
-    // Spawn the login process — it outputs the auth URL then waits for callback
-    const oauth = startOAuthLogin(app?.isPackaged);
-    this.stopOAuth = () => oauth.kill();
+    // Spawn the login process — it prints the auth URL then waits for the browser callback.
+    // openClaudeLogin waits until the link appears (or gives up) and ends the process when none came.
+    // WHY stopOAuth is set inside start, before the wait: the wait screen's Cancel must end the
+    // process during the link wait too (a lingering login holds the browser-callback port a retry needs).
+    const oauth = await openClaudeLogin(() => {
+      const l = startOAuthLogin();
+      this.stopOAuth = () => l.kill();
+      return l;
+    });
+    if (round !== this.authRound) { oauth?.kill(); return { url: null }; } // cancelled while waiting
+    const url = oauth?.url ?? null;
 
-    // Wait briefly for the URL to be captured from stdout
-    await new Promise(r => setTimeout(r, 1500));
-    const url = oauth.url;
-
-    if (!url) {
-      oauth.kill();
-      this.updateState({ lastError: 'Could not get login URL from Claude Code.' });
+    if (!oauth || !url) {
+      this.stopOAuth = null; // openClaudeLogin already ended the process
+      this.updateState({ lastError: NO_LOGIN_LINK_MESSAGE });
       this.updatePrereq('auth', { status: 'failed', error: 'No login URL' });
       return { url: null };
     }
@@ -502,7 +539,7 @@ export class FirstRunManager extends EventEmitter {
 
     // Return the URL to the caller so it can open it via shell.openExternal()
     // Then poll in the background for auth completion
-    void pollAuthStatus(120000, 2000).then((success) => {
+    void pollAuthStatus(CLAUDE_FIRST_RUN_TIMEOUT_MS, 2000).then((success) => {
       oauth.kill();
       if (round !== this.authRound) return; // cancelled meanwhile — the buttons are already back
       this.stopOAuth = null;
@@ -510,6 +547,7 @@ export class FirstRunManager extends EventEmitter {
         this.updateState({ authComplete: true });
         this.updatePrereq('auth', { status: 'installed' });
         log('INFO', 'first-run', 'OAuth login succeeded');
+        returnToApp(); // WHY: on the phone, bring YouCoded back from the browser (no-op on desktop)
         this.advanceTo('LAUNCH_WIZARD');
         this.updateState({ statusMessage: 'Launching setup wizard...' });
         this.emit('launch-wizard');
@@ -578,6 +616,7 @@ export class FirstRunManager extends EventEmitter {
     this.updateState({ authMode: 'apikey', lastError: undefined });
     if (!['anthropic', 'openai', 'google', 'openrouter'].includes(service)) {
       this.updateState({ lastError: 'That kind of key is not supported here.' });
+      this.noteSetupFailure('key');
       return;
     }
     try {
@@ -594,6 +633,7 @@ export class FirstRunManager extends EventEmitter {
         const check = await deps.providers.testConnection(id, key.trim());
         if (check.verdict === 'rejected' || (!check.ok && check.verdict !== 'unchecked')) {
           this.updateState({ lastError: check.message });
+          this.noteSetupFailure('key');
           return;
         }
         await deps.providers.setKey(id, key.trim());
@@ -602,6 +642,7 @@ export class FirstRunManager extends EventEmitter {
         const check = await deps.providers.testConnection(id);
         if (!check.ok) {
           this.updateState({ lastError: `Couldn't verify the key: ${check.message}` });
+          this.noteSetupFailure('key');
           return;
         }
       }
@@ -611,6 +652,7 @@ export class FirstRunManager extends EventEmitter {
       const detail = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'API key setup failed', { service, detail });
       this.updateState({ lastError: `Couldn't save the key: ${detail}` });
+      this.noteSetupFailure('key');
     }
   }
 
@@ -630,6 +672,7 @@ export class FirstRunManager extends EventEmitter {
       const check = await deps.providers.testConnection(id);
       if (!check.ok) {
         if (created) await deps.providers.remove(id).catch(() => { /* best effort */ });
+        this.noteSetupFailure('local');
         return { ok: false, message: `Couldn't connect to ${label}: ${check.message}` };
       }
       log('INFO', 'first-run', 'Connected to a local model app', { label });
@@ -638,6 +681,7 @@ export class FirstRunManager extends EventEmitter {
     } catch (err) {
       if (id && created) await deps.providers.remove(id).catch(() => { /* best effort */ });
       const detail = err instanceof Error ? err.message : String(err);
+      this.noteSetupFailure('local');
       return { ok: false, message: `Couldn't connect to ${label}: ${detail}` };
     }
   }
@@ -677,6 +721,7 @@ export class FirstRunManager extends EventEmitter {
     const round = ++this.authRound;
     this.updateState({ authMode: 'chatgpt', statusMessage: 'Waiting for you to sign in…' });
     this.updatePrereq('auth', { status: 'installing' });
+    if (await this.stoppedForNoInternet(round)) return;
 
     // signIn() THROWS for two verified causes — the keychain is unavailable, or
     // another program holds port 1455. Both first-run IPC handlers in main.ts
@@ -739,12 +784,14 @@ export class FirstRunManager extends EventEmitter {
   async handleOpenRouterLogin(auth: OpenRouterSignInAuth): Promise<void> {
     const round = ++this.authRound;
     this.updateState({ authMode: 'openrouter', statusMessage: 'Waiting for you to sign in…', lastError: undefined });
+    if (await this.stoppedForNoInternet(round)) return;
     try {
       await auth.signIn({ timeoutMs: CHATGPT_FIRST_RUN_TIMEOUT_MS });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'OpenRouter sign-in could not start', { detail });
       this.updateState({ authMode: 'none', lastError: detail });
+      this.noteSetupFailure('openrouter');
       return;
     }
     this.activeSignIn = auth;
@@ -767,6 +814,7 @@ export class FirstRunManager extends EventEmitter {
       : outcome.error;
     log('WARN', 'first-run', 'OpenRouter sign-in did not complete', { reason: lastError });
     this.updateState({ authMode: 'none', lastError });
+    this.noteSetupFailure(outcome === 'cancelled' ? 'cancelled' : 'openrouter');
   }
 
   /** The wait screen's Cancel: back to the sign-in choices, with no error line. */
@@ -781,6 +829,7 @@ export class FirstRunManager extends EventEmitter {
     this.updateState({ authMode: 'none', lastError: undefined, statusMessage: 'Sign in to continue' });
     this.updatePrereq('auth', { status: 'waiting' });
     log('INFO', 'first-run', 'Sign-in cancelled by the user', { mode });
+    this.noteSetupFailure('cancelled');
     // Frees the browser round's callback port so the next sign-in can start straight away.
     if (signIn) await signIn.cancelSignIn().catch(() => false);
   }
@@ -843,9 +892,22 @@ export class FirstRunManager extends EventEmitter {
   }
 
   private updateState(updates: Partial<FirstRunState>): void {
+    // WHY (card #236): `lastErrorOffline` describes the CURRENT lastError only. Any other write to
+    // lastError (a new message, or clearing it) retires the amber "no internet" look unless the same
+    // call sets it again.
+    if ('lastError' in updates && !('lastErrorOffline' in updates)) updates = { ...updates, lastErrorOffline: undefined };
     Object.assign(this.state, updates);
     this.saveState();
     this.emitState();
+  }
+
+  /** Which setup step went wrong or was abandoned (analytics deck U-2), by a FIXED word from this file only —
+   *  never the error text, which can hold paths, user names or a key. WHY (2026-11-25): only a prerequisite row
+   *  flipping to 'failed' used to report, so a rejected key, an OpenRouter sign-in that failed, no internet, a full
+   *  disk or a Cancel left the install looking like it simply stopped. Sent at most once per word per device. */
+  // Words used: a prerequisite's name (node, git, claude, auth), disk, internet, key, openrouter, local, cancelled, error.
+  private noteSetupFailure(step: string): void {
+    noteMilestone(`setup_failed_${step}`);
   }
 
   private updatePrereq(
@@ -858,7 +920,7 @@ export class FirstRunManager extends EventEmitter {
     Object.assign(prereq, updates);
     // Which setup step people get stuck on (deck U-2). Only the step's name is
     // sent — never the error text, which can hold paths and user names.
-    if (updates.status === 'failed') noteMilestone(`setup_failed_${name.toLowerCase().replace(/[^a-z]/g, '')}`);
+    if (updates.status === 'failed') this.noteSetupFailure(name.toLowerCase().replace(/[^a-z]/g, ''));
 
     // Recalculate overall progress: (installed count / total) * 90, capped at 90.
     // WHY skipped rows don't count (2026-10-02): Claude Code and Node are now
@@ -885,7 +947,10 @@ export class FirstRunManager extends EventEmitter {
     try {
       const raw = fs.readFileSync(STATE_FILE, 'utf8');
       return JSON.parse(raw) as FirstRunState;
-    } catch {
+    } catch (err) {
+      // Card #134 round 4: a missing file is the normal fresh start; a file that exists but cannot be read or parsed restarts setup
+      // from the top, and used to leave no trace of why.
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') log('WARN', 'first-run', 'Setup state file unreadable, starting setup fresh', { error: String(err) });
       return this.defaultState();
     }
   }

@@ -20,6 +20,7 @@ import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 import type { FileTypeGroup } from '../src/shared/artifacts/categorization';
 import { folderPageFromRecords, FOLDER_PAGE_SIZE } from '../src/shared/artifacts/folder-page';
+import { findByHint } from './helpers/hint-queries';
 
 const listAllFiles = vi.fn();
 // Folder browsing: one folder from disk, a page at a time. Answered from the
@@ -81,24 +82,24 @@ afterEach(() => { cleanup(); io.restore(); vi.clearAllMocks(); });
 
 describe('FilesTab list view', () => {
   it('gives each file a name, a kind and a relative time', async () => {
-    const { findByTitle } = renderTab('list');
-    const row = await findByTitle('notes.md');
+    const { container } = renderTab('list');
+    const row = await findByHint(container, 'notes.md');
     expect(row.textContent).toContain('notes.md');
     expect(row.textContent).toContain('Document');
     expect(row.textContent).toMatch(/ago|just now/);
   });
 
   it('gives a folder its item count and no date', async () => {
-    const { findByTitle } = renderTab('list');
-    const row = await findByTitle('docs');
+    const { container } = renderTab('list');
+    const row = await findByHint(container, 'docs');
     expect(row.textContent).toContain('2 items');
     expect(row.textContent).not.toMatch(/ago|just now/);
   });
 
   it('lists loose files before folders, as the grid does', async () => {
-    const { container, findByTitle } = renderTab('list');
-    await findByTitle('docs');
-    const titles = [...container.querySelectorAll('button[title]')].map((b) => b.getAttribute('title'));
+    const { container } = renderTab('list');
+    await findByHint(container, 'docs');
+    const titles = [...container.querySelectorAll('button[data-hint]')].map((b) => b.getAttribute('data-hint'));
     expect(titles.indexOf('chart.png')).toBeLessThan(titles.indexOf('docs'));
     expect(titles.indexOf('notes.md')).toBeLessThan(titles.indexOf('docs'));
   });
@@ -116,11 +117,11 @@ describe('FilesTab list view', () => {
   // is natural height and the column scrolls, so headers, name matches and
   // content matches move as one. jsdom does no layout, so classes are the pin.
   const rowParent = (container: HTMLElement) =>
-    container.querySelector('button[title="notes.md"]')!.parentElement!;
+    container.querySelector('button[data-hint="notes.md"]')!.parentElement!;
 
   it('scrolls inside its own border while browsing folders', async () => {
-    const { container, findByTitle } = renderTab('list');
-    await findByTitle('docs');
+    const { container } = renderTab('list');
+    await findByHint(container, 'docs');
     const scroller = rowParent(container);
     expect(scroller.className).toContain('overflow-y-auto');
     // shrink-0 here would stop it taking the available height, so the COLUMN
@@ -133,8 +134,8 @@ describe('FilesTab list view', () => {
     // not clip, so with the border and the scrolling on one element the thumb
     // ran over the rounded corners at the ends of its travel. An ancestor's
     // rounded overflow-hidden does clip it — hence two elements, not one.
-    const { container, findByTitle } = renderTab('list');
-    await findByTitle('docs');
+    const { container } = renderTab('list');
+    await findByHint(container, 'docs');
     const wrap = rowParent(container).parentElement!;
     expect(wrap.className).toContain('rounded-lg');
     expect(wrap.className).toContain('overflow-hidden');
@@ -142,8 +143,8 @@ describe('FilesTab list view', () => {
   });
 
   it('hands scrolling back to the column when searching', async () => {
-    const { container, findByTitle } = renderTab('list', 'notes');
-    await findByTitle('notes.md');
+    const { container } = renderTab('list', 'notes');
+    await findByHint(container, 'notes.md');
     const box = rowParent(container);
     // Natural height: the name matches, their header and the content matches
     // below have to scroll together, not each in their own little window.
@@ -152,8 +153,8 @@ describe('FilesTab list view', () => {
   });
 
   it('draws cards, not rows, in grid view', async () => {
-    const { container, findByTitle } = renderTab('grid');
-    await findByTitle('notes.md');
+    const { container } = renderTab('grid');
+    await findByHint(container, 'notes.md');
     // The thumbnail is the card's defining part and the list has none.
     expect(container.querySelector('.h-44')).not.toBeNull();
   });
@@ -172,9 +173,9 @@ describe('flat search results', () => {
       lastModified: new Date().toISOString(),
     }));
     listAllFiles.mockResolvedValue({ ok: true, files: many });
-    const { container, findByTitle } = renderTab(view, 'match');
-    await findByTitle('match-000.md');
-    const rows = () => container.querySelectorAll('button[title^="match-"]').length;
+    const { container } = renderTab(view, 'match');
+    await findByHint(container, 'match-000.md');
+    const rows = () => container.querySelectorAll('button[data-hint^="match-"]').length;
     expect(rows()).toBe(REVEAL_CHUNK);
     act(() => io.fireAll());
     await waitFor(() => expect(rows()).toBe(REVEAL_CHUNK * 2));
@@ -191,9 +192,9 @@ describe('folder browsing', () => {
       project, search: '', types: new Set<FileTypeGroup>(), view: 'grid' as const, onViewChange: vi.fn(),
       refreshKey: 0, pvActiveId: null, artifactDispatch: vi.fn(),
     };
-    const { container, findByTitle, rerender } = render(<FilesTab {...props} sortBy="name" />);
-    await findByTitle('notes.md');
-    const box = container.querySelector('button[title="notes.md"]')!.closest('.grid') as HTMLElement;
+    const { container, rerender } = render(<FilesTab {...props} sortBy="name" />);
+    await findByHint(container, 'notes.md');
+    const box = container.querySelector('button[data-hint="notes.md"]')!.closest('.grid') as HTMLElement;
     box.scrollTop = 300;
     rerender(<FilesTab {...props} sortBy="recent" />);
     expect(box.scrollTop).toBe(300);
@@ -213,13 +214,13 @@ describe('folder browsing at any size', () => {
   it.each(['list', 'grid'] as const)('draws one chunk of a huge folder and pages the rest from disk (%s view)', async (view) => {
     const files = bigFolder(1200);
     listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(files as any, dir, opts)));
-    const { container, findByTitle } = render(
+    const { container } = render(
       <FilesTab project={project} search="" types={new Set()} sortBy="name" view={view}
         onViewChange={vi.fn()} refreshKey={0} pvActiveId={null} artifactDispatch={vi.fn()} />,
     );
-    fireEvent.click(await findByTitle('big'));
-    await findByTitle('big/f-00000.md');
-    const rows = () => container.querySelectorAll('button[title^="big/f-"]').length;
+    fireEvent.click(await findByHint(container, 'big'));
+    await findByHint(container, 'big/f-00000.md');
+    const rows = () => container.querySelectorAll('button[data-hint^="big/f-"]').length;
     // One chunk drawn, one page asked for — not 1,200 of either.
     expect(rows()).toBe(REVEAL_CHUNK);
     expect(listFolder).toHaveBeenLastCalledWith('p1', 'big', expect.objectContaining({ offset: 0 }));
@@ -232,22 +233,22 @@ describe('folder browsing at any size', () => {
   it('opens a folder deeper than the old six-level limit', async () => {
     const deep = [{ id: 'a/b/c/d/e/f/g/h/deep.md', kind: 'internal', path: 'a/b/c/d/e/f/g/h/deep.md', lastModified: '' }];
     listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(deep as any, dir, opts)));
-    const { findByTitle } = renderTab('list');
+    const { container } = renderTab('list');
     for (const seg of ['a', 'a/b', 'a/b/c', 'a/b/c/d', 'a/b/c/d/e', 'a/b/c/d/e/f', 'a/b/c/d/e/f/g', 'a/b/c/d/e/f/g/h']) {
-      fireEvent.click(await findByTitle(seg));
+      fireEvent.click(await findByHint(container, seg));
     }
-    expect(await findByTitle('a/b/c/d/e/f/g/h/deep.md')).toBeTruthy();
+    expect(await findByHint(container, 'a/b/c/d/e/f/g/h/deep.md')).toBeTruthy();
   });
 
   it('never fetches the whole-project list just to browse', async () => {
-    const { findByTitle } = renderTab('list');
-    await findByTitle('notes.md');
+    const { container } = renderTab('list');
+    await findByHint(container, 'notes.md');
     expect(listAllFiles).not.toHaveBeenCalled();
   });
 
   it('asks for the whole-project list once a search needs it, with no home-folder gate', async () => {
-    const { findByTitle } = renderTab('list', 'notes');
-    await findByTitle('notes.md');
+    const { container } = renderTab('list', 'notes');
+    await findByHint(container, 'notes.md');
     expect(listAllFiles).toHaveBeenCalledWith('p1', { force: true });
   });
 
@@ -267,18 +268,18 @@ describe('folder browsing at any size', () => {
       if ((opts?.offset ?? 0) > 0 && failNext) { failNext = false; return Promise.resolve({ ok: false, error: 'permission-denied' }); }
       return Promise.resolve(folderPageFromRecords(files as any, dir, opts));
     });
-    const { container, findByTitle, findByText, getByRole } = render(
+    const { container, findByText, getByRole } = render(
       <FilesTab project={project} search="" types={new Set()} sortBy="name" view="list"
         onViewChange={vi.fn()} refreshKey={0} pvActiveId={null} artifactDispatch={vi.fn()} />,
     );
-    fireEvent.click(await findByTitle('big'));
-    await findByTitle('big/f-00000.md');
+    fireEvent.click(await findByHint(container, 'big'));
+    await findByHint(container, 'big/f-00000.md');
     for (let i = 0; i < FOLDER_PAGE_SIZE / REVEAL_CHUNK + 1; i++) act(() => io.fireAll());
     expect(await findByText(/Some of this folder isn’t shown/)).toBeTruthy();
     fireEvent.click(getByRole('button', { name: /try again/i }));
     await waitFor(() => expect(listFolder.mock.calls.filter((c: any[]) => c[2]?.offset === FOLDER_PAGE_SIZE)).toHaveLength(2));
     for (let i = 0; i < 6; i++) act(() => io.fireAll());
-    await waitFor(() => expect(container.querySelectorAll('button[title^="big/f-"]').length).toBeGreaterThan(FOLDER_PAGE_SIZE));
+    await waitFor(() => expect(container.querySelectorAll('button[data-hint^="big/f-"]').length).toBeGreaterThan(FOLDER_PAGE_SIZE));
   });
 
   it("keeps a failed search's error to search results", async () => {
@@ -287,18 +288,18 @@ describe('folder browsing at any size', () => {
       project, types: new Set<FileTypeGroup>(), sortBy: 'name' as const, view: 'list' as const, onViewChange: vi.fn(),
       refreshKey: 0, pvActiveId: null, artifactDispatch: vi.fn(),
     };
-    const { findByText, queryByText, findByTitle, rerender } = render(<FilesTab {...props} search="notes" />);
+    const { container, findByText, queryByText, rerender } = render(<FilesTab {...props} search="notes" />);
     expect(await findByText(/host refused/)).toBeTruthy();
     // Clearing the search returns to the folder, which loaded fine.
     rerender(<FilesTab {...props} search="" />);
-    await findByTitle('notes.md');
+    await findByHint(container, 'notes.md');
     expect(queryByText(/host refused/)).toBeNull();
   });
 
   it('keeps the "first batch" note to search results', async () => {
     listAllFiles.mockResolvedValue({ ok: true, files: FILES, truncated: true });
     const browsing = renderTab('list');
-    await browsing.findByTitle('notes.md');
+    await findByHint(browsing.container, 'notes.md');
     expect(browsing.queryByText(/showing the first batch/)).toBeNull();
     cleanup();
     const searching = renderTab('list', 'notes');

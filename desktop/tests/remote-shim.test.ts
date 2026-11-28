@@ -439,6 +439,62 @@ describe('remote-shim — loadHistory arguments', () => {
       await expect(p).resolves.toEqual([]);
     });
   });
+
+  // A new session's program starts at the size this screen's terminals last had (terminal-hidden-size.ts
+  // programSizeGuess): starting at 80×24 and being resized a moment later printed Claude Code's banner line twice.
+  describe('remote-shim session start size', () => {
+    let ws: FakeWebSocket;
+    const lastCreate = () => JSON.parse(ws.sent.filter(m => JSON.parse(m).type === 'session:create').pop()!).payload;
+
+    beforeEach(async () => {
+      const { vi } = await import('vitest');
+      vi.resetModules();
+      FakeWebSocket.instances = [];
+      (globalThis as any).WebSocket = FakeWebSocket;
+      (globalThis as any).window = globalThis;
+      (globalThis as any).innerWidth = 360;
+      (globalThis as any).innerHeight = 780;
+      (globalThis as any).location = { protocol: 'ws:', host: 'localhost', search: '' };
+      (globalThis as any).localStorage = {
+        _s: {} as Record<string, string>,
+        getItem(k: string) { return this._s[k] ?? null; },
+        setItem(k: string, v: string) { this._s[k] = v; },
+        removeItem(k: string) { delete this._s[k]; },
+      };
+      const shim = await import('../src/renderer/remote-shim');
+      const connectPromise = shim.connect('pw', false);
+      ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', token: 'tok', platform: 'browser' });
+      await connectPromise;
+      shim.installShim();
+    });
+
+    afterEach(() => { delete (globalThis as any).WebSocket; delete (globalThis as any).innerWidth; delete (globalThis as any).innerHeight; });
+
+    it('a new session asks for the size its terminal last had on this screen', async () => {
+      const { saveProgramSize } = await import('../src/renderer/components/terminal-hidden-size');
+      saveProgramSize(47, 41);
+      (window as any).claude.session.create({ name: 'n', cwd: '/x', skipPermissions: false }).catch(() => {});
+      expect(lastCreate()).toMatchObject({ cols: 47, rows: 41 });
+    });
+
+    it('after the window changes size, nothing is guessed', async () => {
+      const { saveProgramSize } = await import('../src/renderer/components/terminal-hidden-size');
+      saveProgramSize(47, 41);
+      (globalThis as any).innerHeight = 360;   // the phone was turned
+      (window as any).claude.session.create({ name: 'n', cwd: '/x', skipPermissions: false }).catch(() => {});
+      expect(lastCreate().cols).toBeUndefined();
+      expect(lastCreate().rows).toBeUndefined();
+    });
+
+    it("a caller's own size is kept", async () => {
+      const { saveProgramSize } = await import('../src/renderer/components/terminal-hidden-size');
+      saveProgramSize(47, 41);
+      (window as any).claude.session.create({ name: 'n', cwd: '/x', skipPermissions: false, cols: 100, rows: 30 }).catch(() => {});
+      expect(lastCreate()).toMatchObject({ cols: 100, rows: 30 });
+    });
+  });
 });
 
 // Remote access batch 2, T2 review finding 1: the device that answers a permission
@@ -1067,6 +1123,32 @@ describe('remote-shim — conversation status', () => {
       void Promise.resolve((window as any).claude.session.unwatch('s1')).catch(() => {});
       expect(ws.sentOf('session:open').some((m: any) => m.payload?.sessionId === 's1')).toBe(true);
       expect(ws.sentOf('session:unwatch').some((m: any) => m.payload?.sessionId === 's1')).toBe(true);
+      ws.close();
+    });
+  });
+
+  // WHY (2026-11-09, card #213 final review): the phone app's page moved from file:// to an https address (security
+  // audit A2) while the "stay android after connecting" fix still tested for file:. Every test faked a file: page, so
+  // nothing failed — and the phone would have gone back to the computer's screens (phone test finding 6).
+  describe('the Android app on its https page address', () => {
+    it('is still the Android app after it connects to its own backend', async () => {
+      vi.resetModules();
+      FakeWebSocket.instances = [];
+      (globalThis as any).WebSocket = FakeWebSocket;
+      (globalThis as any).window = globalThis;
+      delete (globalThis as any).__PLATFORM__;
+      delete (globalThis as any).claude;
+      (globalThis as any).location = { protocol: 'https:', origin: 'https://appassets.androidplatform.net', host: 'appassets.androidplatform.net', search: '?bridgeToken=t&bridgePort=9901' };
+      (globalThis as any).localStorage = { _s: {} as Record<string, string>, getItem(k: string) { return this._s[k] ?? null; }, setItem(k: string, v: string) { this._s[k] = v; }, removeItem(k: string) { delete this._s[k]; } };
+      const local = await import('../src/renderer/remote-shim');
+      expect((globalThis as any).__PLATFORM__).toBe('android');
+      local.installShim();
+      const p = local.connect('android-local', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', platform: 'linux' });
+      await p;
+      expect((globalThis as any).__PLATFORM__).toBe('android');
       ws.close();
     });
   });

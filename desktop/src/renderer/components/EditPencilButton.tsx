@@ -1,5 +1,5 @@
+import { fingerSized } from '../device';
 import React from 'react';
-import { isAndroid } from '../platform';
 import { Tooltip } from './ui';
 
 // Pencil SVG icon — matches the one used in StatusBar.tsx
@@ -18,7 +18,7 @@ export function PencilIcon({ size = 10 }: { size?: number }) {
  *  `className` adds hooks only (QuickChips passes `quick-chip-edit`, which float
  *  chrome uses to give it the chips' own surface); the look lives here. */
 export function EditPencilButton({ label, onClick, className = '', plain = false }: { label: string; onClick: () => void; className?: string; plain?: boolean }) {
-  const android = isAndroid();
+  const android = fingerSized();
   // `plain` (Destin, 2026-09-28: "no background on the edit button" in the
   // waiting-message strip): the same pencil and size with no box, so it sits
   // like the plain trash icon beside it. The quick chips keep their box.

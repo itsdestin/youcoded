@@ -184,13 +184,13 @@ describe('paired device store', () => {
       expect(store.authenticate(phone.deviceId, 'wrong', t0 + 91 * DAY)).toEqual({ ok: false, reason: 'bad-secret' });
     });
 
-    it('the startup sweep signs out stale devices and the list stops showing them', () => {
+    it('the sweep signs out stale devices; the list keeps them as expired rows, below the live ones, across a restart', () => {
       const store = new RemoteDeviceStore(storePath);
       const t0 = Date.now();
       const idle = store.pair('Idle', t0 - 100 * DAY);
       const fresh = store.pair('Fresh', t0 - 10 * DAY);
       expect(store.expireStale(t0)).toEqual([idle.deviceId]);
-      expect(reopen().list().map(d => d.name)).toEqual(['Fresh']);
+      expect(reopen().list().map(d => [d.name, d.expired])).toEqual([['Fresh', false], ['Idle', true]]);
       expect(store.isRevoked(idle.deviceId)).toBe(true);
       expect(store.isRevoked(fresh.deviceId)).toBe(false);
     });
@@ -224,6 +224,34 @@ describe('paired device store', () => {
       const upgraded = reopen();
       expect(upgraded.authenticate(phone.deviceId, phone.secret).ok).toBe(true);
       expect(upgraded.expireStale()).toEqual([]);
+    });
+
+    it('a phone signed out on connect (no sweep ran) shows as an expired row too', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const phone = store.pair('My phone', t0);
+      expect(store.authenticate(phone.deviceId, phone.secret, t0 + 91 * DAY).ok).toBe(false);
+      expect(store.list().map(d => [d.name, d.expired])).toEqual([['My phone', true]]);
+    });
+
+    it('a hand-unpaired device stays hidden from the list, expired or not', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const phone = store.pair('Unpaired');
+      store.revoke(phone.deviceId);
+      expect(store.list()).toEqual([]);
+      expect(store.dismissExpired(phone.deviceId)).toBe(false);
+    });
+
+    it('clearing an expired row hides it for good but the phone is still told it expired', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const phone = store.pair('My phone', t0);
+      store.expireStale(t0 + 91 * DAY);
+      expect(store.dismissExpired(phone.deviceId)).toBe(true);
+      expect(store.list()).toEqual([]);
+      const again = reopen();
+      expect(again.list()).toEqual([]);
+      expect(again.authenticate(phone.deviceId, phone.secret, t0 + 92 * DAY)).toEqual({ ok: false, reason: 'expired' });
     });
 
     it('signing in with the password gives a fresh start to a stale row', () => {

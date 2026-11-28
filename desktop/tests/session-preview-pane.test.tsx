@@ -290,3 +290,86 @@ describe('PreviewTimeline folding', () => {
     expect(kept.children.length).toBeGreaterThan(0);
   });
 });
+
+// The room a host reserves under a card it floats over the pane (the Resume
+// browser's conversation card). jsdom lays nothing out, so the scroller's
+// visible height, content height and scroll position are driven by hand; the
+// reserved padding counts toward the scroll height as real padding would, and
+// scrollTop is clamped to what can scroll, as a browser clamps it.
+describe('SessionPreviewPane room under a floating card', () => {
+  const layout = { natural: 300, client: 600 };
+  const CARD = 64;
+  const proto = HTMLElement.prototype as any;
+  const saved: Record<string, PropertyDescriptor | undefined> = {};
+  const reads = { scrollHeight: 0, clientHeight: 0 };
+  const tops = new WeakMap<HTMLElement, number>();
+  const isScroller = (el: HTMLElement) => el.classList.contains('overflow-y-auto');
+  const height = (el: HTMLElement) => Math.max(layout.client, layout.natural + (el.style.paddingTop ? CARD : 0));
+  let resizeObservers: { cb: ResizeObserverCallback; disconnected: boolean }[] = [];
+  let savedRO: typeof ResizeObserver;
+  beforeEach(() => {
+    layout.natural = 300; layout.client = 600; reads.scrollHeight = 0; reads.clientHeight = 0;
+    for (const k of ['clientHeight', 'scrollHeight', 'scrollTop']) saved[k] = Object.getOwnPropertyDescriptor(proto, k) ?? Object.getOwnPropertyDescriptor(Element.prototype, k);
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get(this: HTMLElement) { if (!isScroller(this)) return 0; reads.clientHeight++; return layout.client; } });
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get(this: HTMLElement) { if (!isScroller(this)) return 0; reads.scrollHeight++; return height(this); } });
+    Object.defineProperty(proto, 'scrollTop', { configurable: true,
+      get(this: HTMLElement) { return Math.min(tops.get(this) ?? 0, Math.max(0, height(this) - layout.client)); },
+      set(this: HTMLElement, v: number) { tops.set(this, Math.max(0, v)); } });
+    resizeObservers = [];
+    savedRO = window.ResizeObserver;
+    window.ResizeObserver = class {
+      private rec: { cb: ResizeObserverCallback; disconnected: boolean };
+      constructor(cb: ResizeObserverCallback) { this.rec = { cb, disconnected: false }; resizeObservers.push(this.rec); }
+      observe() {} unobserve() {} disconnect() { this.rec.disconnected = true; }
+    } as unknown as typeof ResizeObserver;
+  });
+  afterEach(() => {
+    cleanup();
+    for (const [k, d] of Object.entries(saved)) { delete proto[k]; if (d && Object.getOwnPropertyDescriptor(Element.prototype, k) !== d) Object.defineProperty(proto, k, d); }
+    window.ResizeObserver = savedRO;
+  });
+  const resized = () => act(() => { for (const o of resizeObservers) if (!o.disconnected) o.cb([], {} as ResizeObserver); });
+  const scroller = (c: HTMLElement) => c.querySelector('.overflow-y-auto') as HTMLElement;
+
+  it('with nothing floating over it, reads no layout beyond the one jump to the newest message', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [1], null));
+    render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
+    expect(await screen.findByText('ask1')).toBeTruthy();
+    expect(reads.clientHeight).toBe(0);
+    expect(reads.scrollHeight).toBe(1);   // the jump to the newest message, as before the room existed
+  });
+
+  it('a hidden pane builds no resize observer and measures nothing, then fits once when it is shown', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [1], null));
+    const { container, rerender } = render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} topInset={CARD} active={false} />);
+    expect(await screen.findByText('ask1')).toBeTruthy();
+    expect(resizeObservers).toHaveLength(0);
+    expect(reads.clientHeight).toBe(0);
+    expect(scroller(container).hasAttribute('data-top-reserved')).toBe(false);
+    rerender(<SessionPreviewPane provider="claude" id="abc" title={TITLE} topInset={CARD} active />);
+    expect(scroller(container).hasAttribute('data-top-reserved')).toBe(true);
+    expect(resizeObservers.filter((o) => !o.disconnected)).toHaveLength(1);
+    // Hidden again: the observer goes.
+    rerender(<SessionPreviewPane provider="claude" id="abc" title={TITLE} topInset={CARD} active={false} />);
+    expect(resizeObservers.filter((o) => !o.disconnected)).toHaveLength(0);
+  });
+
+  it('a short conversation that stopped fitting and fits again ends at the top, its caption below the card', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [1], null));
+    const { container } = render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} topInset={CARD} />);
+    expect(await screen.findByText('ask1')).toBeTruthy();
+    const el = scroller(container);
+    expect(el.hasAttribute('data-top-reserved')).toBe(true);
+    layout.client = 250;                       // the window shrinks: it no longer fits, the room goes
+    resized();
+    expect(el.hasAttribute('data-top-reserved')).toBe(false);
+    expect(el.scrollTop).toBe(50);             // held at the newest message
+    // Grows back to just past the content: it fits, the room returns. The room makes the
+    // pane scroll by up to the card's height, and keeping the bottom distance used to
+    // scroll it all the way down, the caption and first message under the card.
+    layout.client = 310;
+    resized();
+    expect(el.hasAttribute('data-top-reserved')).toBe(true);
+    expect(el.scrollTop).toBe(0);
+  });
+});

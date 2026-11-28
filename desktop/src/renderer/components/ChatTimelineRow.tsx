@@ -18,6 +18,8 @@
 // through `actionsRef` (latest-handlers ref), and nothing here receives a fresh
 // object from ChatView's render. The markup is exactly what ChatView rendered
 // inline before, so the DOM is unchanged.
+import { announceFailed } from '../utils/announce';
+import { copyText } from './context-menu/clipboard';
 import React from 'react';
 import type { AssistantTurn, TimelineEntry } from '../state/chat-types';
 import type { ChatAction } from '../state/chat-types';
@@ -57,8 +59,13 @@ interface Props {
   sessionId: string;
   provider?: SessionProvider;
   showTimestamps: boolean;
+  /** Phone only (state/message-time-marks.ts): this message keeps its time; the others show it when tapped.
+   *  Undefined on a computer, where every time shows. */
+  keepTime?: boolean;
   /** Assistant-turn rows: this turn is the one being written right now (a primitive, so the row's memo holds). */
   streaming?: boolean;
+  /** Assistant-turn rows: the conversation's most recent reply (card #236 — only its sign-in card is live). */
+  latest?: boolean;
   /** Above the last /compact or /clear: faded, with a hint beside it. */
   archived: boolean;
   archiveKind: 'compact' | 'clear' | null;
@@ -118,6 +125,7 @@ function renderContent(p: Props): React.ReactNode {
           provider={p.provider}
           showTimestamps={showTimestamps}
           streaming={p.streaming}
+          latest={p.latest}
         />
       );
     case 'prompt': {
@@ -161,9 +169,9 @@ function renderContent(p: Props): React.ReactNode {
           id={pickerId}
           options={entry.options}
           onCopy={(text, label) => {
-            navigator.clipboard.writeText(text).catch(() => {});
+            // The picker closes either way; a failed copy is said in the toast (announce needs no prop path).
+            void copyText(text).then((ok) => { if (!ok) announceFailed('copy'); });
             dismiss();
-            // onToast would be nicer but ChatView doesn't have it — minimal UX for now
             void label;
           }}
           onDismiss={dismiss}
@@ -194,6 +202,8 @@ function ChatTimelineRow(p: Props) {
         data-entry-key={entryKey}
         className={`timeline-entry in-view${archived ? ' opacity-60 transition-opacity' : ''}`}
         style={folded ? { height: foldHeight } : undefined}
+        data-time-mark={p.keepTime === undefined ? undefined : p.keepTime ? 'keep' : 'tap'}
+        onClick={p.keepTime === false ? toggleTime : undefined}
       >
         {folded ? null : renderContent(p)}
       </div>
@@ -202,6 +212,21 @@ function ChatTimelineRow(p: Props) {
       )}
     </>
   );
+}
+
+/**
+ * A tap on a phone message whose time is hidden shows it; another tap hides it again (density-review D-5). Written
+ * straight onto the row's element as `data-time-shown` rather than React state: it is a look, not data, and a
+ * re-render of the row must not be spent on it. A tap that lands on something with its own action (a link, a button,
+ * a field) or that ends a text selection is left alone.
+ */
+function toggleTime(e: React.MouseEvent<HTMLDivElement>) {
+  const target = e.target as HTMLElement;
+  if (target.closest('a, button, input, textarea, select, summary, [role="button"]')) return;
+  if (window.getSelection()?.toString()) return;
+  const row = e.currentTarget;
+  if (row.dataset.timeShown !== undefined) delete row.dataset.timeShown;
+  else row.dataset.timeShown = '';
 }
 
 export default React.memo(ChatTimelineRow);

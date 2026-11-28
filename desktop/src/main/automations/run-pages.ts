@@ -28,7 +28,7 @@ export async function runPagesFor(job: Pick<StoredAutomation, 'links' | 'tools'>
   if (!job.tools.some((t) => t.kind === 'page-read' || t.kind === 'page-write')) return out;
   for (const link of job.links) {
     if (link.kind !== 'page') continue;
-    const dir = await pageDir(link.id).catch(() => null);
+    const dir = await pageDir(link.id).catch(() => null); // benign: a linked page that no longer exists is left out of the run
     if (!dir) continue;
     const root = path.dirname(dir);
     if (!out.roots.includes(root)) out.roots.push(root);

@@ -4,7 +4,7 @@
 // columns plus a margin, with blank space of the exact size standing in for the rest. These tests pin that
 // bound (renderer-lists.md: big list in, bounded drawn, seen red with the bound removed) and every behaviour
 // the windowing could have broken: scrolling, selection, merged cells, gutters, comment cells, wrapped rows.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { Workbook } from 'exceljs';
 import { CsvView, csvColumnWidths } from '../src/renderer/components/artifact-views/CsvView';
@@ -17,6 +17,12 @@ import {
   ROW_H, expandForMerges, indexMerges, planGrid, prefixSums, windowFor, type GridPiece, type MergeBox,
 } from '../src/renderer/components/artifact-views/sheet-window';
 import type { ArtifactViewProps } from '../src/renderer/components/artifact-views/types';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
+
+// WHY CPU budget, not wall time (2026-11-18): these tests draw whole sheets in jsdom — pure CPU, no timers or I/O. The
+// 30 s wall limit failed a different test each run at load 58-149 while the file passed alone (tests/helpers/cpu-budget.ts).
+vi.setConfig({ testTimeout: CPU_BOUND_WALL_LIMIT_MS });
+budgetCpuPerTest();
 
 afterEach(cleanup);
 
@@ -108,7 +114,7 @@ describe('CSV viewer draws only what can be seen', () => {
   it('a long cell still shows its full text on hover, and wide columns widen to fit as the old table did', () => {
     const long = 'x'.repeat(120);
     const { container } = render(<CsvView {...csvProps(`${long},b\n1,2`)} />);
-    expect(container.querySelector('td[data-r="0"][data-c="0"]')?.getAttribute('title')).toBe(long);
+    expect(container.querySelector('td[data-r="0"][data-c="0"]')?.getAttribute('data-hint')).toBe(long);
     expect(csvColumnWidths([[long, 'b']], 3)).toEqual([300, 110, 110]); // capped at 300, floor 110
   });
 });
@@ -153,7 +159,15 @@ describe('the window arithmetic', () => {
 });
 
 describe('XLSX viewer model', () => {
-  async function bigSheet() {
+  // WHY built once in beforeAll under its own budget (2026-11-18; test-suite-hygiene: a file's one-time cost is
+  // never paid inside a test): the 200,000-cell workbook used to be rebuilt by each of four tests, each inside the
+  // 30 s per-test budget, and that CPU work timed out at load 58-149. No test changes the sheet (the one that wraps
+  // `model.cell` makes its own copy of the model), so sharing it checks the same things.
+  const SHEET_BUILD_MS = 600_000; // hang-only wall limit: pure CPU, cpu-budget.ts says why
+  let shared: Awaited<ReturnType<typeof makeBigSheet>>;
+  beforeAll(async () => { shared = await makeBigSheet(); }, SHEET_BUILD_MS);
+  const bigSheet = async () => shared;
+  async function makeBigSheet() {
     const wb = new Workbook();
     const ws = wb.addWorksheet('Data');
     for (let r = 1; r <= 2000; r++) ws.addRow(Array.from({ length: 100 }, (_, c) => (r + c) % 5 === 0 ? `item-${r}-${c}` : r * c));

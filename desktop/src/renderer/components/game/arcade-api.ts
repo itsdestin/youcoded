@@ -43,6 +43,11 @@ export function arcadeApi(): ArcadeApi | undefined {
   return (window.claude as unknown as { arcade?: ArcadeApi }).arcade;
 }
 
+export function readFailure(r: { ok: boolean; status?: number; message?: string }): string | null {
+  if (r.ok || r.status === 401) return null;
+  return r.message || 'the scores service did not answer';
+}
+
 /** Server bests, reduced to plain numbers keyed by game id. Rows for games this
  *  build doesn't have are dropped rather than carried — an old score for a
  *  removed game is not something any screen can render. */

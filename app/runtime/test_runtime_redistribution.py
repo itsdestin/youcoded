@@ -182,6 +182,33 @@ class Fixtures(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'APK changed'):
             r.install(self.root, destination, evidence, 'v3.24', ['bash'])
 
+    def test_alpine_lock_rejects_a_drifted_version_or_file(self):
+        # WHY: Node drifted 24.18 -> 24.22 unnoticed; a locked build must stop instead.
+        index = self.package_index()
+        self.indexes('\n'.join(f'{k}:{v}' for k, v in index.items()) + '\n\n')
+        apk = self.root / 'apk/bash-5.3-r1.apk'
+        apk.parent.mkdir()
+        apk.write_bytes(self.apk({'.PKGINFO': self.pkginfo()}) + self.apk({'usr/bin/bash': 'x'}))
+        lock = self.root / 'lock.json'
+
+        def attempt(version, sha):
+            lock.write_text(json.dumps({'branch': 'v3.24', 'packages': {'bash': {'version': version, 'sha256': sha}}}))
+            with patch.dict('os.environ', {'YOUCODED_ALPINE_LOCK': str(lock)}):
+                r.install(self.root, self.root / 'root', self.root / 'evidence', 'v3.24', ['bash'])
+
+        with self.assertRaisesRegex(ValueError, 'differs from alpine-lock'):
+            attempt('5.2-r0', r.digest(apk))
+        with self.assertRaisesRegex(ValueError, 'file differs'):
+            attempt('5.3-r1', '0' * 64)
+        attempt('5.3-r1', r.digest(apk))
+
+    def test_committed_lock_lists_every_package_with_a_hash(self):
+        lock = json.loads((HERE / 'alpine-lock.json').read_text())
+        self.assertTrue(lock['packages'])
+        for name, entry in lock['packages'].items():
+            self.assertRegex(entry['sha256'], '^[0-9a-f]{64}$', name)
+            self.assertTrue(entry['version'], name)
+
     def test_finalize_keeps_local_sources_musl_and_explicit_incomplete_notices(self):
         project = self.root / 'project'
         here = project / 'app/runtime'
@@ -424,7 +451,7 @@ class Fixtures(unittest.TestCase):
         self.assertIn('if: inputs.collect_sources', section)
         self.assertIn('runtime-redistribution.py bind_backend', section)
         self.assertIn('runtime-redistribution.py release', section)
-        self.assertIn('app/build/outputs/apk/releaseTest/*.apk', section)
+        self.assertIn('app/build/outputs/apk/debug/*.apk', section)
 
     def test_certificate_data_keeps_its_original_embedded_mpl_notice(self):
         content = '# This Source Code Form is subject to the Mozilla Public License, v. 2.0.\ncertificate data'

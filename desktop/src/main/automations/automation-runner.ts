@@ -328,7 +328,7 @@ export class AutomationRunner {
     if (run.ended) return;
     run.ended = { outcome, summary };
     for (const w of this.takeWaiting(run)) w.settle({ allow: false, note: 'This run has been stopped.' });
-    try { run.handle?.stop(); } catch { /* the engine was already gone */ }
+    try { run.handle?.stop(); } catch { /* benign: the engine was already gone */ }
     void this.finish(run, outcome, summary);
   }
 

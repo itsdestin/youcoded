@@ -28,6 +28,7 @@
 import { randomBytes } from 'crypto';
 import type { SessionSummary } from '../shared/session-summary-types';
 import type { SessionLive } from '../shared/session-live-types';
+import type { BrowserPrompt } from '../shared/browser-types';
 import type { InputBlock } from '../shared/cc-input-focus';
 import { isNativeStartupState, type NativeStartupState } from '../shared/native-startup';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
@@ -134,7 +135,7 @@ export interface SessionFacts {
   model: string | null;
   /** Native sessions: the bound model's residency, from the last model-state push. WHY the whole payload (sync-fix3): a screen that opens later
    *  is handed it by liveFill, and the Reload / loading bar needs the size and load progress as well as the state. */
-  modelState: { state: string; modelId: string | null; sizeBytes: number | null; loadedBytes: number | null } | null;
+  modelState: { state: string; modelId: string | null; sizeBytes: number | null; loadedBytes: number | null; loadExpectedMs?: number | null } | null;
   /** Native sessions: ids of messages waiting behind the running turn (text is never copied here). */
   queued: string[];
 }
@@ -151,7 +152,13 @@ export type ResumeDecision =
 /** An open prompt card, as the `session:live` event that raised it (so a screen that opens later is handed the same event). */
 type OpenPrompt = Extract<SessionLive, { kind: 'prompt-show' }>;
 
-interface OpenAsk { event: unknown; /** Claude Code closed its hook but its own menu may still wait. */ expired: boolean }
+interface OpenAsk {
+  event: unknown;
+  /** Claude Code closed its hook but its own menu may still wait. */
+  expired: boolean;
+  /** Asked from inside a helper agent (the hook payload carries `agent_id`), not by the conversation itself. */
+  fromAgent: boolean;
+}
 
 /** One entry of the fill tail: a recent push, with a streaming part's deltas merged. */
 interface TailEntry { type: string; payload: unknown; bytes: number; /** true once `payload` is this file's own clone (safe to grow). */ owned: boolean }
@@ -194,6 +201,8 @@ interface Rec {
    *  on a screen that missed the "free" event is cleared. */
   inputBlock: InputBlock | null;
   inputBlockSeen: boolean;
+  /** The Browser's open card for this conversation (a session-live `browser-ask`), or null. A phone that opens the conversation is handed it. */
+  browserAsk: BrowserPrompt | null;
   queueSnapshot?: import('../shared/session-live-types').SessionLiveBody & {kind:'queue'};
   /** The "Started with …" record as last published (native:session-context). WHY: a Claude Code session has no host to ask, so a fill
    *  (whose SESSION_FILL_RESET clears the screen's copy) could only get it back from here — without this the banner vanished on open. */
@@ -244,6 +253,20 @@ export class SessionRecords {
    */
   onSummaryChange(listener: ((sessionId: string) => void) | null): void { this.summaryListener = listener; }
 
+  // WHY a second, additive listener (Android background notifications, 2026-11-01): onSummaryChange is a single slot that ipc-handlers owns
+  // for the dots push; the phone's background-status notifier needs the same "a session changed" signal without displacing it.
+  private extraSummaryListeners = new Set<(sessionId: string) => void>();
+  addSummaryListener(listener: (sessionId: string) => void): () => void {
+    this.extraSummaryListeners.add(listener);
+    return () => { this.extraSummaryListeners.delete(listener); };
+  }
+  private fireSummary(sessionId: string): void {
+    try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+    for (const l of this.extraSummaryListeners) {
+      try { l(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+    }
+  }
+
   /** The fields a summary push is built from, as one string: equal strings mean no dot can have changed. */
   private summaryKeyOf(sessionId: string, rec: Rec): string {
     const f = rec.facts;
@@ -266,7 +289,7 @@ export class SessionRecords {
     const key = this.summaryKeyOf(sessionId, rec);
     if (key !== rec.summaryKey) {
       rec.summaryKey = key;
-      try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+      this.fireSummary(sessionId);
     }
     // The screen-reading module (main/session-screens.ts) wants to know when what it reads FOR changes: a turn began or ended, a tool started or
     // finished, an ask opened or closed, Claude Code started. Same cheap string compare, so a streamed answer (thousands of events, no change) costs nothing.
@@ -280,7 +303,20 @@ export class SessionRecords {
   }
 
   private screenNeedKey(rec: Rec): string {
-    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}|${rec.asks.size > 0 ? 1 : 0}`;
+    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}|${rec.asks.size > 0 ? 1 : 0}|${this.holdsMessageBox(rec) ? 1 : 0}`;
+  }
+
+  /** A question of the conversation's OWN is open (live or kept), or a password ask: Claude Code's menu for it may own the
+   *  message box, so nothing automated may type.
+   *  A helper agent's question is let through ONLY while the app's hook still holds it (not kept) AND no turn runs (card #278):
+   *  measured on CLI 2.1.327, Claude Code draws no menu for a background helper's ask while a hook holds it, so the box stays
+   *  live and the person typed straight into it. A KEPT helper ask (hook closed) is drawn over the box at once, and during a
+   *  turn the helper may be a foreground one (not measured) — both still hold, so the safety never rests on the screen
+   *  reading alone in the instant before a newly drawn menu is parsed (review of #278). */
+  private holdsMessageBox(rec: Rec): boolean {
+    if (rec.passwordAsks.size > 0) return true;
+    for (const a of rec.asks.values()) if (!a.fromAgent || a.expired || rec.facts.working) return true;
+    return false;
   }
 
   /** Asks that are really waiting on the person: a kept ask (Claude Code closed its hook) is not, the card the screen draws is a separate matter. */
@@ -299,12 +335,15 @@ export class SessionRecords {
    *  - `cards`: prompt cards open;
    *  - `permissionCard`: a permission/question/plan ask is open for this turn, LIVE OR KEPT (Claude Code closed its hook but its menu may still wait). A
    *    pop-up nobody named gets a generic card only when this is false: the menu on screen belongs to the permission card (master's popups rule).
+   *  - `holdsMessageBox`: a question of the conversation's own (live or kept) or a password ask is open; a helper agent's counts only once kept or
+   *    while a turn runs (holdsMessageBox — why). The queue
+   *    reads this, not `asking`/`permissionCard` (card #278: a background helper's question held every queued message until the next turn ended).
    * The stuck check runs only while `working && !toolRunning && !asking` — the same gate the renderer's hook used.
    */
-  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number; permissionCard: boolean } | null {
+  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number; permissionCard: boolean; holdsMessageBox: boolean } | null {
     const rec = this.records.get(sessionId);
     if (!rec) return null;
-    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size, permissionCard: rec.asks.size > 0 };
+    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size, permissionCard: rec.asks.size > 0, holdsMessageBox: this.holdsMessageBox(rec) };
   }
 
   /** Called whenever what `screenNeed` reports changes for a session (and once when the session is dropped). One listener: main/session-screens.ts. */
@@ -318,7 +357,7 @@ export class SessionRecords {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
-      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, modelEverLoaded: false,
+      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, browserAsk: null, modelEverLoaded: false,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -342,7 +381,7 @@ export class SessionRecords {
   drop(sessionId: string): void {
     const existed = this.records.delete(sessionId);
     if (existed) {
-      try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+      this.fireSummary(sessionId);
       try { this.needListener?.(sessionId); } catch (err) { console.warn('[session-record] screen-need listener failed:', String(err)); }
     }
     this.gone.add(sessionId);
@@ -647,6 +686,9 @@ export class SessionRecords {
   }
 
   /** The cards open now, with when each was raised: what the host checks against the terminal and against later activity. */
+  /** The Browser card open for this conversation, or null (session-live.ts publishes only a change). */
+  browserAskOf(sessionId: string): BrowserPrompt | null { return this.records.get(sessionId)?.browserAsk ?? null; }
+
   openPrompts(sessionId: string): Array<{ promptId: string; title: string; at: number }> {
     const rec = this.records.get(sessionId);
     return rec ? [...rec.prompts.values()].map((p) => ({ promptId: p.promptId, title: p.title, at: rec.promptAt.get(p.promptId) ?? 0 })) : [];
@@ -685,6 +727,8 @@ export class SessionRecords {
     if (rec.stuck) out.push({ type: 'session:live', payload: { sessionId, kind: 'attention', state: 'stuck' } });
     // What holds the keyboard now (a phone opened while a "Switch model?" confirmation is up must refuse a send; one opened after it closed must not).
     if (rec.queueSnapshot) out.push({type:'session:live',payload:{sessionId,...rec.queueSnapshot}});
+    // A Browser card still waiting: a phone that opens the conversation now must see it (card #205).
+    if (rec.browserAsk) out.push({ type: 'session:live', payload: { sessionId, kind: 'browser-ask', prompt: rec.browserAsk } });
     if (rec.inputBlockSeen) out.push({ type: 'session:live', payload: { sessionId, kind: 'input-block', block: rec.inputBlock } });
     return out;
   }
@@ -776,6 +820,7 @@ export class SessionRecords {
       f.modelState = {
         state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null,
         sizeBytes: typeof p.sizeBytes === 'number' ? p.sizeBytes : null, loadedBytes: typeof p.loadedBytes === 'number' ? p.loadedBytes : null,
+        ...(typeof p.loadExpectedMs === 'number' ? { loadExpectedMs: p.loadExpectedMs } : {}),
       };
       if (f.modelState.state === 'loaded') rec.modelEverLoaded = true;
       return;
@@ -798,7 +843,9 @@ export class SessionRecords {
     const stamped = !!d.parentAgentToolUseId;
     switch (ev.type) {
       case 'user-message':
-        if (!d.text || stamped || !this.firstTime(rec, ev.uuid)) return;
+        // WHY attachedFiles counts as a message: a picture sent with no words is text '' plus its files (claude-queue-wire.ts),
+        // and it starts a turn like any other message — skipping it left the conversation reading "not working" while Claude replied.
+        if ((!d.text && !(Array.isArray(d.attachedFiles) && d.attachedFiles.length)) || stamped || !this.firstTime(rec, ev.uuid)) return;
         f.hasHistory = true;
         if (d.slashCommand) return; // a slash command starts no turn (reducer)
         f.working = true;
@@ -911,6 +958,9 @@ export class SessionRecords {
         rec.inputBlock = live.block && typeof live.block === 'object' ? (live.block as InputBlock) : null;
         rec.inputBlockSeen = true;
         return;
+      case 'browser-ask':
+        rec.browserAsk = live.prompt && typeof live.prompt === 'object' && typeof live.prompt.id === 'string' ? (live.prompt as BrowserPrompt) : null;
+        return;
       default:
         return;
     }
@@ -922,7 +972,10 @@ export class SessionRecords {
     switch (ev.type) {
       case 'PermissionRequest':
         if (rec.asks.size >= OPEN_ASKS_MAX && !rec.asks.has(id)) return;
-        rec.asks.set(id, { event: ev, expired: false });
+        // WHY fromAgent (card #278): Claude Code stamps `agent_id` on a hook only when it fires inside a helper agent
+        // (cc-dependencies.md). A background helper's question does not take the conversation's message box, so the queue
+        // must not wait on it; screenNeed reports it apart from the conversation's own questions.
+        rec.asks.set(id, { event: ev, expired: false, fromAgent: typeof asObject(ev.payload).agent_id === 'string' && asObject(ev.payload).agent_id !== '' });
         rec.facts.attention = 'ok'; // the reducer's PERMISSION_REQUEST writes ok
         return;
       case 'PasswordRequest':

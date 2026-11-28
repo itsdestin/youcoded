@@ -40,6 +40,9 @@ export interface PromptDetectorOptions {
  *  - a permission card Claude Code closed its hook on ("kept") is settled when its menu has left this screen's terminal;
  *  - while the session is starting, a dialog nobody has taught the app to read is reported to the Initializing screen.
  */
+/** How long a footerless startup question must stand unchanged before the loading cover mentions it. */
+export const UNSURE_SETTLE_MS = 1500;
+
 export function usePromptDetector(options: PromptDetectorOptions = {}) {
   const chatDispatch = useChatDispatch();
   const store = useChatStore();
@@ -57,6 +60,8 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
 
   // Per session: consecutive buffer flushes with no Claude Code menu on screen while a KEPT card (expired) is waiting. At two, the card settles quietly.
   const expiredAbsentRef = useRef<Map<string, number>>(new Map());
+  // A footerless "something is asking" reading that is waiting for the screen to stand still (see the flush below).
+  const unsureRef = useRef<Map<string, { screen: string; timer: ReturnType<typeof setTimeout> }>>(new Map());
 
   // Perf: detect awaiting-approval transitions in an effect (off the render
   // path) and iterate activeTurnToolIds (current-turn only, per chat-reducer
@@ -196,7 +201,22 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
         const menu = parseInkSelect(screen);
         readable = !!menu && cardTitleFor(menu, true, screen) !== null;
       }
-      setUnreadableStartupDialog(sid, starting && !readable ? readStartupDialog(screen) : null);
+      const found = starting && !readable ? readStartupDialog(screen) : null;
+      // WHY the wait (F-2): a reading with no footer ("unsure") is also true for a moment while Claude Code is still
+      // drawing its first screen. It is shown only once the same screen has stood for UNSURE_SETTLE_MS; a footered
+      // dialog is certain and shows at once, as before.
+      const waiting = unsureRef.current.get(sid);
+      if (waiting && (!found?.unsure || waiting.screen !== screen)) { clearTimeout(waiting.timer); unsureRef.current.delete(sid); }
+      if (found?.unsure) {
+        if (!unsureRef.current.has(sid)) {
+          unsureRef.current.set(sid, { screen, timer: setTimeout(() => {
+            // The entry stays (same screen = already decided), so an idle screen does not arm a timer per redraw.
+            if (getVisibleScreenText(sid) === screen && (optionsRef.current.isStarting?.(sid) ?? false)) setUnreadableStartupDialog(sid, { heading: found.heading });
+          }, UNSURE_SETTLE_MS) });
+        }
+      } else {
+        setUnreadableStartupDialog(sid, found);
+      }
 
       // A host with no record of its own draws its cards from this screen's terminal (see the header).
       if (!getCapabilities().sessionRecord) readerFor(sid).scan();
@@ -205,6 +225,8 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
     return () => {
       unsub();
       for (const r of readersRef.current.values()) r.dispose();
+      for (const w of unsureRef.current.values()) clearTimeout(w.timer);
+      unsureRef.current.clear();
       readersRef.current.clear();
     };
   }, [chatDispatch, store]);

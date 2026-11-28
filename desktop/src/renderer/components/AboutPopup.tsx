@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
+import { isUnsupportedHere } from '../utils/ipc-error';
+import { useSaveNotice } from '../hooks/useSaveNotice';
 import { Toggle } from './settings-toggle';
-import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow, ErrorState } from './ui';
 import { formatVersionLine } from '../../shared/version-line';
 
 // Shared About popup for Desktop and Android settings. Previously this was an
@@ -34,7 +36,7 @@ const DESKTOP_LIBS: { lib: string; license: string; source: string }[] = [
   { lib: 'node-pty', license: 'MIT', source: 'github.com/microsoft/node-pty' },
   { lib: 'Tailwind CSS', license: 'MIT', source: 'github.com/tailwindlabs/tailwindcss' },
   { lib: 'highlight.js', license: 'BSD 3-Clause', source: 'github.com/highlightjs/highlight.js' },
-  { lib: 'partysocket / PartyKit', license: 'MIT / ISC', source: 'github.com/partykit/partykit' },
+  { lib: 'partysocket', license: 'MIT / ISC', source: 'github.com/partykit/partykit' },
   { lib: 'Cascadia Code', license: 'SIL OFL', source: 'github.com/microsoft/cascadia-code' },
 ];
 
@@ -56,29 +58,57 @@ const ANDROID_LIBS: { lib: string; license: string; source: string }[] = [
 // dialog (parallel with skip-permissions and reduced-effects). No destructive red.
 function AnalyticsOptInToggle() {
   const [optIn, setOptIn] = useState<boolean | null>(null);
+  const { run, notice } = useSaveNotice(true); // always mounted while the popup is open; unmounts with it
+  // Last value known to be saved, and what the switch shows now (see apply below). Declared before the early return: hooks keep their order.
+  const saved = useRef<boolean | null>(null);
+  const current = useRef<boolean | null>(null);
+  if (saved.current === null && optIn !== null) { saved.current = optIn; current.current = optIn; }
 
+  // Card #134 round 4: a read that failed left this row missing with no word. `readFailed` is set only by a real failure of the
+  // newest read (unmount cancels it) and cleared by a successful read, i.e. Try again.
+  const [readFailed, setReadFailed] = useState(false);
+  const [readTry, setReadTry] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    window.claude.analytics.getOptIn().then((v) => { if (!cancelled) setOptIn(v); });
+    setReadFailed(false);
+    Promise.resolve(window.claude.analytics.getOptIn()).then(
+      (v) => { if (!cancelled) setOptIn(v); },
+      (e: unknown) => { if (!cancelled && !isUnsupportedHere(e)) { console.warn('[about] usage-stats setting read failed:', e); setReadFailed(true); } }, // not allowed over remote: row stays hidden, as before
+    );
     return () => { cancelled = true; };
-  }, []);
+  }, [readTry]);
 
+  if (optIn === null && readFailed) {
+    return <ErrorState variant="inline" message="Couldn't load the usage stats setting." onRetry={() => setReadTry((n) => n + 1)} />;
+  }
   // Don't render until we know the state — avoids a visible flicker from OFF → ON.
   if (optIn === null) return null;
 
-  const flip = () => {
-    const next = !optIn;
+  // N1 (Destin): a failed save is said inside this popup, under the row, and the switch goes back to the last value KNOWN to be saved
+  // (not to "the opposite of what was just clicked", which is wrong when two quick clicks both fail). `current` is what the switch
+  // shows now; Try again re-sends it.
+  const apply = (next: boolean) => {
+    current.current = next;
     setOptIn(next);  // optimistic
-    window.claude.analytics.setOptIn(next).catch(() => setOptIn(!next));  // revert on failure
+    void run(
+      'optin', 'the usage stats setting',
+      async () => { await window.claude.analytics.setOptIn(next); saved.current = next; },
+      () => { current.current = saved.current; setOptIn(saved.current); },
+      () => apply(current.current === saved.current && next !== saved.current ? next : (current.current as boolean)),
+    );
   };
+  const flip = () => apply(!(current.current ?? optIn));
 
   return (
-    <SettingRow
-      variant="item"
-      title="Share anonymous usage stats"
-      description="Sends a daily ping with the fields listed above."
-      control={<Toggle enabled={optIn} onToggle={flip} label="Share anonymous usage stats" />}
-    />
+    <>
+      <SettingRow
+        variant="item"
+        title="Share anonymous usage stats"
+        description="Sends a daily ping with the fields listed above."
+        control={<Toggle enabled={optIn} onToggle={flip} label="Share anonymous usage stats" />}
+      />
+      {notice('optin', 'mt-2')}
+    </>
   );
 }
 
@@ -140,7 +170,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                 </ul>
                   )}
                   {/* WHY (analytics deck U-2/U-6, 2026-10-31): the two one-time messages analytics-service.ts can send besides the daily one. */}
-                  <p className="text-2xs text-fg-dim leading-relaxed">Two more messages are sent at most once each: while you first set up the app, whether setup finished, the name of a setup step that failed, and whether you sent a first message; and if you turn this off, one last notice saying so, without the device hash.</p>
+                  <p className="text-2xs text-fg-dim leading-relaxed">Two more messages are sent at most once each: while you first set up the app, whether setup finished, the name of a setup step that failed or that you cancelled, and whether you sent a first message; and if you turn this off, one last notice saying so, without the device hash.</p>
                   <p className="text-2xs text-fg-dim leading-relaxed">No message content, no usernames, no tokens, no file paths. The collection of this information helps improve YouCoded for yourself and future users. You may disable this below at any time.</p>
                 </div>
               </FoldRow>
@@ -149,7 +179,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                 <FoldRow title="Remote access and games">
                   <div className="space-y-1.5">
                     <p className="text-2xs text-fg-dim leading-relaxed">Remote access (when enabled) serves the UI over your local network or Tailscale. Remote connections are NOT TLS-encrypted — use Tailscale for sensitive conversations since it provides WireGuard encryption end-to-end.</p>
-                    <p className="text-2xs text-fg-dim leading-relaxed">Multiplayer game moves are relayed through a PartyKit server (Cloudflare) only while a game is open; challenges and the friends lobby go through the YouCoded server. No game traffic is retained server-side beyond the active room.</p>
+                    <p className="text-2xs text-fg-dim leading-relaxed">Multiplayer game moves are relayed through the YouCoded server (hosted by Cloudflare) only while a game is open; challenges and the friends lobby go through the YouCoded server. No game traffic is retained server-side beyond the active room.</p>
                   </div>
                 </FoldRow>
               ) : (

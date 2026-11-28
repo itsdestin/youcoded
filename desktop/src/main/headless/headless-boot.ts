@@ -27,6 +27,7 @@ import { trackOutsideComments, judgeCommentAsk } from '../cc-outside-comments';
 import { getPermissionOverrides } from '../app-signals';
 import { IPC } from '../../shared/types';
 import { log, rotateLog } from '../logger';
+import { startPluginOffSwitch } from '../plugin-blocklist';
 import { FirstRunManager, markSetupCompleted, setupIsUsable } from '../first-run';
 import { bindFirstRunManager } from '../ipc/first-run';
 import { ChatGptAuth } from '../providers/chatgpt-auth';
@@ -52,9 +53,11 @@ import { reconcileInstalls } from '../install-reconcile';
 import { startSocial } from '../social-handlers';
 import { initArcadeOps } from '../arcade-handlers';
 import { startDailyHeartbeat, setAndroidId } from '../analytics-service';
+import { markBackendAsPhone } from '../device-noun';
 import { safeStorage } from 'electron';
 import type { Platform } from '../platform';
-import { hasHost } from './host-bridge';
+import { hasHost, hostNotify, onHostEvent, returnToApp } from './host-bridge';
+import { startBackgroundStatus } from '../background-status';
 
 export interface HeadlessOptions {
   /** Loopback port the app's page connects to. */
@@ -86,7 +89,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   log('INFO', 'Headless', 'Starting the backend', { version: app.getVersion(), host: hasHost() ? 'app' : 'none', port: opts.port });
 
   // --- What main.ts builds at module scope ---
-  const sessionManager = new SessionManager({ claudeControls: new ClaudeControlBridge(() => path.join(app.getPath('userData'), 'claude-control')) });
+  const sessionManager = new SessionManager({
+    claudeControls: new ClaudeControlBridge(() => path.join(app.getPath('userData'), 'claude-control')),
+    // The app's own temp folder (RuntimeInstaller TMPDIR): see SessionManagerOptions.claudeMessagingSocketDir.
+    claudeMessagingSocketDir: process.env.TMPDIR || os.tmpdir(),
+  });
   const windowRegistry = new WindowRegistry();
   const pipeName = hookPipeName();
   sessionManager.setPipeName(pipeName);
@@ -98,6 +105,8 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   const remoteConfig = new RemoteConfig();
   const skillProvider = new LocalSkillProvider();
   skillProvider.ensureMigrated();
+  // Plugin off-switch: same launch-and-hourly check as main.ts (security runbook §5).
+  startPluginOffSwitch(skillProvider, () => sessionManager.broadcastReloadPlugins());
   void (async () => {
     await skillProvider.repairPackageVersions();
     void skillProvider.ensureBundledPluginsInstalled();
@@ -126,6 +135,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   // only ever runs inside the Android app, which checked in as "desktop" from
   // 1.3.1 to 1.3.3 and minted a new random ID on every reinstall. The ID is
   // read once and removed so programs this backend starts never inherit it.
+  markBackendAsPhone(); // WHY: so backend messages say "phone", not "this computer" (device-noun.ts)
   setAndroidId(process.env.YOUCODED_ANDROID_ID);
   delete process.env.YOUCODED_ANDROID_ID;
   startDailyHeartbeat({ platform: 'android' });
@@ -137,9 +147,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   }
 
   // Hooks: Claude Code reaches this backend through the relay scripts it is told about in its settings.
+  let installLocked = false; // card #11 b: a locked settings.json is retried once in the background (startLaunchSettingsRetry)
   try {
     const { runInstallHooksChore } = require('../launch-settings-chores');
     const r = await runInstallHooksChore({ version: app.getVersion(), packaged: true });
+    installLocked = r.refused === 'locked';
     log('INFO', 'Headless', 'Hooks installed', { copied: r.copied, written: r.written, refused: r.refused });
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to install hooks', { error: String(e) });
@@ -150,8 +162,10 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     sessionManager.setPipeName('');
   }
   try {
-    const { runSettingsChores } = require('../launch-settings-chores');
-    await runSettingsChores();
+    const { runSettingsChores, startLaunchSettingsRetry } = require('../launch-settings-chores');
+    // phone: also start Claude Code in fullscreen when no display mode is set (tui-fullscreen-default.ts).
+    const r = await runSettingsChores({ phone: true });
+    startLaunchSettingsRetry({ installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Headless', msg, data), true);
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to run settings chores', { error: String(e) });
   }
@@ -202,6 +216,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     secrets: new SecretsStore(userData, platform.secretStorage),
     appVersion: app.getVersion(),
     openExternal: (url) => platform.openExternal(url),
+    onSignedIn: returnToApp, // WHY: phone only - bring YouCoded back after the browser sign-in
     pollUsage: chatgptEnabled,
     route: process.env.YOUCODED_CHATGPT_ROUTE === 'official' ? 'official' : 'codex',
   });
@@ -210,6 +225,19 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   const ipcWiring = registerIpcHandlers(ipcMain as any, sessionManager, NO_WINDOW as any, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester, deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     nativeRuntime, welcomeBackStore);
+
+  // WHY (Android background notifications, 2026-11-01): the phone's always-on notification shows "N working · N waiting · N done" and
+  // alerts when a session needs the person. The backend decides (background-status.ts); the phone only displays what 'status' hands it.
+  // The app tells us when it is on screen ('foreground' event) so "done" clears only when the person actually looks.
+  if (hasHost() && nativeRuntime) {
+    const bg = startBackgroundStatus({
+      records: nativeRuntime.records,
+      nameOf: (id) => sessionManager.listSessions().find((s) => s.id === id)?.name || 'A session',
+      watched: (id) => windowRegistry.getSocketWatchers(id).length > 0,
+      send: (status) => hostNotify('status', status as unknown as Record<string, unknown>),
+    });
+    onHostEvent((event, params) => { if (event === 'foreground') bg.setForeground(!!(params as { on?: boolean } | null)?.on); });
+  }
 
   // First run: the same two paths as main.ts — a fresh install runs the wizard; an existing one checks sign-in lazily.
   if (firstRunManager) {
@@ -277,7 +305,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     .catch((e) => log('ERROR', 'Headless', 'SyncSpaces start failed', { error: String(e) }));
   try {
     const pr = getManagedRoots()?.personalRoot;
-    if (pr && machineIdentity) void upsertSelf(pr, { id: machineIdentity.id, platform: process.platform }).catch(() => {});
+    if (pr && machineIdentity) void upsertSelf(pr, { id: machineIdentity.id, platform: 'android' /* WHY: process.platform is the bundled Linux's "linux"; this backend only runs on phones */ }).catch(() => {});
     if (pr) sweepLegacyLeaseDir(pr);
   } catch { /* sync not configured */ }
   void startConversationStore({ pauseSweeps: true })

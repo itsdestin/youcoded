@@ -161,3 +161,8 @@
 /* A short window (laptop at 720px tall and below, a small window): less air above and
    below the logo, so a step's buttons stay on screen instead of under the fold. */
 @media (max-height: 760px) { .brand-stage { gap: 28px; padding-top: max(24px, 9vh); } }
+/* WHY (Galaxy Z Flip7 test, 2026-11-01: "brand should move higher up on mobile ... shouldn't have
+   to scroll at all"): on a phone-width screen the 21vh top air left the wordmark a third of the way
+   down and pushed the second login button below the fold. Narrow screens sit the brand near the top
+   and tighten the gap beneath it; desktop and short-window rules above are unchanged. */
+@media (max-width: 640px) { .brand-stage { gap: 20px; padding: max(20px, 5vh) 16px 20px; } }

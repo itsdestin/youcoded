@@ -196,7 +196,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
       const reply = (requestId: string, response: Record<string, unknown>): void => {
         if (cancelled.has(requestId)) return;
         try { child.stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })}\n`); }
-        catch { /* the process ended while the person was deciding */ }
+        catch { /* benign: the process ended while the person was deciding */ }
       };
       /** One permission question from Claude Code. Every tool call arrives here (see the header). */
       const permission = async (requestId: string, tool: string, input: Record<string, unknown>): Promise<void> => {
@@ -233,7 +233,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
             } else if (m.type === 'control_request' && typeof m.request_id === 'string') {
               // Any other kind of request: say plainly that it is not supported, so Claude Code does not wait
               // forever for an answer that will never come.
-              try { child.stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Not supported in an automation run.' } })}\n`); } catch { /* ended */ }
+              try { child.stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Not supported in an automation run.' } })}\n`); } catch { /* benign: ended */ }
             } else if (m.type === 'control_cancel_request' && typeof m.request_id === 'string') {
               cancelled.add(m.request_id);
             } else if (m.type === 'assistant' && m.message?.usage && !counted.has(String(m.message.id ?? ''))) {
@@ -246,7 +246,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
             } else if (m.type === 'result') {
               result = { ok: m.is_error !== true && m.subtype === 'success', text: typeof m.result === 'string' ? m.result : '' };
               // The one message has been answered: closing stdin lets the program end by itself.
-              try { child.stdin.end(); } catch { /* already closed */ }
+              try { child.stdin.end(); } catch { /* benign: already closed */ }
             }
           }
         });
@@ -266,7 +266,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
 
     return {
       done,
-      stop: () => { stopped = true; try { proc?.kill(); } catch { /* already ended */ } },
+      stop: () => { stopped = true; try { proc?.kill(); } catch { /* benign: already ended */ } },
     };
   };
 }

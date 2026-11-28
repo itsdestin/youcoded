@@ -49,8 +49,8 @@ export function startAutomations(deps: {
         env: { [PAGES_ROOTS_ENV]: JSON.stringify(roots), ELECTRON_RUN_AS_NODE: '1' },
       });
       // A program that did not start is closed again before the run is told, so nothing is left running.
-      try { await conn.connect(); } catch (err) { await conn.close().catch(() => {}); throw err; }
-      if (conn.state !== 'ready') { await conn.close().catch(() => {}); throw new Error(conn.lastError ?? 'The page tools did not start.'); }
+      try { await conn.connect(); } catch (err) { await conn.close().catch(() => {}); throw err; } // benign: closing a connection that already failed; the real failure is thrown on this line
+      if (conn.state !== 'ready') { await conn.close().catch(() => {}); throw new Error(conn.lastError ?? 'The page tools did not start.'); } // benign: closing a connection that already failed; the real failure is thrown on this line
       return { tools: conn.listTools(), call: (tool, args, signal) => conn.callTool(tool, args, signal), close: () => conn.close() };
     },
     createSession: deps.createSession,

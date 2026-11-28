@@ -96,9 +96,9 @@ is refused, and a stored file over that size is refused at restore. The refusal
 happens after the fence, so an oversized replacement leaves the older checkpoint
 ineligible rather than restorable-but-stale.
 
-**Fallback reason codes.** Every failure logs one fixed code and no content; the
-session silently falls back to rebuilding history from the transcript, which is
-correct but loses the ciphertext. Publish: `stale-generation`, `oversized`,
+**Fallback reason codes.** Every failure logs one fixed code and no content. The
+session first tries a validated public compaction record, then ordinary transcript
+reconstruction; neither can recover private reasoning ciphertext. Publish: `stale-generation`, `oversized`,
 `write-failed`, `unreferenced-history`, plus `persistence-failed` /
 `unknown-reference` from the transcript flush and `publish-failed` if the store
 itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
@@ -107,6 +107,18 @@ itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
 continuation identity cannot be built (ChatGPT signed out). The line carries a
 `phase` of `publish` or `restore`, because a restore fallback is routine (no
 sidecar yet, another device, a changed model) and used to read as a failed write.
+
+**Interrupted-history recovery.** Reconstruction pairs results only with the
+immediately preceding assistant call group, excludes unmatched/duplicate outputs
+from model memory, and supplies completion-unknown results for calls whose results
+were not saved. The readable source transcript is unchanged. A validated public
+summary remains usable when its retained suffix needs these repairs: transformed
+messages keep `null` origins rather than claiming persisted references. Such
+origins cannot prove a new portable cut. UUID/origin capture metadata does not
+make a rebuilt history an exact accepted prefix; the host passes an explicit
+restore mode so only reconstructed resumes can use the emergency request-only
+context fit after an unfittable summary. Exact checkpoints and live prefixes stay
+protected.
 
 **Credential epoch.** The checkpoint is bound to a continuation identity, which
 for ChatGPT is `providerId\0modelId\0sha256(accountId)\0credentialEpoch`. The
@@ -239,6 +251,9 @@ Makes the harness usable on locally-hosted models: capability profiles, real con
 - **Only summarized messages fade.** The marker lands AFTER the kept tail, so "dim everything above the marker" faded messages the model still sees. `compact-summary` carries `retainedFromUuid` (the user message or `/skill` event opening the kept turn, `HarnessSession.retainedTurnStart`); `findArchiveBoundary` moves the fade line to it. Unknown or paged-out → this marker dims nothing new (the safe side). Guard: `archive-boundary.test.ts`.
 - **A model switch is fit-checked (U11).** The picker calls `native:switch-model`; `NativeSessionHost.switchModel` measures the chat against the NEW model's budget (`HarnessSession.fitForWindow`). Fits → the same swap as `setBinding`. Too long → `needs-summary`, nothing changes, and `ModelSwitchPrompt` asks: Summarize and switch runs `compactNow(undefined, newWindow)` on the CURRENT model (tail and post-check sized for the new one) and switches only if it commits; X/Esc (or Stop while summarizing) stays. An unknown new window never blocks. Guards: `native-switch-model.test.ts`, `ModelSwitchPrompt.test.tsx`, `ipc-channels.test.ts`.
 - **StatusBar chips read the reducer, not a status:data path.** `selectNativeStatusChips(usage, contextLength)` derives context %/tokens/tokens-per-sec from the active native session's latest `turn-complete` usage (the `useNativeSessionUsage` cached store selector walks the timeline back — it was an `App.tsx` memo over `chatStateMap` until the 2026-07-24 rebase, where AppInner perf tranche 1 had since replaced that reactive value with a ref; a memo over a ref would have frozen the chips); this serves desktop AND remote for free, since the remote reducer gets the same event over WS. `contextLength` rides the `turn-complete` usage payload — a session constant on a per-turn event, the same additive precedent as `tokensPerSecond`, used ONLY as a gauge denominator, never summed into token totals. **A `native:usage-report` renderer→main channel + `buildStatusData().nativeUsageMap` fold was built and then DELETED** — nothing consumed it once the reducer path existed; do not rebuild it without a reader. Chips update at turn END, so a long agentic turn context chip lags until the turn completes (accepted for v1).
+- **A local chat's opening is read in the background before the user sends (2026-11-07, `harness/local-prewarm.ts`).** Every native chat opens with ~11-19k tokens of instructions and tool descriptions; a laptop chip reads ~100-150 a second, so the first reply waited one to three minutes. `HarnessSession.prewarm()` sends the SAME system text, tools and history plus a `.` placeholder with `maxOutputTokens: 1`, at native session create and on a model change (`warmLocalModel` in `ipc-handlers.ts`, via `NativeSessionHost.prewarmLocal`). One background read runs app-wide. A turn that starts DURING the read waits for it (a second read beside it measured 140 s instead of ~80 s) and shows its prefill progress; one that starts before the read began cancels it; Stop ends both; a model switch drops it. Measured on the Z13 (Qwen3.8-27B): first message read 24 new tokens and reused 12,961 (0.75 s). Skipped for specialist children and when the last history entry is a user message. Guard: `local-prewarm.test.ts`.
+- **Each local chat keeps its own engine slot (`engine/slot-pins.ts`, 2026-11-07).** Requests carry llama.cpp's `id_slot` (`provider-registry.ts` `transformRequestBody`, keyed on the session id as `cacheKey`); chats share slots 0..n−2 by least-recently-used, everything key-less (model load, model check, titles) uses the last slot. With `--no-cache-idle-slots` on the spawn, two chats' follow-ups read 19 tokens (0.9 s) each instead of re-reading 22k (≈200 s). Engine facts: `engine-dependencies.md` → "Keeping each chat's reading". Guards: `slot-pins.test.ts`, `provider-registry.test.ts`, `engine-manager-router.test.ts`.
+- **Small windows: three faults found 2026-11-08 on the desktop (1.3.3, Qwen3.5-9B, 32k window), fixed 2026-11-09.** (1) **A tool result is cut to the room left** before it enters history or the transcript (`harness/tool-result-room.ts`, `HarnessSession.capToolText`): room = the compaction trigger minus current occupancy minus results already gathered this step, at 3 characters per token, never below 2,000 characters, with the tool's `FIT_MORE_HINT` telling the model how to read the rest. One `Read` of 52,733 characters had filled the window and the next request failed the pre-check. The cut applies to EVERY model, cloud included, but only bites when the chat is nearly full (Destin, review deck 2 Q-2: one rule everywhere). Since 2026-11-12 it keeps BOTH ends (80/20, as `tools/truncate.ts` does — a command's error, exit code and saved-output path are on its last lines); a `Read` keeps its beginning. A cut result from any tool other than Read/Bash/BashOutput is first written whole to the chat's spill folder (`capResultAndSave`, the folder Bash already spills into: readable without an ask, swept after 7 days) and the notice names the file. (2) **A junk summary is refused** (`isJunkSummary` / `minSummaryChars` in `compaction.ts`): empty, a bare JSON tool call, nothing left after stripping `<tool_call>`/`<function=` markup, or shorter than 1% of the replaced span (16-600 characters). `summaryWithRetry` asks once more with a plain-prose reminder; junk twice keeps history untouched behind the existing failure fence — **unless the next request could not be sent at all** (`plan.replyCap <= 0`, or the ENGINE itself refused it as too long — the forced `maybeCompact` after an overflow, and `windowRefused` for Summarise pressed on that card; the logged fault was refused at ~22.6k of 32k while our estimate said it fit): then the app commits its own stand-in for the removed part (`standInSummary` / `summaryOrStandIn` in `compaction.ts`: a plain statement that it was removed, plus the user's own earlier requests, most recent kept, 240 characters each, 1,500 in all), exactly like a model summary (one `compact-summary` line, the same group-safe cut). Destin, review deck 2 Q-3: a chat can always continue. Never used when the chat can still be sent, after Stop, on a switch to a smaller model, or when the summary REQUEST failed (engine down, no network, timeout — `threw`); those keep the whole history. Still a dead end: a chat whose newest indivisible group alone does not fit. A 9B had answered with a bare `<tool_call>` block and it replaced what it covered. (3) **The pre-check's refusal is `ContextCannotFitError`** (`providers/context-overflow.ts`), classified `too-long` / `context-too-long` like the engine's own refusal, so both show one card with Summarise. Guard: `harness-small-context-window.test.ts`. The fourth desktop fault (a successful model load left the engine counted as busy) is the engine's — `engine-dependencies.md`.
 
 ## Prompt caching (cache follow-ups, 2026-09-10)
 
@@ -496,7 +511,12 @@ Shipped as youcoded PRs #352, #353, #354, #355. What is now true, and why:
   content. Overwrites also preserve CRLF/BOM via Edit's exported `preserveFormat`.
 - **Edit** — every parameter described; `old_string` says: exactly once, never include Read's
   `%6d\t` line-number prefix, keep to 1–3 lines. The read-gate refusal names session resume
-  as a cause (`readRegistry` resets on resume).
+  as a cause (`readRegistry` resets on resume). On "not found" only (never `replace_all`),
+  one normalised retry folds curly quotes, Unicode dashes and non-breaking spaces to plain
+  and ignores spaces at line ends; it is accepted only if it finds ONE place, replaces exactly
+  that original span, inserts `new_string` unchanged, and the result says the match was
+  normalised (`findNormalisedSpan`, card #66 c). Skipped above `MAX_FOLD_CHARS` (2 M characters,
+  plain "not found" as before): the fold runs on the main process, ~5 ms per MB. The description still says "exact" on purpose.
 - **Bash** — the description no longer suggests re-running "piped through head/tail" (no
   `pipefail`: `cmd | tail` masks the exit code); it says Read the saved file, or redirect and
   `echo exit=$?`. The same sentence was fixed in the per-call spill notice and the static
@@ -1240,10 +1260,18 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   the smoke test's own synthetic 203 MB source bitmap — not the worker's share, which is roughly
   0.6–1.2 GB. `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
   The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
-  <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/image-support.ts", "contains": "IMAGE_CACHE_DIR_NAME = 'image-cache'"} -->
 - **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
-  history on every provider/profile change (`setBinding`) and before any compaction or summary
-  (`maybeCompact`, `compactNow`). The history rewrite itself lives in `harness/image-history.ts`.
+  history before any compaction or summary (`maybeCompact`, `compactNow`). A provider/profile
+  change (`setBinding`) only marks `imagesRefitPending`; the next model request's `maybeCompact`,
+  inside its turn, runs `fitImagesToLimits` in place of that gate, which SHRINKS an over-limit picture where
+  the resize worker can and falls back to the note where it cannot (card #66 f3). The result is
+  adopted only if history is still the array it started from: a switch landing mid-shrink (its
+  strip rewrites history and origins) discards it and fits once more against the newest limits,
+  then the non-shrinking gate; a Stop mid-shrink discards it and re-marks the refit. Same in-memory
+  rewrite and checkpoint trade-off as the many-image recovery below. A `/compact` run between the
+  switch and the next send still uses the non-shrinking gate. The history rewrite itself lives
+  in `harness/image-history.ts`.
 - **Recovery** (`providers/image-too-large.ts`, `collapseOversizedImages`): on that exact 400 —
   accepted in `error.message`, `detail` or a top-level `message`; the live object was never
   captured — with no output started, image parts over the reported limit collapse to the note,
@@ -1259,8 +1287,9 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
 
 - **The image cache is never swept.** Deleting it is safe: a missing derivative becomes a
   "no longer available" / "could not be read" note on reopen.
-- **After a switch to stricter limits, a derivative that no longer fits is COLLAPSED to the note,
-  not re-prepared** — a fresh Read of the original prepares a copy for the new provider.
+- **After a switch to stricter limits, a derivative that no longer fits is shrunk in memory, or
+  COLLAPSED to the note when it cannot be shrunk, not re-prepared from its file** — a fresh Read
+  of the original prepares a copy for the new provider.
 - **A user-message picture collapsed in memory is labelled `image`** until a reopen relabels it by
   basename (the rebuild knows the path).
 - **A picture whose preparation failed** is told to the model with the preparer's reason live; on

@@ -18,5 +18,5 @@
 {"type": "tool_result", "tool_use_id": "m-cc-watch", "elapsedMs": 59000, "background_task_id": "bm1ci", "content": "Monitor started (task bm1ci, timeout 1800000ms)."}
 {"type": "assistant_text", "text": "I'll check back once CI has had a few minutes."}
 {"type": "tool_use", "id": "m-cc-wake", "name": "ScheduleWakeup", "input": {"delaySeconds": 300, "reason": "Waiting on CI for the pull request before merging"}}
-{"type": "tool_result", "tool_use_id": "m-cc-wake", "content": "{\"scheduledFor\":1753795300000}"}
+{"type": "tool_result", "tool_use_id": "m-cc-wake", "content": "{\"scheduledFor\":-4700000}"}
 {"type": "turn_complete"}

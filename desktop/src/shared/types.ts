@@ -759,6 +759,13 @@ export interface SessionContextSkill {
   label: string;
   /** The one-liner the model itself is given. */
   description?: string;
+  /** Where the skill is installed: 'project' = this project's own `.claude/skills`
+   *  folder, 'global' = installed for every project.
+   *  WHY (Destin, 2026-11-12, work item #251): the panel sorts what the assistant
+   *  was given into Global and Project tabs. Both scanners always knew this and
+   *  dropped it on the way out. Absent on a record written before this field
+   *  existed; the panel files those under Global, where every skill used to be. */
+  scope?: 'global' | 'project';
 }
 
 export interface SessionContext {
@@ -903,6 +910,9 @@ export interface SpecialistInjectedMeta {
   status: 'completed' | 'failed';
   steps?: number;
   parentToolCallId?: string;
+  /** Which run of this helper the report is for (1 = the original hire, +1 per resume). Bookkeeping only:
+   *  lets the host tell run 2's report from run 1's when matching durable receipts. */
+  runNumber?: number;
 }
 
 /** Companion to `injected: 'shell-complete'` (G-1): the background commands
@@ -985,10 +995,6 @@ export interface SkillEntry {
   installedAt?: string;
   updatedAt?: string;
   repoUrl?: string;
-  // Phase 3c: optional config schema — when present, the detail view renders
-  // a settings form for this entry. Anthropic plugins using native config.json
-  // should NOT set this field.
-  configSchema?: ConfigSchema;
 
   // Marketplace redesign Phase 1 — soft filter/curation fields populated from
   // overrides/<id>.json; all optional so pre-extension cache reads still work.
@@ -1039,6 +1045,10 @@ export interface SkillEntry {
   // in order to read the frontmatter. Absent for registry-only entries the user
   // has not installed.
   skillDir?: string;
+
+  // Plugin off-switch: on an installed plugin the server listed as unsafe (already turned off).
+  // WHY an object: room for a plain-words reason; the UI shows one fixed sentence today.
+  blocked?: { reason?: string };
 }
 
 export interface SkillDetailView extends SkillEntry {
@@ -1113,6 +1123,12 @@ export interface PackageInfo {
   // alongside the version compare. Absent on every pre-Task-17 install, which is
   // why the compare must treat "no commit recorded" as "nothing to say".
   commit?: string;
+  // Themes only: stamp of the theme store's file list at install/update time (shared/theme-fingerprint.ts).
+  // WHY: lets the Update badge notice a theme edited in place without a version bump. Absent on
+  // installs made before this existed, which must stay quiet.
+  themeFingerprint?: string;
+  // Plugin off-switch: turned off as unsafe; folder held aside and settings kept (plugin-blocklist.ts).
+  turnedOff?: boolean;
   // Decomposition v3 §9.8: cross-device sync can surface a package that's
   // present in config but not yet on disk (e.g., Android pulled a desktop
   // config but hasn't installed the package yet). "pending" UIs can show an
@@ -1536,23 +1552,6 @@ export interface HistoryMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-}
-
-// Phase 3c: per-entry config schema for marketplace packages. Entries
-// that declare configSchema get a settings form in the detail view.
-// Anthropic plugins using their own native config.json are left alone.
-export interface ConfigField {
-  name: string;
-  type: 'string' | 'boolean' | 'number' | 'select';
-  label: string;
-  description?: string;
-  default?: string | boolean | number;
-  required?: boolean;
-  options?: { value: string; label: string }[]; // for 'select' type
-}
-
-export interface ConfigSchema {
-  fields: ConfigField[];
 }
 
 // Decomposition v3 §9.9: what SkillDetail needs to render integration badges.

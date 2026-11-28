@@ -14,6 +14,9 @@ import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
 import { completed, richToolStep, silentReasoningStep, sse, textStep } from './helpers/responses-fakes';
 import { pngHeader } from './helpers/image-fixtures';
 import { imageNote } from '../src/main/harness/image-support';
+// A believable summary: the app refuses junk ones (compaction.ts isJunkSummary). Starts with the words the assertions below look for.
+const SUMMARY_TEXT = 'Compressed history. ' + 'The user and assistant agreed what to do next. '.repeat(2);
+const TINY_SUMMARY_TEXT = 'Safe memory of the chat.';
 
 /** The identity string the registry would build for a signed-in ChatGPT account
  *  (`provider\0model\0sha256(accountId)\0credentialEpoch`) — the host never
@@ -464,7 +467,7 @@ describe('NativeSessionHost durable continuation', () => {
     await first.host.destroyAll();
 
     const second = makeHost({ home, userData, withoutContinuation: true,
-      fetchImpl: scriptedFetch([], [textStep('sum', 'Compressed earlier messages.')]) });
+      fetchImpl: scriptedFetch([], [textStep('sum', SUMMARY_TEXT)]) });
     expect(await second.host.resume('public-reopen', cwd)).toBe(true);
     expect(await second.host.compact('public-reopen')).toEqual({ ok: true });
     await second.host.drain('public-reopen');
@@ -480,7 +483,7 @@ describe('NativeSessionHost durable continuation', () => {
     await first.host.create({ sessionId: 'private-reopen', cwd, binding: BINDING });
     for (const text of ['first', 'second', 'third']) await turn(first.host, 'private-reopen', text);
     await first.host.destroyAll();
-    const second = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('sum', 'Compressed earlier messages.')]) });
+    const second = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('sum', SUMMARY_TEXT)]) });
     expect(await second.host.resume('private-reopen', cwd)).toBe(true);
     const resumed = (second.host as any).live.get('private-reopen').session;
     expect(resumed.firstEventForCut(resumed.compactionCut(true))).toBeTruthy();
@@ -498,7 +501,7 @@ describe('NativeSessionHost durable continuation', () => {
     await first.host.create({ sessionId: 'reasoning-reopen', cwd, binding: BINDING });
     for (const text of ['inspect', 'second', 'third']) await turn(first.host, 'reasoning-reopen', text);
     await first.host.destroyAll();
-    const second = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('sum', 'Compressed earlier messages.')]) });
+    const second = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('sum', SUMMARY_TEXT)]) });
     expect(await second.host.resume('reasoning-reopen', cwd)).toBe(true);
     expect(await second.host.compact('reasoning-reopen')).toEqual({ ok: true });
     await second.host.drain('reasoning-reopen');
@@ -509,7 +512,7 @@ describe('NativeSessionHost durable continuation', () => {
 
   it('a repeated user message after compaction never cites its retired identical predecessor', async () => {
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
-      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('sum', 'Safe memory.'),
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('sum', TINY_SUMMARY_TEXT),
     ]) });
     await fx.host.create({ sessionId: 'repeat-cut', cwd, binding: BINDING });
     for (const text of ['repeat', 'repeat']) await turn(fx.host, 'repeat-cut', text);
@@ -532,7 +535,7 @@ describe('NativeSessionHost durable continuation', () => {
       ...richTurn(),
       textStep('turn-2', 'second answer'),
       textStep('turn-3', 'third answer'),
-      textStep('sum', 'Compressed history.'),        // the /compact summary call
+      textStep('sum', SUMMARY_TEXT),        // the /compact summary call
     ];
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], replies) });
     await fx.host.create({ sessionId: 'summarised', cwd, binding: BINDING });
@@ -563,7 +566,7 @@ describe('NativeSessionHost durable continuation', () => {
     const bodies: any[] = [];
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch(bodies, [
       textStep('one', 'first answer'), textStep('two', 'second answer'),
-      textStep('three', 'third answer'), textStep('sum', 'Compressed history.'), textStep('four', 'fourth answer'),
+      textStep('three', 'third answer'), textStep('sum', SUMMARY_TEXT), textStep('four', 'fourth answer'),
     ]) });
     await fx.host.create({ sessionId: 'gate-commit', cwd, binding: BINDING });
     for (const text of ['first', 'second', 'third']) await turn(fx.host, 'gate-commit', text);
@@ -604,7 +607,7 @@ describe('NativeSessionHost durable continuation', () => {
   it('an append rejection preserves full history, emits no marker, and leaves later appends working', async () => {
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
       textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'),
-      textStep('sum', 'Compressed history.'), textStep('four', 'fourth answer'),
+      textStep('sum', SUMMARY_TEXT), textStep('four', 'fourth answer'),
     ]) });
     await fx.host.create({ sessionId: 'reject-commit', cwd, binding: BINDING });
     for (const text of ['first', 'second', 'third']) await turn(fx.host, 'reject-commit', text);
@@ -631,7 +634,7 @@ describe('NativeSessionHost durable continuation', () => {
   it('Stop before the append cancels the candidate; destroy after append starts waits for adoption', async () => {
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
       textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'),
-      textStep('sum-1', 'First summary.'), textStep('sum-2', 'Second summary.'),
+      textStep('sum-1', 'First summary. ' + SUMMARY_TEXT), textStep('sum-2', 'Second summary. ' + SUMMARY_TEXT),
     ]) });
     await fx.host.create({ sessionId: 'race-commit', cwd, binding: BINDING });
     for (const text of ['first', 'second', 'third']) await turn(fx.host, 'race-commit', text);
@@ -666,7 +669,7 @@ describe('NativeSessionHost durable continuation', () => {
 
   it('snapshot publication failure after durable compaction does not undo the record', async () => {
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
-      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'), textStep('sum', 'Compressed history.'),
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'), textStep('sum', SUMMARY_TEXT),
     ]) });
     await fx.host.create({ sessionId: 'snapshot-fail', cwd, binding: BINDING });
     for (const text of ['first', 'second', 'third']) await turn(fx.host, 'snapshot-fail', text);

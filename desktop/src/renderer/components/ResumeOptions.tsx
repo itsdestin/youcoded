@@ -16,6 +16,7 @@ import { useFirstTimeGate } from './FirstTimeWarning';
 import type { PastSession } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import { claudeAliasForModelId } from '../../shared/model-ids';
+import { getCapabilities } from '../platform';
 
 /** App's resume entry point (App.tsx handleResumeSession). `false` = it did not
  *  launch (App has already said why), so the caller stays open for a retry. */
@@ -114,7 +115,8 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
   flush?: boolean;
 }) {
   // Launch in new window — hidden on remote/Android (single-window).
-  const detachAvailable = allowNewWindow && typeof (window as any).claude?.detach?.openDetached === 'function';
+  // WHY nativeWindows too (2026-11-01 phone test): the remote shim defines openDetached as a no-op, so the phone showed the switch.
+  const detachAvailable = allowNewWindow && getCapabilities().nativeWindows && typeof (window as any).claude?.detach?.openDetached === 'function';
   const dangerous = s.provider !== 'native' && options.dangerous;
   // A native row stays disabled until a model binding exists (manual pick or a
   // prefill auto-select) — never resume with no binding to launch.

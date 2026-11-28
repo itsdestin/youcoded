@@ -19,6 +19,8 @@ export const PROMPT_DEBOUNCE_MS = 350;
 const SETUP_PROMPT_TITLES = new Set([
   'Trust This Folder?',
   'Choose a Theme',
+  // First-run "Security notes" screen (CC 2.1.300): a one-button "Continue" card; without it a fresh install sat on "Initializing session…" (2026-11-01).
+  'Security notes',
   'Select Login Method',
   'Skip Permissions Warning',
   'Resume Session', // Stale session resume — lets user choose summary vs full resume
@@ -26,7 +28,7 @@ const SETUP_PROMPT_TITLES = new Set([
   'Enable auto mode?', // CC v2.1.83+ first-run opt-in: 4-option auto-mode confirmation
   'Message Flagged', // Fable 5 model-safeguard fallback — Switch model / Edit prompt and retry
   // Startup dialog when CLAUDE.md imports files outside the cwd. Previously it was mislabeled 'Trust This Folder?' by the stale trust anchor
-  // and hijacked TrustGate's full-screen takeover; now it gets its own card (2026-07-26).
+  // and hijacked the (since removed) full-screen trust takeover; now it gets its own card (2026-07-26).
   'Allow External Imports?',
   // Project MCP-server approval (a folder with .mcp.json), CC 2.1.281.
   'New MCP Server Found',
@@ -59,8 +61,16 @@ export function cardTitleFor(menu: ParsedMenu, starting: boolean, screen: string
   // 2.1.287 (tests/fixtures/popup-corpus/switch-model-confirm.json), has NO "Enter to confirm · Esc to cancel" footer, so it never got a card. What marks it
   // a live dialog is the shape the pop-up reader already measures: Claude Code's message box is not on screen, and a numbered menu is. A reply that merely
   // QUOTES a menu leaves the box in place, so it still gets no card. (Mid-session only: while a session is still starting, only a footered dialog counts.)
-  const popupHoldsKeyboard = !starting && readInputFocus(screen).kind === 'popup';
-  if (!menu.dialog && !popupHoldsKeyboard) return null;
+  const boxGone = readInputFocus(screen).kind === 'popup';
+  const popupHoldsKeyboard = !starting && boxGone;
+  // WHY (Destin, 2026-11-09 final review F-2, "terminal as an absolute last resort"): while a session is STARTING, a menu with no footer still gets a
+  // card when Claude Code's message box is off the screen, the same shape-not-name proof used mid-session. A first-run screen Claude Code adds or
+  // rewords then gets buttons instead of "answer it in terminal view". Mid-session an unnumbered footerless menu (menu.loose) stays card-less, as before.
+  // Only the unnumbered kind (menu.loose), which has passed the reader's extra proofs. A NUMBERED footerless menu at startup keeps the old answer (no
+  // card; the loading cover then offers terminal view): a numbered list quoted in a replayed conversation looks exactly like one (review, 2026-11-10).
+  const startupMenu = starting && boxGone && menu.loose === true;
+  if (menu.loose && !starting) return null;
+  if (!menu.dialog && !popupHoldsKeyboard && !startupMenu) return null;
   // Belt and braces: parseInkSelect already refuses a menu with the message box under it (its last ❯ is then the input row), so a quoted menu in a reply
   // never parses today; this keeps that true if the parser ever loosens.
   if (!starting && !popupHoldsKeyboard) return null;

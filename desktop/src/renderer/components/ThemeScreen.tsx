@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
+import { announceFailed } from '../utils/announce';
 import { useTheme } from '../state/theme-context';
 import { useMarketplace } from '../state/marketplace-context';
 import SettingsExplainer, { type ExplainerSection } from './SettingsExplainer';
@@ -43,7 +44,7 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         { term: 'App feels slow or laggy', text: 'Turn on "Reduce visual effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
         { term: 'Changing a theme itself', text: "The settings here apply to every theme. To change a theme's own colours or picture, tap 'Build new theme' and describe what you want, or ask Claude to edit one you built." },
         { term: "Theme cycle isn't switching", text: 'Open the status bar widget editor and use the pencil next to "Theme" to pick at least 2 themes for the cycle.' },
-        { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
+        { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your device. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
         { term: 'Published theme not appearing in marketplace', text: 'Theme submissions are reviewed before they go live. Yours should appear within a day or two if it passes the safety checks.' },
       ],
     },
@@ -169,7 +170,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
                 active={t.slug === activeSlug}
                 favorite={themeFavSet.has(t.slug)}
                 onSelect={() => setTheme(t.slug)}
-                onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch(() => {}); }}
+                onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch((e) => { announceFailed('change your favorites', e); }); }}
                 // The share icon exists only on the user's own themes (canPublish).
                 onShare={canPublish(t) && onPublishTheme ? () => onPublishTheme(t.slug) : undefined}
                 fallbackPreview={libraryPreviews.get(t.slug)}

@@ -1,0 +1,16 @@
+/* The notice box (Callout surface="on-accent") when it sits INSIDE a sent bubble: the "not sure this was
+   sent" / "didn't send" card. WHY (Destin, pinned-bubbles-review-7#V-3, after six rounds): the page's own
+   faint tint fought the bubble, because the bubble is the opposite brightness from the page in every theme.
+   So the fill is the BUBBLE's colour blended two-fifths toward amber or red (it belongs to the bubble in
+   every theme, community ones too), and the outline is the plain status colour, a touch thicker, so amber
+   and red stay easy to tell apart even on purple bubbles where the fill turns peach/pink. Doubled class so
+   the 1.5px beats Tailwind's 1px `border` whatever the stylesheet order. */
+.notice-on-accent.notice-on-accent { border-width: 1.5px; }
+.notice-on-accent--warning {
+  background-color: color-mix(in srgb, var(--color-amber-500) 40%, var(--accent));
+  border-color: var(--color-amber-500);
+}
+.notice-on-accent--danger {
+  background-color: color-mix(in srgb, var(--destructive) 40%, var(--accent));
+  border-color: var(--destructive);
+}

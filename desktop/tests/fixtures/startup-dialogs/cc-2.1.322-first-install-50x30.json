@@ -1,0 +1,155 @@
+{
+ "ccVersion": "2.1.322",
+ "scenario": "first-install",
+ "key": "first-install-50x30",
+ "folder": "plain",
+ "trusted": false,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 50,
+ "rows": 30,
+ "capturedAt": "2026-11-10T09:15:21.094Z",
+ "chunks": [
+  {
+   "t": 254,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 266,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 266,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 270,
+   "b64": "G1szODsyOzIxNTsxMTk7ODdtV2VsY29tZRtbOUd0bxtbMTJHQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzM4OzI7MTUzOzE1MzsxNTNtdjIuMS4zMjIbWzM5bQ0NCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQ0KDQ0KG1s2RyoNDQobWzM0RyobWzQ0R+KWiOKWiOKWiOKWk+KWkQ0NChtbMTNH4paR4paR4paR4paR4paR4paRG1s0M0filojilojilojilpPilpENDQobWzVH4paR4paR4paRG1sxMUfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzQzR+KWiOKWiOKWiOKWk+KWkQ0NChtbNEfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzI3RxtbMW0qG1s0NEcbWzIybeKWiOKWiOKWk+KWkeKWkQ0NCg0NChtbMzg7MjsxNTM7MTUzOzE1M20gKhtbMzZH4paR4paR4paR4paRG1szOW0NDQobWzM4OzI7MTUzOzE1MzsxNTNtIBtbMzRH4paR4paR4paR4paR4paR4paR4paR4paRG1szOW0NDQobWzM4OzI7MTUzOzE1MzsxNTNtIBtbMzJH4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRG1szOW0NDQo="
+  },
+  {
+   "t": 270,
+   "b64": "G1s3RxtbMzg7MjsyMTU7MTE5Ozg3bSDilojilojilojilojilojilojilojilojilogbWzM5bQ0NChtbN0cbWzM4OzI7MjE1OzExOTs4N23ilojilojiloTilojilojilojilojilojiloTilojilogbWzQyRxtbMzltG1sxbSobWzIybQ0NChtbN0cbWzM4OzI7MjE1OzExOTs4N20g4paI4paI4paI4paI4paI4paI4paI4paI4paIG1syM0cbWzM5bSoNDQouLi4uLi4uG1szODsyOzIxNTsxMTk7ODdt4paIG1sxMEfilogbWzE0R+KWiBtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdt4paIG1szOW0uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4NDQo="
+  },
+  {
+   "t": 273,
+   "b64": "G1s+MHEbWz91"
+  },
+  {
+   "t": 273,
+   "b64": "G103NTAxOz8HG1tj"
+  },
+  {
+   "t": 488,
+   "b64": "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"
+  },
+  {
+   "t": 1308,
+   "b64": "G1sxRBtbMTVCG1tIG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1sySxtbMUIbWzJLG1sxQhtbMksbWzFCG1tIG1szODsyOzIxNTsxMTk7ODdtV2VsY29tZRtbOUd0bxtbMTJHQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzM4OzI7MTUzOzE1MzsxNTNtdjIuMS4zMjIbWzM5bQ0NCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQ0KDQ0KG1s2RyoNDQobWzM0RyobWzQ0R+KWiOKWiOKWiOKWk+KWkQ0NChtbMTNH4paR4paR4paR4paR4paR4paRG1s0M0filojilojilojilpPilpENDQobWzVH4paR4paR4paRG1sxMUfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzQzR+KWiOKWiOKWiOKWk+KWkQ0NChtbNEfilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpHilpEbWzI3RxtbMW0qG1s0NEcbWzIybeKWiOKWiOKWk+KWkeKWkQ0NCg0NChtbMzg7MjsxNTM7MTUzOzE1M20gKhtbMzZH4paR4paR4paR4paRG1szOW0NDQobWzM4OzI7MTUzOzE1MzsxNTNtIBtbMzRH4paR4paR4paR4paR4paR4paR4paR4paRG1szOW0NDQobWzM4OzI7MTUzOzE1MzsxNTNtIBtbMzJH4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paR4paRG1szOW0NDQobWzdHG1szODsyOzIxNTsxMTk7ODdtIOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiOKWiBtbMzltDQ0KG1s3RxtbMzg7MjsyMTU7MTE5Ozg3beKWiOKWiOKWhOKWiOKWiOKWiOKWiOKWiOKWhOKWiOKWiBtbNDJHG1szOW0bWzFtKhtbMjJtDQ0KG1s3RxtbMzg7MjsyMTU7MTE5Ozg3bSDilojilojilojilojilojilojilojilojilogbWzIzRxtbMzltKg0NCi4uLi4uLi4bWzM4OzI7MjE1OzExOTs4N23ilogbWzEwR+KWiBtbMTRH4paIG1szOW0NDQoNDQobWzJHG1sxbUNsYXVkZRtbOUdDb2RlG1sxNEdjYW4bWzE4R2JlG1syMUd1c2VkG1syNkd3aXRoG1szMUd5b3VyG1szNkdDbGF1ZGUbWzIybQ0NChtbMkcbWzFtc3Vic2NyaXB0aW9uG1sxNUdvchtbMThHYmlsbGVkG1syNUdiYXNlZBtbMzFHb24bWzM0R0FQSRtbMzhHdXNhZ2UbWzQ0R3Rocm91Z2gbWzIybQ0NChtbMkcbWzFteW91chtbN0dDb25zb2xlG1sxNUdhY2NvdW50LhtbMjJtDQ0KDQ0KG1syR1NlbGVjdBtbOUdsb2dpbhtbMTVHbWV0aG9kOg0NCg0NChtbMkcbWzM4OzI7MTc3OzE4NTsyNDlt4p2vG1s0RxtbMzg7MjsxNTM7MTUzOzE1M20xLhtbN0cbWzM4OzI7MTc3OzE4NTsyNDltQ2xhdWRlG1sxNEdhY2NvdW50G1syMkd3aXRoG1syN0dzdWJzY3JpcHRpb24bWzQwR8K3G1szOW0NDQobWzdHG1szODsyOzE1MzsxNTM7MTUzbUluZGl2aWR1YWwsG1sxOUdUZWFtLBtbMjVHb3IbWzI4R0VudGVycHJpc2UbWzM5bQ0NChtbNEcbWzM4OzI7MTUzOzE1MzsxNTNtMi4bWzdHG1szOW1BbnRocm9waWMbWzE3R0NvbnNvbGUbWzI1R2FjY291bnQbWzMzR8K3G1szNUcbWzM4OzI7MTUzOzE1MzsxNTNtQVBJG1szOUd1c2FnZRtbMzltDQ0KG1s0RxtbMzg7MjsxNTM7MTUzOzE1M20zLhtbN0cbWzM5bTNyZC1wYXJ0eRtbMTdHcGxhdGZvcm0bWzI2R8K3G1syOEcbWzM4OzI7MTUzOzE1MzsxNTNtQW1hem9uG1szNUdCZWRyb2NrLBtbMzltDQ0KG1s3RxtbMzg7MjsxNTM7MTUzOzE1M21NaWNyb3NvZnQbWzE3R0ZvdW5kcnksG1syNkdHb29nbGUbWzMzR1ZlcnRleBtbNDBHQUkbWzM5bQ0NChtbMUMbWzVB"
+  },
+  {
+   "t": 2603,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 2855,
+   "b64": "G1sxRBtbNUI="
+  },
+  {
+   "t": 2855,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 1293,
+   "label": "dialog-1-visible",
+   "chunkIndex": 8
+  },
+  {
+   "t": 1293,
+   "label": "send",
+   "chunkIndex": 8,
+   "data": "\r"
+  },
+  {
+   "t": 2099,
+   "label": "dialog-2-visible",
+   "chunkIndex": 9
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "screen",
+   "heading": "Choose the text style that looks best with your",
+   "options": [
+    "Auto (match terminal)",
+    "Dark mode",
+    "Light mode",
+    "Dark mode (colorblind-friendly)",
+    "Light mode (colorblind-friendly)",
+    "Dark mode (ANSI colors only)",
+    "Light mode (ANSI colors only)"
+   ],
+   "numbers": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "defaultCursor": 1,
+   "selection": "cursor-arrows",
+   "footer": "",
+   "body": [
+    "terminal",
+    "To change this later, run /theme"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "screen",
+   "heading": "Select login method:",
+   "options": [
+    "Claude account with subscription · Individual, Team, or Enterprise",
+    "Anthropic Console account · API usage",
+    "3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI"
+   ],
+   "numbers": [
+    1,
+    2,
+    3
+   ],
+   "defaultCursor": 0,
+   "selection": "numbered-digits",
+   "footer": "",
+   "body": []
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "screen": true,
+    "answered": "\"\\r\""
+   },
+   {
+    "dialog": 2,
+    "screen": true,
+    "answered": null
+   }
+  ],
+  "exitCode": null,
+  "folderTrusted": false,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks",
+   "theme"
+  ],
+  "credentialsWritten": false,
+  "sessionStartHookAt": []
+ }
+}

@@ -14,6 +14,7 @@
 // Files, but compact — small tiles, dense rows with when each file changed and its
 // size, sortable columns, search inside the folder, and quick places — which ended up
 // (round 3) in a menu on the first item of the path. Tiles first for someone new.
+import { formatBytes } from '../../../shared/format-bytes';
 import React, { useEffect, useMemo, useState } from 'react';
 import type { PageFileEntry, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { fileKind } from '../../../shared/artifacts/categorization';
@@ -39,12 +40,9 @@ const PLACES: Array<{ label: string; trail: string[] }> = [
   { label: 'Downloads', trail: ['Downloads'] }, { label: 'Pictures', trail: ['Pictures'] },
 ];
 
-/** Bytes as a person reads them. */
+/** Bytes as a person reads them. WHY the shared helper: one way of counting sizes across the app (format-bytes guard). */
 function sizeWords(bytes: number | undefined): string {
-  if (bytes === undefined) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return bytes === undefined ? '' : formatBytes(bytes, { kbDecimals: 0 });
 }
 
 /** When a file changed: the time today, the day this year, else the full date. */

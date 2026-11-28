@@ -45,7 +45,7 @@ vi.mock('../src/renderer/state/chat-context', () => ({
   useChatStore: () => mocks.store,
 }));
 
-import { usePromptDetector } from '../src/renderer/hooks/usePromptDetector';
+import { usePromptDetector, UNSURE_SETTLE_MS } from '../src/renderer/hooks/usePromptDetector';
 import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES, ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
 // A screen whose host keeps no session record and that reads its own terminal — the old Android runtime's shape, kept
 // for an older computer that sends no record (the Android app now runs the desktop backend, 2026-10-14).
@@ -396,6 +396,37 @@ describe('usePromptDetector startup safety net', () => {
     expect(shows()).toEqual([]);
     mocks.screen.text = '❯ \n? for shortcuts';
     fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+  });
+
+  // A question with none of Claude Code's usual marks: reported only once the screen has stood still, because the
+  // same shape shows for a moment while Claude Code is still drawing.
+  const ODD_QUESTION = [RULE, '  Pick your favourite', '', '  ❯ Only one row here'].join('\n');
+
+  it('reports a question with no footer only after the screen has stood still', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = ODD_QUESTION;
+    fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+    act(() => { vi.advanceTimersByTime(UNSURE_SETTLE_MS + 10); });
+    expect(getUnreadableStartupDialog('s1')).toEqual({ heading: 'Pick your favourite' });
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+  });
+
+  it('a screen that is still changing is never reported', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = ODD_QUESTION;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(UNSURE_SETTLE_MS - 200); });
+    mocks.screen.text = ODD_QUESTION + '\n  one more row drawn';
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(UNSURE_SETTLE_MS + 10); });
     expect(getUnreadableStartupDialog('s1')).toBeNull();
   });
 });

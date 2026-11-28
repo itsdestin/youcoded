@@ -88,6 +88,12 @@ export function hostNotify(method: string, params: Record<string, unknown> = {})
   void hostCall(method, params).catch((e) => console.warn(`[host-bridge] ${method} failed:`, e instanceof Error ? e.message : e));
 }
 
+/** WHY (2026-11-01 phone test): after a web sign-in (Claude, ChatGPT) the person was stranded on the browser's
+ *  "you can close this window". Tell the app to bring YouCoded back to the front. No-op on a computer. */
+export function returnToApp(): void {
+  hostNotify('bringToFront');
+}
+
 const eventListeners = new Set<(event: string, params: unknown) => void>();
 /** Events the host pushes on its own (network changed, app backgrounded). */
 export function onHostEvent(listener: (event: string, params: unknown) => void): () => void {

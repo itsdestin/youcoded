@@ -26,7 +26,7 @@ export async function addThumbs(dir: string, entries: Array<{ name: string; kind
     if (made >= MAX_THUMBS || spent >= LISTING_BUDGET_BYTES) return;
     const type = e.kind === 'file' ? TYPES[path.extname(e.name).toLowerCase()] : undefined;
     if (!type || e.size === undefined) continue;
-    const bytes = await thumbBytes(path.join(dir, e.name), e.size, type).catch(() => null);
+    const bytes = await thumbBytes(path.join(dir, e.name), e.size, type).catch(() => null); // benign: a file with no readable preview is listed without one
     if (!bytes || spent + bytes.length > LISTING_BUDGET_BYTES) continue;
     e.thumb = `data:${bytes.type};base64,${bytes.data.toString('base64')}`;
     spent += bytes.length;
@@ -49,7 +49,7 @@ async function thumbBytes(file: string, size: number, type: string): Promise<{ d
     const preview = exifPreview(head.subarray(0, bytesRead));
     return preview ? { data: preview, type: 'image/jpeg', length: preview.length } : null;
   } finally {
-    await fh.close().catch(() => {});
+    await fh.close().catch(() => {}); // benign: close after the bytes were read
   }
 }
 

@@ -410,6 +410,24 @@ describe("AccountSection", () => {
     expect(utils.getByRole("button", { name: "Unblock" })).toBeTruthy();
   });
 
+  // WHY (error inventory 2026-09-10, Settings row 86): a failed read used to hide the section, so
+  // someone who HAD blocked people saw nothing - the same as having blocked no one.
+  it("blocked users: a failed read says so, with the reason and Try again, and Try again re-asks", async () => {
+    const listBlocks = vi
+      .fn()
+      .mockResolvedValueOnce(apiErr(503, "the server is busy"))
+      .mockResolvedValue(ok([block({ id: "github:9", display_name: "Blocky", handle: "blocky" })]));
+    (globalThis as any).window.claude = signedInMock("octo", { social: { listBlocks, unblock: vi.fn() } });
+    const utils = renderSection();
+    await flush();
+    await openPopup(utils);
+
+    await waitFor(() => expect(utils.getByText(/Couldn't load your blocked users: the server is busy/)).toBeTruthy());
+    fireEvent.click(utils.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(utils.getByText("Blocky")).toBeTruthy());
+    expect(utils.queryByText(/Couldn't load your blocked users/)).toBeNull();
+  });
+
   it("blocked users: renders nothing when the block list is empty", async () => {
     // signedInMock defaults listBlocks → ok([]).
     (globalThis as any).window.claude = signedInMock();

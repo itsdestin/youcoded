@@ -28,6 +28,7 @@ import { sanitizeRigSvg } from '../mascot/sanitize-rig-svg';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
 import type { PoseName } from '../mascot/mascot-poses';
 import { Button } from '../ui';
+import { prefersTouchInput } from '../../utils/touch-input';
 import type { SoloGameProps } from './game-registry';
 import {
   createFlappyState, flap, step,
@@ -235,7 +236,7 @@ function hasWings(svgText: string): boolean {
   return clean.includes('id="rig-arm-left"') && clean.includes('id="rig-arm-right"');
 }
 
-export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
+export default function FlappyGame({ onEnd, best, onExit, onlineBestUnknown }: SoloGameProps) {
   const { theme, activeTheme, reducedEffects } = useTheme();
   const rigUrl = useWingedRig();
   // Where the theme ships a wallpaper, THAT is the sky (§5.1) — the playfield
@@ -663,7 +664,7 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
               // A zero is never a "New best", and "Your best: 0 pipes" is not
               // a target — it is a slightly insulting way to say nothing. Below
               // one pipe the card simply shows the score and the retry.
-              isBest={score > 0 && score > (best ?? 0)}
+              isBest={!onlineBestUnknown && score > 0 && score > (best ?? 0)}
               best={best != null && best > 0 && score <= best
                 ? (best === 1 ? '1 pipe' : `${best} pipes`)
                 : undefined}
@@ -678,7 +679,10 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
       {/* Says which input is live right now. Without it a player whose field has
           lost focus presses Space, the pane scrolls, and nothing explains why. */}
       <p className="text-2xs text-fg-muted leading-relaxed">
-        {focused
+        {/* WHY: a phone has no Space key — tap wording on touch (2026-11-01 phone test). */}
+        {prefersTouchInput()
+          ? 'Tap the playfield to flap. This one is a reflex game — it will not wait for you.'
+          : focused
           ? 'Space or Enter to flap. This one is a reflex game — it will not wait for you.'
           : 'Click the playfield (or Tab to it) to play with the keyboard.'}
       </p>

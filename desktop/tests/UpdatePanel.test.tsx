@@ -149,6 +149,39 @@ describe('UpdatePanel — the version pill popup', () => {
     });
   });
 
+  describe('UpdatePanel — notes shown', () => {
+    const MANY = {
+      markdown: '# Changelog\n\nAll notable changes to YouCoded are documented in this file.\n\n## [Unreleased]\n\n## [1.1.3] — 2026-04-25\n\n**Claude Code CLI baseline:** v2.1.328 (desktop review).\n\nNotes for 1.1.3\n\n## [1.1.2] — 2026-04-21\n\nNotes for 1.1.2\n\n## [1.1.1] — 2026-04-18\n\nNotes for 1.1.1',
+      entries: [
+        { version: '1.1.3', date: '2026-04-25', body: '**Claude Code CLI baseline:** v2.1.328 (desktop review).\n\nNotes for 1.1.3' },
+        { version: '1.1.2', date: '2026-04-21', body: 'Notes for 1.1.2' },
+        { version: '1.1.1', date: '2026-04-18', body: 'Notes for 1.1.1' },
+      ],
+      fromCache: false,
+    };
+
+    it('an update shows the versions newer than the user, never ones they already have', async () => {
+      (window as any).claude.update.changelog.mockResolvedValue(MANY);
+      const status = { current: '1.1.2', latest: '1.1.3', update_available: true, download_url: 'http://x' };
+      render(<UpdatePanel open={true} onClose={() => {}} updateStatus={status} />);
+      await waitFor(() => expect(screen.getByText('Notes for 1.1.3')).toBeInTheDocument());
+      expect(screen.queryByText('Notes for 1.1.2')).not.toBeInTheDocument();
+      expect(screen.queryByText('Notes for 1.1.1')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Claude Code CLI baseline/)).not.toBeInTheDocument();
+    });
+
+    it('up to date shows every version without the file title, intro, [Unreleased] or baseline line', async () => {
+      (window as any).claude.update.changelog.mockResolvedValue(MANY);
+      const status = { current: '1.1.3', latest: '1.1.3', update_available: false, download_url: null };
+      render(<UpdatePanel open={true} onClose={() => {}} updateStatus={status} />);
+      await waitFor(() => expect(screen.getByText('Notes for 1.1.1')).toBeInTheDocument());
+      expect(screen.getByText('Notes for 1.1.3')).toBeInTheDocument();
+      expect(screen.queryByText(/Unreleased/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/All notable changes/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Claude Code CLI baseline/)).not.toBeInTheDocument();
+    });
+  });
+
   describe('UpdatePanel — up to date', () => {
     it('renders "What\'s new" header and no Update now button', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
@@ -596,5 +629,14 @@ describe('UpdatePanel — what it promises and how a failed Restart is worded', 
     await waitFor(() => expect((window as any).claude.update.download).toHaveBeenCalled());
     await screen.findByRole('button', { name: /launch installer|restart to update/i });
     expect((window as any).claude.update.restartToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a copy owned by another package (AUR youcoded-bin) gets a notice and no Update button (card #186)', async () => {
+    mountApi({ supported: true, enabled: true });
+    const status = { current: '1.3.2', latest: '1.3.3', update_available: true, download_url: 'http://x', managed_by_other_package: true } as never;
+    render(<UpdatePanel open onClose={() => {}} updateStatus={status} />);
+    expect(await screen.findByText("This copy of YouCoded was installed from another package, so it can't update itself. Update it with your package manager.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /update now/i })).not.toBeInTheDocument();
+    expect((window as any).claude.update.download).not.toHaveBeenCalled();
   });
 });

@@ -187,7 +187,12 @@ async function nativeMetadata(format, installer, payload, directory, expected) {
     scripts = ['postinst', 'postrm'].map(key => fs.readFileSync(path.join(metadata, key), 'utf8')).join('\n');
     for (const key of ['postinst', 'postrm']) await run('bash', ['-n', path.join(metadata, key)]);
   } else {
-    await run('bsdtar', ['-xpf', installer, '-C', payload]);
+    // WHY rpm2cpio (corrected 2026-11-11, card #247): ubuntu-26.04 ships rpm 6, which builds the new "v6" rpm. Its
+    // inner file list is packed in a form (cpio magic 07070X) that bsdtar cannot read, even bsdtar 3.8.5: it says
+    // "Unrecognized archive format". The rpm is not broken: rpm's own rpm2cpio (the `rpm` package installed beside it)
+    // turns it into a plain cpio stream that bsdtar reads, and dnf/zypper install it on old and new systems alike.
+    if (format === 'rpm') await run('bash', ['-c', 'set -o pipefail; rpm2cpio "$1" | bsdtar -xpf - -C "$2"', 'rpm-unpack', installer, payload]);
+    else await run('bsdtar', ['-xpf', installer, '-C', payload]);
     if (format === 'rpm') {
       await text('rpm', ['-qp', '--xml', installer], 'raw.xml');
       const values = (await text('rpm', ['-qp', '--queryformat', '%{NAME}\n%{VERSION}\n', installer], 'identity')).split('\n');

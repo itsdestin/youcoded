@@ -15,7 +15,7 @@ import type { ModelBinding } from '../../shared/provider-types';
 // native paths.
 import { nativeStoreSlug } from '../slug-encoding';
 import { NativeHome } from '../native-home';
-import { shortenPathTokens } from '../conversations/naming-core';
+import { shortenPathTokens, stripLeadingAttachmentPaths } from '../conversations/naming-core';
 import { createScanCache, type ScanCache } from '../scan-cache';
 import path from 'path';
 
@@ -536,7 +536,7 @@ export class SessionStore {
         if (e && typeof e === 'object' && e.type === 'user-message' && e.data?.text != null) {
           // Keep the Resume Browser's raw opening excerpt and cap; only make
           // path tokens readable, without rewriting the persisted user text.
-          title = shortenPathTokens(String(e.data.text)).slice(0, DERIVED_TITLE_MAX);
+          title = shortenPathTokens(stripLeadingAttachmentPaths(String(e.data.text))).slice(0, DERIVED_TITLE_MAX);
           break;
         }
       }

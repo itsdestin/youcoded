@@ -149,20 +149,23 @@ export function useAvailabilityData(reloadKey?: unknown): AvailabilityData & { l
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // WHY (error inventory 2026-09-10, row 33): a failed read used to become two empty lists, which
+  // the Default model row then judged as "provider not set up". A failure now leaves `loaded`
+  // false, so nothing is judged from a list we never received.
   const { status: claudeStatus } = useClaudeStatus();
   useEffect(() => {
     let cancelled = false;
     const api = (window as any).claude?.providers;
     if (!api?.list || !api?.catalog) { setLoaded(true); return; }
     Promise.all([
-      api.list().catch(() => []),
-      api.catalog().catch(() => []),
+      api.list(),
+      api.catalog(),
     ]).then(([list, cat]: [any, any]) => {
       if (cancelled) return;
       setProviders(Array.isArray(list) ? list : []);
       setCatalog(Array.isArray(cat) ? cat : []);
       setLoaded(true);
-    }).catch(() => { if (!cancelled) setLoaded(true); });
+    }).catch(() => { /* leave `loaded` false: we know nothing, so we claim nothing */ });
     return () => { cancelled = true; };
   }, [reloadKey]);
   return { providers, catalog, claudeStatus, loaded };

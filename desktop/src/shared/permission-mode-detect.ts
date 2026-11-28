@@ -41,10 +41,28 @@ function isFooterMatch(data: string, index: number, length: number): boolean {
   return /^(?:\s|\x1b\[[0-9;?]*[A-Za-z])*\(shift\+tab/i.test(data.slice(index + length, index + length + 40));
 }
 
-export function detectPermissionMode(data: string): PermissionMode | null {
+/**
+ * `newFrom`: count only a phrase that ENDS past this index. WHY (2026-11-01 phone test): the phone's terminal reads arrive in
+ * smaller pieces, so "⏵⏵ auto mode on" was split across two and never seen — the badge said NORMAL while Claude Code said auto.
+ * The caller (session-live.ts) now passes the previous piece's tail + this piece and `newFrom` = the tail's length, so a phrase
+ * completed by this piece is read with its glyph, while a phrase wholly inside the old tail is NOT re-counted — that keeps the
+ * stale-carry problem described above away (an old "plan mode on" cannot outrank a fresh "plan mode off").
+ */
+/** Cursor moves to a column (`ESC[nG`) or forward (`ESC[nC`), which a terminal program may print instead of the spaces between words. */
+const CURSOR_GAP_RE = /\x1b\[\d*[GC]/g;
+
+export function detectPermissionMode(raw: string, rawNewFrom = 0): PermissionMode | null {
+  // WHY (2026-11-01 phone test, raw bytes read off the phone): Claude Code there draws the footer as
+  // "⏵⏵\x1b[6Gauto\x1b[11Gmode\x1b[16Gon" — a cursor move instead of each space — so the phrase never matched and the
+  // badge said NORMAL while Claude Code said auto. Read each such move as one space (both halves separately, so `newFrom` still
+  // points at the same place).
+  const head = raw.slice(0, rawNewFrom).replace(CURSOR_GAP_RE, ' ');
+  const data = head + raw.slice(rawNewFrom).replace(CURSOR_GAP_RE, ' ');
+  const newFrom = head.length;
   if (!MAYBE_MODE_RE.test(data)) return null;
   const found = new Set<string>();
   for (const m of data.matchAll(PHRASES_RE)) {
+    if (m.index! + m[0].length <= newFrom) continue;
     if (isFooterMatch(data, m.index!, m[0].length)) found.add(m[0].toLowerCase());
   }
   if (found.size === 0) return null;
@@ -54,4 +72,21 @@ export function detectPermissionMode(data: string): PermissionMode | null {
   if (found.has('accept edits on')) return 'auto-accept';
   if (found.has('plan mode on')) return 'plan';
   return 'normal';
+}
+
+// WHY (2026-11-09 final review F-7): the app now asks Claude Code to start in auto. Where the plan, the model or fast
+// mode rules auto out, Claude Code falls back to its plain mode and says so in one of these notices (read from
+// Claude Code 2.1.300's own text and seen in real 2.1.281 captures). Its plain mode draws no footer at all, so without
+// this the badge would go on saying AUTO.
+// WHY a separate question, asked ONLY about a session believed to be in auto (main/session-live.ts): the real
+// captures show the same notice flashing by while a session sits in plan mode, where it changes nothing. Treating
+// it as "the mode is now normal" everywhere turned a correct PLAN badge into NORMAL.
+const AUTO_REFUSED_RE = /auto mode (?:is unavailable|unavailable|isn['’]t available|is off while)/i;
+
+/** Did this piece complete one of Claude Code's "auto is not available" notices? (`rawNewFrom` as in detectPermissionMode.) */
+export function detectAutoRefused(raw: string, rawNewFrom = 0): boolean {
+  const head = raw.slice(0, rawNewFrom).replace(CURSOR_GAP_RE, ' ');
+  const data = head + raw.slice(rawNewFrom).replace(CURSOR_GAP_RE, ' ');
+  const m = AUTO_REFUSED_RE.exec(data);
+  return !!m && m.index + m[0].length > head.length;
 }

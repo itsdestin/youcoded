@@ -61,7 +61,7 @@ const LOCK_STALE_MS = 30_000;
  * casWrite and mutateFileUnderLock so both use identical lock semantics
  * (atomic mkdir on POSIX + NTFS, 30s stale-lock breaking).
  */
-async function acquireLock(lock: string): Promise<boolean> {
+async function acquireLock(lock: string, maxWaitMs: number = LOCK_MAX_WAIT_MS): Promise<boolean> {
   const start = Date.now();
   while (true) {
     try {
@@ -87,7 +87,7 @@ async function acquireLock(lock: string): Promise<boolean> {
       } catch {
         // Ignore stat errors (lock may have just been released)
       }
-      if (Date.now() - start > LOCK_MAX_WAIT_MS) {
+      if (Date.now() - start > maxWaitMs) {
         return false;
       }
       await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
@@ -203,10 +203,14 @@ export async function mutateFileUnderLock(
   // WHY: bounded/fatal-decoding readers must run INSIDE the write lock too;
   // validating outside it leaves a race with a replaced or growing document.
   readCurrent?: (target: string) => Promise<string | null>,
+  // WHY (card #11 b): one caller — the background retry of the launch edits to
+  // ~/.claude/settings.json — may wait longer than the shared 3 s. Every other
+  // caller passes nothing and keeps LOCK_MAX_WAIT_MS.
+  opts: { maxWaitMs?: number } = {},
 ): Promise<boolean> {
   await fs.mkdir(dirname(target), { recursive: true });
   const lock = target + '.lock';
-  if (!(await acquireLock(lock))) return false;
+  if (!(await acquireLock(lock, opts.maxWaitMs))) return false;
   try {
     let onDisk: string | null = null;
     try {

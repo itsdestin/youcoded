@@ -45,6 +45,8 @@ interface ProjectSwitcherProps {
 import { SearchIcon, PlusIcon, TrashIcon } from './icons';
 import { Button, CloseButton, Pill, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
+import { prefersTouchInput } from '../../utils/touch-input';
+import { Tooltip } from '../ui';
 
 export function ProjectSwitcher({
   projects,
@@ -68,7 +70,10 @@ export function ProjectSwitcher({
 
   // Focus the search field on open. WHY: autoFocus inside an overlay can race the
   // mount/scrim; the ref pattern is reliable.
+  // Not on touch (2026-11-01 phone test): the on-screen keyboard jumped up and covered the
+  // project list on open, the same problem the command drawer and Resume had. Tap the field to type.
   useEffect(() => {
+    if (prefersTouchInput()) return;   // already true in the phone app (utils/touch-input.ts)
     inputRef.current?.focus();
   }, []);
 
@@ -217,15 +222,19 @@ export function ProjectSwitcher({
                     <span className="flex items-center gap-1.5 min-w-0">
                       <span className="text-sm font-medium text-fg truncate">{shown}</span>
                     </span>
-                    <span className="block font-mono text-2xs text-fg-muted truncate" title={p.path}>
-                      {p.path}
-                    </span>
+                    <Tooltip text={p.path}>
+                      <span className="block font-mono text-2xs text-fg-muted truncate">
+                        {p.path}
+                      </span>
+                    </Tooltip>
                     {/* Description as a third line (unchanged): rows without one keep their
                         height; one line, italic in quotes like the hero. */}
                     {desc && (
-                      <span className="block text-2xs italic text-fg-dim truncate" title={desc}>
-                        “{desc}”
-                      </span>
+                      <Tooltip text={desc}>
+                        <span className="block text-2xs italic text-fg-dim truncate">
+                          “{desc}”
+                        </span>
+                      </Tooltip>
                     )}
                   </span>
                   {/* The row's right side: counts, then the status pill, on one centre line —
@@ -244,15 +253,19 @@ export function ProjectSwitcher({
                       </span>
                     )}
                     {p.missing && (
-                      <span title="This folder isn't where it was — it was moved or deleted outside YouCoded." className="shrink-0 flex">
-                        <Pill tone="warning" dot>Folder missing</Pill>
-                      </span>
+                      <Tooltip text="This folder isn't where it was — it was moved or deleted outside YouCoded.">
+                        <span className="shrink-0 flex">
+                          <Pill tone="warning" dot>Folder missing</Pill>
+                        </span>
+                      </Tooltip>
                     )}
                     {/* Sync as a status pill with its dot (PS-2) — where the bare dot was. */}
                     {sync && (
-                      <span title={sync.detail} className="shrink-0 flex">
-                        <Pill tone={sync.tone} dot>{sync.short}</Pill>
-                      </span>
+                      <Tooltip text={sync.detail}>
+                        <span className="shrink-0 flex">
+                          <Pill tone={sync.tone} dot>{sync.short}</Pill>
+                        </span>
+                      </Tooltip>
                     )}
 
                   </span>

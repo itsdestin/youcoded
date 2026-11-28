@@ -112,6 +112,9 @@ function makeSupervisor(fetchImpl: any, extra: Record<string, any> = {}) {
     // An empty /proc by default: the load progress bar reads it asynchronously
     // now, and a test must never depend on the real machine's processes.
     procFs: emptyProcFs,
+    // Likewise "who is on our port": the default runs `ss`/`netstat` on the real
+    // machine. Unknown (null) = the identity guard passes, as before.
+    pidOnPort: () => null,
     // The placeholder cache dir does not exist, so its scan is [] — answered
     // instantly here, because the real scan is async disk I/O now and a
     // fake-timer test cannot wait for it (under full-suite load the model poll
@@ -192,6 +195,7 @@ describe('EngineSupervisor', () => {
       '--no-webui', '--jinja',
       '--models-dir', 'C:/fake/cache', // discovers dropped GGUFs (LLAMA_CACHE alone doesn't)
       '--models-max', '2',
+      '--no-cache-idle-slots',       // idle chats keep their reading (2026-11-07)
       '--spec-default',              // draft-free speculative decoding (2026-09-04)
       '--cache-type-k', 'q8_0',      // 8-bit KEY cache only — see the WHY in the supervisor
       '--models-preset', PRESET_PATH, // per-model settings (design §C2)
@@ -726,12 +730,14 @@ const BASE_ARGS_FOR = (cacheDir: string): string[] => ([
   '--no-webui', '--jinja',
   '--models-dir', cacheDir,
   '--models-max', '2',
+  '--no-cache-idle-slots',
 ]);
 const BASE_ARGS = [
   '--host', '127.0.0.1', '--port', '9999',
   '--no-webui', '--jinja',
   '--models-dir', 'C:/fake/cache',
   '--models-max', '2',
+  '--no-cache-idle-slots',
 ];
 
 describe('EngineSupervisor — spawn config and the preset file', () => {
@@ -1624,15 +1630,25 @@ describe('findModelChildRss', () => {
     expect(reads).not.toContain('/proc/999/cmdline');
   });
 
-  it('a pid found on an earlier tick costs two reads and no directory listing', async () => {
+  it('a pid found on an earlier tick costs three small reads and no directory listing', async () => {
     const { procFs, dirs, reads } = fakeProcFs({
       '/proc/100/task/100/children': '300',
       '/proc/300/cmdline': MODEL_CMD,
       '/proc/300/status': statusWith(4096),
     });
     expect(await findModelChildRss('m-Q4_K_M', 100, 300, procFs)).toEqual({ pid: 300, bytes: 4096 * 1024 });
-    expect(reads).toEqual(['/proc/300/cmdline', '/proc/300/status']);
+    expect(reads).toEqual(['/proc/300/cmdline', '/proc/300/status', '/proc/300/io']);
     expect(dirs).toEqual([]);
+  });
+
+  it('also reports the bytes the model child has read, which is what climbs on a GPU load', async () => {
+    const { procFs } = fakeProcFs({
+      '/proc/300/cmdline': MODEL_CMD,
+      '/proc/300/status': statusWith(160_000),
+      '/proc/300/io': 'rchar: 30900000000\nwchar: 12\nsyscr: 9\n',
+    });
+    expect(await findModelChildRss('m-Q4_K_M', 100, 300, procFs))
+      .toEqual({ pid: 300, bytes: 160_000 * 1024, readBytes: 30_900_000_000 });
   });
 
   it('a remembered pid now running something else is NOT reported — the search runs again', async () => {
@@ -1716,6 +1732,87 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     expect(emitted.at(-1)?.[0]).toMatchObject({ id: 'm-Q4_K_M', state: 'loading', loadedBytes: 500 * 1024 });
   });
 
+  it('the bar follows bytes read when memory stays flat, and a wake from sleep counts only new reads', async () => {
+    let rchar = 0;
+    const procFs: ProcFs = {
+      readdir: async (d) => { if (d === '/proc/4242/task') return ['4242']; return enoent(); },
+      readFile: async (p) => {
+        if (p === '/proc/4242/task/4242/children') return '5000';
+        if (p === '/proc/5000/cmdline') return MODEL_CMD;
+        if (p === '/proc/5000/status') return statusWith(100); // VmRSS flat, as on Vulkan
+        if (p === '/proc/5000/io') return `rchar: ${rchar}\n`;
+        return enoent();
+      },
+    };
+    let state: 'loaded' | 'loading' | 'sleeping' = 'loading';
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/health')) return { ok: true, status: 200, json: async () => ({ status: 'ok' }) } as any;
+      if (u.includes('/models')) return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-Q4_K_M', size: 10_000_000, status: { value: state } }] }) } as any;
+      return { ok: true, status: 200, text: async () => '' } as any;
+    });
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(fetchImpl, { procFs, scanCacheImpl: async () => [] });
+    await sup.ensureRunning();
+    await flush();
+    const latest = () => (sup as any).lastPolledModels?.[0];
+
+    rchar = 4_000_000;
+    await sup.pollModelsNow();
+    expect(latest()).toMatchObject({ state: 'loading', loadedBytes: 4_000_000 });
+
+    rchar = 9_800_000;
+    await sup.pollModelsNow();
+    state = 'loaded';
+    await sup.pollModelsNow();
+
+    // Same process wakes from sleep: its counter starts at 9.8 MB already.
+    state = 'loading';
+    rchar = 9_800_000 + 1_500_000;
+    await sup.pollModelsNow();
+    expect(latest()).toMatchObject({ state: 'loading', loadedBytes: 1_500_000 });
+  });
+
+  it('with no byte reading, a load carries its expected time, and a finished load reports how long it took', async () => {
+    const { fetchImpl, setLoading } = loadingFetch();
+    mockSpawn.mockReturnValue(makeFakeChild());
+    const expectedLoadMs = vi.fn(() => 12_000);
+    sup = makeSupervisor(fetchImpl, { scanCacheImpl: async () => [], expectedLoadMs });
+    await sup.ensureRunning();
+    await flush();
+    const timed: any[] = [];
+    sup.on('load-timed', (e) => timed.push(e));
+    setLoading();
+    await sup.pollModelsNow();
+    expect(sup.latestModels()?.[0]).toMatchObject({ state: 'loading', loadExpectedMs: 12_000 });
+    expect(expectedLoadMs).toHaveBeenCalledWith('m-Q4_K_M', 10_000_000);
+    (sup as any).loadSeenAt.set('m-Q4_K_M', Date.now() - 9_000); // the load began 9 s ago
+    (fetchImpl as any).mockImplementation(async (url: string) => (String(url).includes('/models')
+      ? { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-Q4_K_M', size: 10_000_000, status: { value: 'loaded' } }] }) }
+      : { ok: true, status: 200, json: async () => ({ status: 'ok' }) }) as any);
+    await sup.pollModelsNow();
+    expect(timed).toHaveLength(1);
+    expect(timed[0]).toMatchObject({ modelId: 'm-Q4_K_M', sizeBytes: 10_000_000 });
+    expect(timed[0].ms).toBeGreaterThanOrEqual(9_000);
+  });
+
+  it('stopping the engine tells listeners every model is unloaded, so no chat stays on "loading"', async () => {
+    const { fetchImpl, setLoading } = loadingFetch();
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(fetchImpl, { scanCacheImpl: async () => [] });
+    await sup.ensureRunning();
+    await flush();
+    setLoading();
+    await sup.pollModelsNow();
+    expect(sup.latestModels()?.[0]).toMatchObject({ id: 'm-Q4_K_M', state: 'loading' });
+    const emitted: any[] = [];
+    sup.on('models-changed', (ms) => emitted.push(ms));
+    await sup.stop();
+    expect(emitted.at(-1)).toEqual([expect.objectContaining({ id: 'm-Q4_K_M', state: 'unloaded', loaded: false })]);
+    expect(emitted).toHaveLength(1);
+    expect(sup.latestModels()).toBeNull();
+  });
+
   it('a lookup that finishes after the engine stopped leaves nothing behind', async () => {
     const proc = gatedProc();
     const { fetchImpl, setLoading } = loadingFetch();
@@ -1738,7 +1835,9 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     expect((sup as any).loadProgress.size).toBe(0);
     expect((sup as any).loadingPid.size).toBe(0);
     expect(sup.loadedModelsBytes()).toBeUndefined();
-    expect(emitted).toEqual([]);
+    // Only the stop's own "everything is unloaded" notice — never the stale
+    // reading's "loading".
+    expect(emitted).toEqual([[expect.objectContaining({ id: 'm-Q4_K_M', state: 'unloaded' })]]);
   });
 });
 
@@ -1780,5 +1879,37 @@ describe('EngineSupervisor — the engine\'s password', () => {
     for (const c of fetchMock.mock.calls) expect(auth(c), String(c[0])).toBe(`Bearer ${key}`);
     // caller headers survive
     expect(new Headers(fetchMock.mock.calls[0][1].headers).get('content-type')).toBe('application/json');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fault 3: a request whose body nobody reads must not hold the engine busy.
+// ---------------------------------------------------------------------------
+describe('EngineSupervisor — abandoned bodies do not leak inFlight', () => {
+  const okFetch = () => vi.fn(async (url: string) => {
+    const u = String(url);
+    if (u.endsWith('/health')) return { ok: true, status: 200 } as any;
+    if (u.includes('/models')) return { ok: true, status: 200, json: async () => ({ data: [] }) } as any;
+    return new Response(JSON.stringify({ choices: [] }), { status: 200 }); // the 'hi' reply, with a body
+  });
+
+  it('a successful model warm-up releases inFlight', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(okFetch());
+    await sup.ensureRunning();
+    await sup.loadModel('m-Q4_K_M');
+    // loadModel counts the request synchronously, so this waits for the release itself.
+    await vi.waitFor(() => expect(sup.busy()).toBe(false));
+  });
+
+  it('aborting the request releases inFlight even if the body is never read', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(okFetch());
+    await sup.ensureRunning();
+    const ac = new AbortController();
+    await sup.trackedFetch('http://127.0.0.1:9999/v1/chat/completions', { method: 'POST', body: '{}', signal: ac.signal });
+    expect(sup.busy()).toBe(true);
+    ac.abort();
+    expect(sup.busy()).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import ts from 'typescript';
 import { describe, it, expect } from 'vitest';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
 
 // An `aria-*` prop on a COMPONENT that does not accept it is silently dropped.
 //
@@ -65,10 +66,13 @@ function droppedAriaProps(program: ts.Program, files: string[]): string[] {
   return out;
 }
 
-// Building a type checker over the renderer's imports takes a few seconds of CPU.
-const CHECKER_BUDGET_MS = 60_000;
+// Building a type checker over the renderer's imports takes ~10 s of CPU alone (measured 2026-11-18).
+// WHY CPU, not wall time: it is pure CPU, and a 60 s wall budget failed at load 58-149 while the file passed
+// alone (tests/helpers/cpu-budget.ts). The wall limit is only a hang detector.
+const CHECKER_CPU_BUDGET_MS = 60_000;
 
-describe('aria-* props on components', () => {
+describe('aria-* props on components', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
+  budgetCpuPerTest(CHECKER_CPU_BUDGET_MS);
   it('the scan flags a component without the prop and passes one that takes HTML attributes', () => {
     // Self-test on a file that exists only in memory, so the guard cannot go blind unnoticed.
     const probe = join(RENDERER, '__aria-probe__.tsx');
@@ -89,7 +93,7 @@ describe('aria-* props on components', () => {
     expect(host.getSourceFile(probe.replaceAll('/', '\\'), ts.ScriptTarget.Latest)?.text).toBe(source);
     const program = ts.createProgram([probe], options, host);
     expect(droppedAriaProps(program, [probe])).toEqual(['src/renderer/__aria-probe__.tsx:4 <Plain aria-label>']);
-  }, CHECKER_BUDGET_MS);
+  });
 
   it('no aria-* prop in the renderer is written on a component that drops it', () => {
     const files = walk(RENDERER).filter((f) => CANDIDATE.test(readFileSync(f, 'utf8')));
@@ -98,5 +102,5 @@ describe('aria-* props on components', () => {
     const dropped = droppedAriaProps(program, files);
     expect(dropped, `These aria-* props are written on components whose props do not take them, so they vanish:\n  ${dropped.join('\n  ')}\n\n`
       + 'Add the prop to the component (and pass it to the element that should carry it), or put it on that element directly.').toEqual([]);
-  }, CHECKER_BUDGET_MS);
+  });
 });

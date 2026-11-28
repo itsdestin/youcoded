@@ -29,6 +29,7 @@
  * fails only if BOTH destinations fail.
  */
 
+import { returnToApp } from './headless/host-bridge';
 import {
   startDeviceFlow as realStartDeviceFlow,
   pollForToken as realPollForToken,
@@ -67,6 +68,8 @@ export interface GithubConnectDeps {
   storeToken?: (token: string, login?: string) => Promise<void>;
   /** REST GET /user → login, so the success payload works with no gh at all. */
   fetchLogin?: (token: string) => Promise<string | undefined>;
+  /** Told once when GitHub approves and the connect succeeds. Defaults to bringing YouCoded back on the phone. */
+  onConnected?: () => void;
 }
 
 export interface GithubConnect {
@@ -84,6 +87,10 @@ export function createGithubConnect(
   const pollForToken = deps.pollForToken ?? realPollForToken;
   const completeLogin = deps.completeLogin ?? realCompleteLogin;
   const detectGh = deps.detectGh ?? realDetectGh;
+  // WHY (Destin, final review Q-12): after the person approves on github.com the phone's browser is left on
+  // GitHub's page; bring YouCoded back. returnToApp does nothing unless the Android app started this backend.
+  // Success only: a denial or an expiry happens with nobody watching, and must not pull the app forward.
+  const onConnected = deps.onConnected ?? returnToApp;
   // Default resolves the client PER CALL (not at create time): ipc-handlers
   // constructs this orchestrator during registration, and the client singleton
   // is registered from main.ts — capture-at-create would race that ordering.
@@ -199,7 +206,10 @@ export function createGithubConnect(
           /* leave login undefined */
         }
       }
+      // Only when this flow really settles (not superseded or cancelled), so the app is never pulled forward twice.
+      const stillCurrent = myId === activeFlowId;
       finish({ ok: true, login });
+      if (stillCurrent) { try { onConnected(); } catch { /* a return hook must never break the connect */ } }
     })();
 
     return {

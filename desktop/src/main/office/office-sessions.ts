@@ -8,6 +8,9 @@ export interface OfficeSession {
   temp: string;
   senderId: number;
   lastSnapshotAt: number;
+  /** The file's size and modified time as this editor last knew it (when it opened, and just after each of its own
+   *  saves). A save that finds something else on disk knows the file changed outside Office (card #34). */
+  knownStamp?: { size: number; mtimeMs: number };
 }
 
 // WHY one origin per document (design §3a, R2-1/R2-2): a distinct, unguessable

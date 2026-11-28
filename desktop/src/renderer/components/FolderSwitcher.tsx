@@ -15,7 +15,6 @@ import { fieldClasses, Pill, Tooltip, ErrorState } from './ui';
 import { FIELD_TRIGGER_STATES } from './ui/field';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
-import { isAndroid } from '../platform';
 import { POPOVER_Z } from './overlays/Overlay';
 
 interface SavedFolder {
@@ -266,9 +265,10 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
               even when there are no saved folders yet. Same row shape as a
               folder; the sentinel is swapped for the app-owned empty folder in
               main (shared/no-folder.ts). */}
-          {/* Desktop and remote only: the phone's own runtime creates sessions
-              from the cwd it is handed and knows nothing of the sentinel. */}
-          {!isAndroid() && (
+          {/* On the phone too (card #213, 2026-11-08): the phone has run the
+              desktop backend since 2026-10-14, which swaps the sentinel like
+              any computer, and the phone no longer lists its app-private Home,
+              so this row is its clean starting place (main/saved-folders.ts). */}
           <div className="py-1 border-b border-edge-dim">
             <div
               onClick={() => handleSelect(NO_FOLDER_CWD)}
@@ -286,7 +286,6 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
               </div>
             </div>
           </div>
-          )}
           {loadFailed && folders.length === 0 && (
             <div className="p-2">
               <ErrorState variant="inline" message="Couldn't load your projects." onRetry={() => { void load(); }} />
@@ -329,21 +328,27 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
                       // whatever room is left after the name.
                       <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
                         <span className="text-xs shrink-0">{shown}</span>
-                        <span className="text-3xs text-fg-muted truncate" title={f.path}>{f.path}</span>
+                        <Tooltip text={f.path}>
+                          <span className="text-3xs text-fg-muted truncate">{f.path}</span>
+                        </Tooltip>
                       </div>
                     ) : (
                       <div className="flex-1 min-w-0">
                         <div className="text-xs truncate">{shown}</div>
-                        <div className="text-3xs text-fg-muted truncate" title={f.path}>
-                          {f.path}
-                        </div>
+                        <Tooltip text={f.path}>
+                          <div className="text-3xs text-fg-muted truncate">
+                            {f.path}
+                          </div>
+                        </Tooltip>
                       </div>
                     )}
 
                     {/* Stale warning. The amber "Folder missing" pill's job, said as a tinted pill
                         (decisions "Project switcher: rows" — amber); not red words (small-fixes-3#SF3-10). */}
                     {!f.exists && (
-                      <span title="Directory not found" className="shrink-0"><Pill tone="warning">Missing</Pill></span>
+                      <Tooltip text="Directory not found">
+                        <span className="shrink-0"><Pill tone="warning">Missing</Pill></span>
+                      </Tooltip>
                     )}
 
                     {/* Selected check */}

@@ -27,7 +27,11 @@ export interface SigninListener {
  *  any web page can send this port a made-up 64-character value, and "first one wins" let that block the real
  *  sign-in. Now every well-formed value is queued; the caller tries each against the Worker (which accepts only the
  *  real one) and the listener keeps waiting for the real one until its time limit or close(). */
-export async function startSigninListener(ttlMs = SIGNIN_LISTENER_TTL_MS): Promise<SigninListener> {
+export async function startSigninListener(ttlMs = SIGNIN_LISTENER_TTL_MS, onBrowserArrived?: () => void): Promise<SigninListener> {
+  // WHY (Destin, final review Q-12): the browser reaching this listener is the moment the web sign-in is over, so
+  // the phone can bring YouCoded back then (it works even if the app's page is asleep behind the browser and
+  // would not poll). Told once per sign-in, never for a refused request.
+  let arrivedTold = false;
   const queue: string[] = [];
   let closed = false;
   const server = http.createServer((req, res) => {
@@ -42,6 +46,10 @@ export async function startSigninListener(ttlMs = SIGNIN_LISTENER_TTL_MS): Promi
     if (queue.length < MAX_QUEUED && !queue.includes(given)) queue.push(given);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
     res.end(DONE_PAGE);
+    if (!arrivedTold) {
+      arrivedTold = true;
+      try { onBrowserArrived?.(); } catch { /* a return hook must never break sign-in */ }
+    }
   });
   const timer = setTimeout(() => close(), ttlMs);
   timer.unref?.();
@@ -62,7 +70,9 @@ export async function startSigninListener(ttlMs = SIGNIN_LISTENER_TTL_MS): Promi
       });
       return { port: (server.address() as AddressInfo).port, take: () => queue.shift() ?? null, isClosed: () => closed, close };
     } catch (e: any) {
-      if (e?.code !== 'EADDRINUSE') { close(); throw e; }
+      // WHY EACCES too: Windows reserves some port ranges (Hyper-V, WSL, excluded ranges) and answers a listen
+      // there with EACCES, not EADDRINUSE. Another random port works, so treat it as "this one is taken".
+      if (e?.code !== 'EADDRINUSE' && e?.code !== 'EACCES') { close(); throw e; }
     }
   }
   close();

@@ -65,7 +65,7 @@ export class PageVersions {
 
   private serial<T>(pageId: string, work: () => Promise<T>): Promise<T> {
     const prev = this.chains.get(pageId) ?? Promise.resolve();
-    const next = prev.catch(() => {}).then(work);
+    const next = prev.catch(() => {}).then(work); // benign: the earlier save already told its own caller; this only keeps the queue moving
     this.chains.set(pageId, next);
     return next;
   }
@@ -73,7 +73,7 @@ export class PageVersions {
   private async readNow(pageDir: string): Promise<Files> {
     const out: Files = {};
     await Promise.all(VERSION_FILES.map(async (f) => {
-      try { out[f] = await fs.readFile(path.join(pageDir, f), 'utf8'); } catch { /* absent */ }
+      try { out[f] = await fs.readFile(path.join(pageDir, f), 'utf8'); } catch { /* benign: absent */ }
     }));
     return out;
   }
@@ -87,7 +87,7 @@ export class PageVersions {
       try {
         const v = JSON.parse(await fs.readFile(path.join(dir, n), 'utf8')) as Saved;
         if (typeof v?.at === 'number' && v.files && typeof v.files === 'object') saved.push(v);
-      } catch { /* a damaged file is skipped, never fatal */ }
+      } catch { /* benign: a damaged file is skipped, never fatal */ }
     }
     return saved.sort((a, b) => b.at - a.at);
   }

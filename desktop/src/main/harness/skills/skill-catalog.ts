@@ -24,6 +24,12 @@ export interface SkillCatalog {
    *  so it must stay small. Never put bodies here. */
   list(): Array<{ id: string; description: string }>;
   load(id: string): LoadedSkill;
+  /** Whether a skill comes from this project's own folder or is installed for
+   *  every project — for the "What the assistant was given" panel only.
+   *  WHY a separate method, not a field on list(): list() rides in the tool
+   *  schema on every turn and must stay id + description. Optional so the
+   *  hand-built catalogs in tests and child sessions need not supply it. */
+  scopeOf?(id: string): 'global' | 'project' | undefined;
 }
 
 export class SkillNotFound extends Error {
@@ -78,6 +84,7 @@ export function createSkillCatalog(entries?: SkillEntry[], projectCwd?: string):
   const byId = new Map(discovered.map((e) => [e.id, e]));
   return {
     list: () => discovered.map((e) => ({ id: e.id, description: e.description })),
+    scopeOf: (id) => { const e = byId.get(id); return e ? (e.source === 'project' ? 'project' : 'global') : undefined; },
     load(id: string): LoadedSkill {
       // Exact id first, then BARE NAME. scanSkills namespaces plugin skills as
       // `<plugin>:<skill>` (wecoded-themes-plugin:theme-builder), but users — and

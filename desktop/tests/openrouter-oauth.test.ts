@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { OpenRouterSignIn, type CallbackHandler, type CallbackResponse } from '../src/main/providers/openrouter-oauth';
 
 function harness(opts: { exchange?: Response | Error; verdict?: 'verified' | 'rejected' | 'unchecked'; openFails?: boolean } = {}) {
+  const onBrowserDone = vi.fn();
   let handler: CallbackHandler | null = null;
   const closed = vi.fn();
   const opened: string[] = [];
@@ -22,6 +23,7 @@ function harness(opts: { exchange?: Response | Error; verdict?: 'verified' | 're
   const s = new OpenRouterSignIn({
     openExternal: async (url) => { if (opts.openFails) throw new Error('no browser'); opened.push(url); },
     acceptKey,
+    onBrowserDone,
     fetch: fetch as any,
     // Deterministic randomness, so the test can recompute the challenge.
     randomBytes: (size) => new Uint8Array(size).fill(++n),
@@ -39,10 +41,40 @@ function harness(opts: { exchange?: Response | Error; verdict?: 'verified' | 're
     await vi.waitFor(() => expect(res.body).toBeDefined());
     return res;
   };
-  return { s, opened, fetch, acceptKey, closed, hit, fireTimeout: () => timerFn!() };
+  return { s, opened, fetch, acceptKey, closed, onBrowserDone, hit, fireTimeout: () => timerFn!() };
 }
 
 describe('OpenRouterSignIn', () => {
+  // WHY (Destin, final review Q-12): on the phone the browser must hand the person back to YouCoded when it is done,
+  // exactly once, and never for a stray request, a cancel or a timeout.
+  it('tells the app to come back once when the browser finishes, signed in or not', async () => {
+    const ok = harness();
+    await ok.s.signIn();
+    const path = new URL(new URL(ok.opened[0]).searchParams.get('callback_url')!).pathname;
+    expect(ok.onBrowserDone).not.toHaveBeenCalled();
+    await ok.hit('/or-callback/wrong?code=abc');
+    expect(ok.onBrowserDone).not.toHaveBeenCalled();
+    await ok.hit(`${path}?code=abc`);
+    expect(ok.onBrowserDone).toHaveBeenCalledTimes(1);
+
+    const bad = harness({ verdict: 'rejected' });
+    await bad.s.signIn();
+    const p2 = new URL(new URL(bad.opened[0]).searchParams.get('callback_url')!).pathname;
+    await bad.hit(`${p2}?code=abc`);
+    expect(bad.onBrowserDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not bring the app forward on Cancel or a timeout', async () => {
+    const a = harness();
+    await a.s.signIn();
+    await a.s.cancelSignIn();
+    const b = harness();
+    await b.s.signIn();
+    b.fireTimeout();
+    expect(a.onBrowserDone).not.toHaveBeenCalled();
+    expect(b.onBrowserDone).not.toHaveBeenCalled();
+  });
+
   it('opens OpenRouter with a loopback callback, S256 challenge and the YouCoded key label', async () => {
     const h = harness();
     await h.s.signIn();

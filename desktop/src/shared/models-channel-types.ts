@@ -44,6 +44,10 @@ export interface ModelsChannelTypes {
   'openrouter:cancel-sign-in': { request: void; response: boolean };
   'claude-code:status': { request: { refresh?: boolean } | undefined; response: ClaudeAccountStatus };
   'claude-code:install': { request: void; response: { success: boolean; error?: string } };
+  'claude-code:sign-in': { request: void; response: boolean };
+  'claude-code:cancel-sign-in': { request: void; response: boolean };
+  // Card #236: the app's own connection check. Never throws; offline means both probes failed.
+  'network:check': { request: void; response: { online: boolean } };
   // WebSearch keys. A key goes IN (set-key, test) and is never in an answer: list says only whether one exists.
   'search:list': { request: void; response: Answer<'searchKeyStore', 'list'> };
   'search:set-key': { request: { backend: 'tavily' | 'exa'; key: string }; response: true };
@@ -72,5 +76,7 @@ export interface ModelsChannelTypes {
   'models:set-settings': { request: { modelId: string; patch?: ModelSettingsWrite }; response: StoredModelSettings | null };
   'models:add-vision': { request: { modelId: string }; response: { downloadId: string } | null };
   'models:memory-check': { request: { modelId: string }; response: Answer<'modelManager', 'memoryCheck'> };
-  'models:load': { request: { modelId: string }; response: true };
+  // `sessionId` (optional, 2026-11-12): the chat the user came back to. Main then also re-reads that
+  // chat in the background (hooks/use-return-warm.ts). An older screen sends none and only loads.
+  'models:load': { request: { modelId: string; sessionId?: string }; response: true };
 }

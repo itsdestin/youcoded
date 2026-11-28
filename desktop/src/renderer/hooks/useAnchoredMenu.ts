@@ -13,6 +13,7 @@
 // stops being true, this is the place to add a scroll/resize listener.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEscClose } from './use-esc-close';
 
 const EDGE_MARGIN = 8;
 
@@ -49,6 +50,11 @@ export function useAnchoredMenu<T extends HTMLElement>(
     const left = Math.min(raw, window.innerWidth - width - EDGE_MARGIN);
     setPos({ top: r.bottom + 4, left: Math.max(EDGE_MARGIN, left) });
   }, [open, width, align]);
+
+  // WHY: Android's Back button only dismisses things registered on the Esc stack
+  // (use-esc-close). This menu closed on the keyboard Escape but was not on the
+  // stack, so Back with the menu open left the app (2026-11-01 phone test).
+  useEscClose(open, () => setOpen(false));
 
   useEffect(() => {
     if (!open) return;

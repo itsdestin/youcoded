@@ -465,7 +465,8 @@ export function FolderField({ folder, onChoose, canChoose, label = 'Choose folde
   return (
     <div className="flex flex-col gap-1.5" data-folder-field>
       <div className={`${CARD_LEVEL_2} flex items-center gap-2 pl-3 pr-1.5 py-1.5`}>
-        <span className={`min-w-0 flex-1 truncate text-sm ${folder ? 'text-fg' : 'text-fg-muted'}`} title={folder}>{folder ?? 'No folder chosen yet'}</span>
+        {/* WHY Tooltip, not title: the app draws its own hover hints (no-native-title-hints guard). */}
+        <Tooltip text={folder ?? 'No folder chosen yet'} placement="bottom"><span className={`min-w-0 flex-1 truncate text-sm ${folder ? 'text-fg' : 'text-fg-muted'}`}>{folder ?? 'No folder chosen yet'}</span></Tooltip>
         {canChoose && <Button variant="secondary" size="sm" disabled={choosing} onClick={() => { void choose(); }}>{choosing ? 'Choosing…' : folder ? 'Change…' : label}</Button>}
       </div>
       {choosing && <div className="text-xs text-fg-muted leading-relaxed" data-folder-waiting>Choose the folder in the window that opened. If you can't see it, it may be behind YouCoded.</div>}

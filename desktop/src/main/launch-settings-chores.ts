@@ -4,6 +4,7 @@ import { mutateSettings, type MutateSettingsResult } from './claude-settings';
 import { reconcileHooksInto, type ReconcileHooksResult } from './hook-reconciler';
 import { applyPromptSuggestionDisabled, type EnforcePromptSuggestionResult } from './disable-prompt-suggestion';
 import { seedCleanupPeriodInto, type SeedRetentionResult } from './retention-default';
+import { seedTuiFullscreenInto, type SeedTuiResult } from './tui-fullscreen-default';
 
 // The launch chores that edit ~/.claude/settings.json, composed for main.ts.
 //
@@ -50,33 +51,56 @@ export interface InstallHooksChoreResult extends Omit<MutateSettingsResult, 'rep
 
 /** Stage the app's hook scripts (skipped when this build already staged them)
  *  and point settings.json's app-owned hooks at them — one locked cycle. */
-export async function runInstallHooksChore(build: { version: string; packaged: boolean }): Promise<InstallHooksChoreResult> {
+export async function runInstallHooksChore(build: { version: string; packaged: boolean },
+  opts: { lockWaitMs?: number } = {}): Promise<InstallHooksChoreResult> {
   const ih = loadInstallHooks();
   if (ih.isWorktreeSource()) return { written: false, copied: false, repaired: 0, skippedWorktree: true };
   const { hookDir, copied } = ih.stageHookScripts({ stamp: `${build.version}|${build.packaged ? 'packaged' : 'dev'}` });
+  launchHookDir = hookDir;
   let repaired = 0;
-  const { repaired: repairedFile, ...r } = await mutateSettings((settings) => { repaired = ih.applyAppHooks(settings, hookDir).repaired; });
+  const { repaired: repairedFile, ...r } = await mutateSettings((settings) => { repaired = ih.applyAppHooks(settings, hookDir).repaired; }, opts);
   ih.deployAutoTitleInstruction();
   return { ...r, copied, repaired, ...(repairedFile ? { repairedFile } : {}) };
+}
+
+// Where this launch staged the hook scripts, for the background retry below.
+let launchHookDir: string | undefined;
+
+/** The background retry's half of install-hooks: ONLY the locked settings.json
+ *  write. WHY: at launch, staging (stageHookScripts) and the CLAUDE.md step
+ *  (deployAutoTitleInstruction) run whether or not the lock is free, so a lock
+ *  refusal leaves only this write undone — and both of those use blocking file
+ *  calls, which a timer after the window is up must never reach (performance
+ *  rule 1). The write itself is async (mutateSettings). */
+async function retryAppHookEntries(opts: { lockWaitMs: number }): Promise<{ refused?: 'locked' }> {
+  const hookDir = launchHookDir;
+  if (!hookDir) return {};   // launch never staged (dev worktree): it wrote nothing to retry
+  const ih = loadInstallHooks();
+  return mutateSettings((settings) => { ih.applyAppHooks(settings, hookDir); }, opts);
 }
 
 export interface SettingsChoresResult extends MutateSettingsResult {
   hooks: ReconcileHooksResult;
   promptSuggestion: EnforcePromptSuggestionResult;
   retention: SeedRetentionResult;
+  /** Phone only: fullscreen display mode seeded when absent (tui-fullscreen-default.ts). */
+  tui: SeedTuiResult;
 }
 
 /** Plugin-hook reconcile, prompt-suggestion off, retention default: three
  *  callbacks, one locked cycle, in that order. */
-export async function runSettingsChores(): Promise<SettingsChoresResult> {
+export async function runSettingsChores({ phone = false, lockWaitMs }: { phone?: boolean; lockWaitMs?: number } = {}): Promise<SettingsChoresResult> {
   let hooks: ReconcileHooksResult = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: 0 };
   let promptSuggestion: EnforcePromptSuggestionResult = { changed: false, prior: undefined };
   let retention: SeedRetentionResult = { changed: false, effective: undefined };
+  let tui: SeedTuiResult = { changed: false, effective: undefined };
   const r = await mutateSettings((settings) => {
     hooks = reconcileHooksInto(settings);
     promptSuggestion = applyPromptSuggestionDisabled(settings);
     retention = seedCleanupPeriodInto(settings);
-  });
+    // Phone only, in the same locked write: see tui-fullscreen-default.ts.
+    if (phone) tui = seedTuiFullscreenInto(settings);
+  }, { lockWaitMs });
   if (r.refused) {
     // The lock could not be taken, so nothing landed; report each chore as
     // unchanged rather than as done — including the reconciler's counts, or
@@ -86,6 +110,64 @@ export async function runSettingsChores(): Promise<SettingsChoresResult> {
     hooks = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: hooks.manifestCount };
     promptSuggestion = { changed: false, prior: promptSuggestion.prior };
     retention = { changed: false, effective: undefined };
+    tui = { changed: false, effective: undefined };
   }
-  return { ...r, hooks, promptSuggestion, retention };
+  return { ...r, hooks, promptSuggestion, retention, tui };
+}
+
+// ── One later, longer try when another program held the lock (card #11 b) ──
+// The launch chores above are awaited BEFORE the window is created (main.ts,
+// headless-boot.ts), with the shared 3 s lock wait; a longer wait there would
+// hold the window back by that much. So the launch attempt is unchanged, and
+// when it is refused for the lock, ONE background retry starts a few seconds
+// later (after the window is up) and waits up to ~10 s for this file only.
+// Order is the launch order: install-hooks first (its settings write only,
+// see retryAppHookEntries), then the three chores —
+// re-run as well after a late install-hooks, since they only write a change.
+// Nothing is shown on screen (that wording is the owner's call); it is logged.
+export const SETTINGS_RETRY_DELAY_MS = 5_000;
+export const SETTINGS_RETRY_LOCK_WAIT_MS = 10_000;
+
+export interface LockedSettingsRetryDeps {
+  runInstallHooks: (opts: { lockWaitMs: number }) => Promise<{ refused?: 'locked' }>;
+  runChores: (opts: { lockWaitMs: number }) => Promise<{ refused?: 'locked' }>;
+  log: (level: 'INFO' | 'WARN', message: string, data?: Record<string, unknown>) => void;
+}
+
+/** Schedules the single retry; returns null (nothing scheduled) unless a launch
+ *  chore was refused for the lock. Never throws, never blocks the caller. */
+export function scheduleLockedSettingsRetry(
+  launch: { installLocked: boolean; choresLocked: boolean },
+  deps: LockedSettingsRetryDeps,
+  delayMs = SETTINGS_RETRY_DELAY_MS,
+): Promise<void> | null {
+  if (!launch.installLocked && !launch.choresLocked) return null;
+  // unref: a pending retry must never keep a quitting process alive.
+  return new Promise<void>((resolve) => { (setTimeout(resolve, delayMs) as unknown as { unref?: () => void }).unref?.(); }).then(async () => {
+    const opts = { lockWaitMs: SETTINGS_RETRY_LOCK_WAIT_MS };
+    try {
+      if (launch.installLocked) {
+        const r = await deps.runInstallHooks(opts);
+        deps.log(r.refused ? 'WARN' : 'INFO', r.refused ? 'Hook entries still not written after a second, longer wait' : 'Hook entries written on the second try', {});
+        if (r.refused) return;
+      }
+      const c = await deps.runChores(opts);
+      deps.log(c.refused ? 'WARN' : 'INFO', c.refused ? 'Settings chores still not written after a second, longer wait' : 'Settings chores written on the second try', {});
+    } catch (e) {
+      deps.log('WARN', 'Settings retry failed', { error: String(e) });
+    }
+  });
+}
+
+/** The launch wiring (main.ts, headless-boot.ts): the retry with the real
+ *  chores. Fire-and-forget — it must never hold launch back. */
+export function startLaunchSettingsRetry(launch: { installLocked: boolean; choresLocked: boolean },
+  log: LockedSettingsRetryDeps['log'], phone = false): void {
+  void scheduleLockedSettingsRetry(launch, {
+    runInstallHooks: retryAppHookEntries,
+    // WHY phone is carried through (merge with the Android work, 2026-11-11): the phone's launch
+    // chores also set Claude Code's fullscreen default; a retry without it would skip that one.
+    runChores: (o) => runSettingsChores({ ...o, phone }),
+    log,
+  });
 }

@@ -1167,7 +1167,7 @@ describe('background execution + idle-boundary delivery', () => {
     await (host as any).live.get('root-1')?.running;
   });
 
-  it('a background completion is injected as a user-role turn when the parent goes idle — never mid-turn', async () => {
+  it('a background completion joins history after the active response, before the next model request', async () => {
     // The PARENT's own turn is gated (manually resolved) so it stays
     // in-flight for as long as the test needs — long enough for an
     // independently-triggered background child to run to completion while
@@ -1229,12 +1229,14 @@ describe('background execution + idle-boundary delivery', () => {
     expect(injected.type).toBe('user-message');
     expect(injected.data.text).toContain('## Report from');
 
-    // Ordering: the parent's own turn-complete happened strictly BEFORE the
-    // injected notice — never spliced mid-turn.
+    // WHY: approved policy delivers at a completed RESPONSE boundary, not only
+    // after the whole turn (which may contain more requests/human corrections).
+    const parentTextIdx = events.findIndex(e => e.type === 'assistant-text' && e.data.text === 'parent turn done');
     const turnCompleteIdx = events.findIndex((e) => e.type === 'turn-complete' && !e.data?.agentId);
     const injectedIdx = events.indexOf(injected);
-    expect(turnCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(injectedIdx).toBeGreaterThan(turnCompleteIdx);
+    expect(parentTextIdx).toBeGreaterThanOrEqual(0);
+    expect(injectedIdx).toBeGreaterThan(parentTextIdx);
+    expect(injectedIdx).toBeLessThan(turnCompleteIdx);
   });
 
   it('the injected report is formatted at DELIVERY time with concurrentReporters = number of pending deliveries', async () => {
@@ -1290,6 +1292,12 @@ describe('background execution + idle-boundary delivery', () => {
       // ...and roughly consistent with the 2-way split, not near-zero.
       expect(len).toBeGreaterThan(budgetShared * APPROX_CHARS_PER_TOKEN * 0.5);
     }
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('a background child that dies mid-run delivers a typed failure notice, not silence', async () => {
@@ -1322,6 +1330,12 @@ describe('background execution + idle-boundary delivery', () => {
     const rec = (host as any).ledger.listFor(root, 'root-1').find((d: any) => d.childId === childId);
     expect(rec.status).toBe('failed');
     expect(rec.failureText).toMatch(/llama-server dropped the connection/);
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('a background completion whose report exceeds the ledger cap spills the full body to a file', async () => {
@@ -1339,6 +1353,7 @@ describe('background execution + idle-boundary delivery', () => {
       undefined, undefined, undefined, undefined, undefined, home,
     );
     await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const events = collect();
 
     const { childId } = await host.spawnSpecialistBackground('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root,
@@ -1356,6 +1371,17 @@ describe('background execution + idle-boundary delivery', () => {
     const spilled = fs.readFileSync(rec.reportPath, 'utf8');
     expect(spilled.length).toBe(huge.length); // the FULL, uncapped body
     expect(spilled.startsWith(huge.slice(0, 200))).toBe(true);
+    // Also wait for the injection itself: this test's own wait ends at 'completed',
+    // which is BEFORE the delivery pass has run, so there would be nothing to settle.
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.data?.injected === 'specialist-report')).toBe(true);
+    });
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('a report already spilled at completion time is not spilled a SECOND time by delivery', async () => {
@@ -1392,6 +1418,12 @@ describe('background execution + idle-boundary delivery', () => {
     expect(writeSpy).toHaveBeenCalledTimes(1);
     const injected = events.find((e) => e.data?.injected === 'specialist-report')!;
     expect(injected.data.text).toContain('Full report saved to:');
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('delivery never overwrites a spill path it just failed to read, and never claims it as the full report', async () => {
@@ -1459,6 +1491,12 @@ describe('background execution + idle-boundary delivery', () => {
     // Plain, honest, model-facing: this is a shortened copy and the rest is
     // gone, full stop — no path implied to exist.
     expect(injected.data.text).toContain('[Truncated to fit. The full report is no longer available');
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   // ---- Fix pass (external review, 2026-08-12): three follow-on gaps ----------
@@ -1495,6 +1533,12 @@ describe('background execution + idle-boundary delivery', () => {
     // than formatting from rec.rawReport alone.
     expect(injected.data.text).toContain(`of ${huge.length} chars`);
     expect(injected.data.text).not.toContain(`of ${RAW_REPORT_CAP_CHARS} chars`);
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('a background completion whose ledger write ALWAYS fails still reaches the parent via the in-memory fallback lane, exactly once, and the ledger record is left honestly stranded', async () => {
@@ -1677,6 +1721,12 @@ describe('background execution + idle-boundary delivery', () => {
     await vi.waitFor(() => expect(host.isIdle('root-1')).toBe(true));
     const result = host.send('root-1', 'are you still there?');
     expect(result.status).toBe('sent');
+    // WHY: the delivery pass that injected the report is still finishing after the
+    // assertions above (it confirms delivery in the ledger — a write under
+    // .youcoded/sessions). destroyAll() drains the transcript but NOT this pass
+    // (destroyEntry awaits appendChain, never entry.running), so teardown's rmSync
+    // could race that write: ENOTEMPTY on ubuntu CI. Await the pass itself, never a sleep.
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('Fix pass 4: a releaseClaim throw on a liveness-mismatch path is swallowed by releaseClaimSafely, not merely papered over by runTurns\' outer finally', async () => {
@@ -1720,7 +1770,10 @@ describe('background execution + idle-boundary delivery', () => {
     let enteredNotice = false;
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((res) => { releaseGate = res; });
-    entry.session.runNotice = vi.fn(async () => { enteredNotice = true; await gate; });
+    // WHY: a direct user dispatch now splices pending results (spliceNotice) before its request; idle passes use runNotice. Stub both.
+    const hold = async () => { enteredNotice = true; await gate; };
+    entry.session.runNotice = vi.fn(hold);
+    entry.session.spliceNotice = vi.fn(hold);
 
     // Drive runTurns directly (not via queueDelivery) so its returned promise
     // is the one this test awaits — the same delivery-loop code path, just

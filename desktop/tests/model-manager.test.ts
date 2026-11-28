@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { EngineManager } from '../src/main/engine/engine-manager';
-import { updateEngineConfig } from '../src/main/engine/engine-config';
+import { updateEngineConfig, DEFAULT_CONTEXT_SIZE } from '../src/main/engine/engine-config';
 import { ENGINE_VERSION } from '../src/main/engine/engine-pin';
 import { ModelManager } from '../src/main/models/model-manager';
 import type { DownloadProgress } from '../src/shared/model-manager-types';
@@ -109,9 +109,9 @@ describe('ModelManager.download — the disk guard reserves the projector', () =
     // 3.5 GB free against a 3 GB model: the old guard, which reserved
     // `totalSizeBytes` alone, let this through and the download then ran the
     // disk out partway through the projector (T15 handoff 2). The refusal has
-    // to quote 4.0 GB — the whole job — not 3.0.
+    // to quote 4.3 GB (4 GiB in decimal units) — the whole job — not 3.0.
     await expect(manager({ freeDiskBytes: 3.5 * GB }).download('unsloth/V-GGUF', visionQuant as any)).rejects.toThrow(
-      'Not enough free space: this download needs about 4.0 GB but only 3.5 GB is free.');
+      'Not enough free space: this download needs about 4.3 GB but only 3.8 GB is free.');
     expect(urls).toEqual([]);          // nothing was fetched
     expect(fs.existsSync(path.join(cacheDir, 'V-Q4_K_M'))).toBe(false);
   });
@@ -236,7 +236,7 @@ describe('ModelManager.memoryCheck — the projector is memory too', () => {
     const verdict = await mm.memoryCheck('V-Q4_K_M');
     // Exact string: the headline is the ONLY thing the warning row draws, and a
     // substring match on "vision" would stay green if the size were wrong.
-    expect(verdict.headline).toContain('4.0 GB model + 2.0 GB vision file');
+    expect(verdict.headline).toContain('4.3 GB model + 2.1 GB vision file');
   });
 });
 
@@ -287,7 +287,7 @@ describe('a foldered model is found by the header reader and by the loaded-memor
     // "up to" is the reader saying it could not understand the file. Reading the
     // right path removes it; reading the flat path puts it back.
     expect(headline).not.toContain('up to');
-    expect(headline).toContain('4.0 GB model + 1.0 GB vision file');
+    expect(headline).toContain('4.3 GB model + 1.1 GB vision file');
   });
 
   it("counts a RESIDENT model's projector in what is already loaded", async () => {
@@ -295,7 +295,10 @@ describe('a foldered model is found by the header reader and by the loaded-memor
     // weights alone, so without the projector term a resident vision model is
     // under-counted by up to 2.6 GB — and the number it feeds is the one that
     // decides whether the NEXT model is refused.
-    plantVisionFolder('R-Q4_K_M', 3 * GB, GB);           // the resident one
+    // WHY a projector of exactly 1e9 bytes (2026-11-13): the headline is in 1000-based GB to one
+    // decimal (#143), so a 1024-based GB (1.074) made the delta 1.0 or 1.1 depending on how the
+    // rest of the sum rounded — it turned 1.1 when the default context became 64k.
+    plantVisionFolder('R-Q4_K_M', 3 * GB, 1e9);          // the resident one
     plantVisionFolder('V-Q4_K_M', 4 * GB, 2 * GB);       // the one being checked
     const userData = path.join(root, 'userData');
     plantEngine(userData);
@@ -375,13 +378,13 @@ async function writeModelSettings(modelId: string, entry: unknown): Promise<void
 const dismissedAt = (contextLength: number) => ({ at: 1_757_000_000_000, contextLength });
 
 describe('ModelManager.memoryCheck — the remembered warning', () => {
-  it('a dismissal made at 32k silences the warning at 32k', async () => {
+  it('a dismissal made at the default context silences the warning at the default', async () => {
     plantModel('M-Q4_K_M');
     // Before: this machine really does warn about this model. Without this
     // line the test below would pass on a fixture that never warned at all.
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('tight');
 
-    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     const after = await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M');
     expect(after.verdict).toBe('ok');
     // A silenced warning draws nothing — the row is hidden, not emptied of text.
@@ -395,7 +398,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // for exactly the model that now needs four times the memory.
     plantModel('M-Q4_K_M');
     await writeModelSettings('M-Q4_K_M', {
-      contextLength: null, memoryWarningDismissed: dismissedAt(32768),
+      contextLength: null, memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE),
     });
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('ok');
 
@@ -426,7 +429,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
   it('a dismissal belongs to ONE model and does not answer for another', async () => {
     plantModel('A-Q4_K_M');
     plantModel('B-Q4_K_M');
-    await writeModelSettings('A-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('A-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     const mm = warnMachine(['A-Q4_K_M', 'B-Q4_K_M']);
     expect((await mm.memoryCheck('A-Q4_K_M')).verdict).toBe('ok');
     expect((await mm.memoryCheck('B-Q4_K_M')).verdict).toBe('tight');
@@ -438,7 +441,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // clamp does not rescue it either. RuntimeBinding refuses to create the
     // session on this verdict, so a dismissal must not be able to reach it.
     plantModel('H-Q4_K_M');
-    await writeModelSettings('H-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('H-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     const userData = path.join(root, 'userData');
     plantEngine(userData);
     const engine = new EngineManager(home, userData, 9999);
@@ -472,7 +475,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // The positive control: the SAME fixture with a well-formed record does go
     // quiet. Without it, every line above would pass on a dismissal path that
     // was wired to nothing at all.
-    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('ok');
   });
 });

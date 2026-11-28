@@ -237,6 +237,11 @@ export interface MarketplaceApiClient {
    *  narrowed to a single game. Read once and joined to the friends list, so a
    *  friend row can show "7-2 at chess" without a call per friend. */
   gameRecords(game?: string): Promise<HeadToHead[]>;
+  /** A one-time pass to join one two-player room (Connect 4, Chess). WHY (2026-11-09 final review F-3): rooms
+   *  used to let anyone in under any name. The server now only opens a room to a signed-in player holding a
+   *  pass made for that game and room, good for one connection and about a minute. `username` is the name the
+   *  room will call this player. */
+  gameRoomTicket(game: string, room: string): Promise<{ ticket: string; username: string; expires_in: number }>;
 }
 
 export function createMarketplaceApiClient(opts: {
@@ -424,5 +429,11 @@ export function createMarketplaceApiClient(opts: {
         game ? `/games/records?game=${encodeURIComponent(game)}` : "/games/records",
         { method: "GET", auth: true },
       ),
+    gameRoomTicket: (game, room) =>
+      request<{ ticket: string; username: string; expires_in: number }>("/games/ticket", {
+        method: "POST",
+        body: JSON.stringify({ game, room }),
+        auth: true,
+      }),
   };
 }

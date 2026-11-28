@@ -42,7 +42,7 @@ export function pageAutomationStates(jobs: readonly AutomationSummary[], pageId:
 
 /** Send the page its automations' states. */
 export function postPageAutomations(frame: Window | null | undefined, jobs: readonly AutomationSummary[], pageId: string): void {
-  try { frame?.postMessage({ type: PAGE_AUTOMATIONS_STATE_MESSAGE, jobs: pageAutomationStates(jobs, pageId) }, '*'); } catch { /* the frame went away */ }
+  try { frame?.postMessage({ type: PAGE_AUTOMATIONS_STATE_MESSAGE, jobs: pageAutomationStates(jobs, pageId) }, '*'); } catch { /* benign: the frame went away */ }
 }
 
 /** Answer one message from the page. Returns true when the message was an automation one. */
@@ -51,7 +51,7 @@ export function handlePageAutomationMessage(d: { type?: unknown; id?: unknown; o
   if (typeof d.id !== 'string') return true;
   const id = d.id;
   const answer = (result: { ok: boolean; message?: string }) => {
-    try { source.postMessage({ type: PAGE_AUTOMATION_RESULT_MESSAGE, id, result }, '*'); } catch { /* the frame went away */ }
+    try { source.postMessage({ type: PAGE_AUTOMATION_RESULT_MESSAGE, id, result }, '*'); } catch { /* benign: the frame went away */ }
   };
   if (d.op === 'list') { postPageAutomations(source, jobs, pageId); answer({ ok: true }); return true; }
   const start = automationsBridge()?.pageStart;

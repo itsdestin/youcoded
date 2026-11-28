@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog, net } from 'electron';
+import { useFetchForNetworkCheck } from './network-check';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -46,6 +47,7 @@ import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipA
 import { VITE_DEV_PORT } from '../shared/ports';
 import { wireDevLoadRecovery } from './dev-load-recovery';
 import { log, rotateLog } from './logger';
+import { startPluginOffSwitch } from './plugin-blocklist';
 import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
@@ -332,6 +334,8 @@ skillProvider.ensureMigrated();
 // started. See the WHY on repairPackageVersions() in skill-provider.ts for
 // what breaks without the repair (permanently stale "Update available"
 // state for every in-repo plugin other than the three bundled ids).
+// Plugin off-switch (plugin-blocklist.ts): launch + hourly; open chats reload plugins on a change.
+startPluginOffSwitch(skillProvider, () => sessionManager.broadcastReloadPlugins());
 void (async () => {
   await skillProvider.repairPackageVersions();
   // Fire-and-forget: install bundled plugins if missing. Silent retry on
@@ -855,6 +859,9 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // (the registry ignores buddies) — while someone is on the phone nothing is focused.
   win.on('focus', () => windowRegistry.noteFocused(wid));
   win.on('closed', () => {
+    // WHY first, while the registry still knows this window: ends the chats the person agreed to end, only now that the
+    // window is really gone (card #34: a close that a page guard vetoed used to end them anyway).
+    closeGate.onClosed();
     cancelWindowHandoffs(wid);
     // Drop attention reports contributed by this window so stale session
     // states from a closed window don't persist in the aggregated summary.
@@ -925,7 +932,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
-    refuseForUnsaved: () => refuseCloseForUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
+    refuseForUnsaved: () => refuseCloseForUnsaved(win),
     syncJournals: () => (getOfficeSessions()?.hasFor(win.webContents.id) ? syncJournals(win.webContents) : null), // Office edits to the recovery journal first (≤1.5 s, Task 8 fix round 1)
     sessionIds: () => windowRegistry.sessionsForWindow(wid),
     ask: async (count) => {
@@ -1425,10 +1432,12 @@ void app.whenReady().then(async () => {
   // to parse the file a second time just to log a stale-path warning — the
   // diagnostic for the "stuck on Initializing" symptom after a removed dev
   // worktree.
+  let installLocked = false; // card #11 b: a locked settings.json is retried once in the background (startLaunchSettingsRetry), never by waiting longer here
   if (!process.env.YOUCODED_PROFILE) {
     try {
       const { runInstallHooksChore } = require('./launch-settings-chores');
       const r = await runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged });
+      installLocked = r.refused === 'locked';
       if (r.skippedWorktree) log('WARN', 'Main', 'Hook scripts live inside a dev worktree — install-hooks skipped (set YOUCODED_PROFILE when running dev)');
       else {
         if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
@@ -1488,8 +1497,9 @@ void app.whenReady().then(async () => {
   // The prompt-suggestion and retention-default marks below stay for the perf
   // rig's chore table; they now measure nothing of their own.
   try {
-    const { runSettingsChores } = require('./launch-settings-chores');
+    const { runSettingsChores, startLaunchSettingsRetry } = require('./launch-settings-chores');
     const r = await runSettingsChores();
+    startLaunchSettingsRetry({ installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Main', msg, data));
     log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
     if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
     if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });
@@ -1799,6 +1809,7 @@ void app.whenReady().then(async () => {
 
   // Start native sync service — owns push/pull lifecycle, background timer,
   // session-end sync. Replaces bash hook sync when app is running.
+  useFetchForNetworkCheck((url, init) => net.fetch(url, init)); // WHY: the online check goes through the system proxy (network-check.ts)
   const syncService = new SyncService();
   setSyncService(syncService);
   syncService.start().catch(e => log('ERROR', 'Main', 'SyncService start failed', { error: String(e) }));

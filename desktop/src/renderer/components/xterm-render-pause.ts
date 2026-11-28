@@ -39,9 +39,11 @@ interface RenderServiceInternals {
   _isPaused?: boolean;
   _handleIntersectionChange?: (entry: IntersectionLike) => void;
 }
+type CoreInternals = { _renderService?: RenderServiceInternals; _viewport?: { queueSync?: () => void } };
 
 export function attachRenderPause(terminal: Terminal): RenderPause | null {
-  const rs = (terminal as unknown as { _core?: { _renderService?: RenderServiceInternals } })._core?._renderService;
+  const core = (terminal as unknown as { _core?: CoreInternals })._core;
+  const rs = core?._renderService;
   const original = rs?._handleIntersectionChange;
   if (!rs || typeof original !== 'function') return null;
   const hadOwn = Object.prototype.hasOwnProperty.call(rs, '_handleIntersectionChange');
@@ -50,7 +52,16 @@ export function attachRenderPause(terminal: Terminal): RenderPause | null {
   // state so a terminal we never hide behaves exactly as before.
   let onScreen = rs._isPaused !== true;
   let hidden = false;
-  const apply = () => original.call(rs, { isIntersecting: onScreen && !hidden });
+  // WHY the scrollbar is re-measured each time drawing resumes (Destin, 2026-11-04, a brand-new phone session: "a
+  // scrollbar that responds to be dragging and moves from the top of the page to about halfway down … despite the
+  // page/terminal not actually moving"): a paused terminal postpones resizing its drawing area until it is shown,
+  // but xterm's scrollbar measures itself on the next frame after a resize — against the OLD area (24 rows, 336px) —
+  // and xterm 6 never looks again once the postponed resize lands. Shown at 41 rows, it offered 238px of room that
+  // was not there. One re-measure on the next frame after resuming (when the resize has landed) puts it right.
+  const apply = () => {
+    original.call(rs, { isIntersecting: onScreen && !hidden });
+    if (rs._isPaused !== true) core?._viewport?.queueSync?.();
+  };
 
   // The observer callback looks this method up on the instance at call time
   // (`e => this._handleIntersectionChange(...)`), so an own-property override

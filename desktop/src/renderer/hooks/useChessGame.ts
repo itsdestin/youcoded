@@ -2,11 +2,11 @@
 //
 // It returns the SAME shape `usePartyGame` returns, so the arcade shell calls
 // one signature for every game and picks the client by the id the challenge
-// carried. Chess brings its own room, its own party ('chess' in
-// partykit.json) and its own move shape; nothing here is shared with Connect 4
+// carried. Chess brings its own room, its own party ('chess',
+// the Worker's CHESS room) and its own move shape; nothing here is shared with Connect 4
 // except the socket wrapper and the reducer actions.
 //
-// TRUST MODEL. `chess-room.ts` is a RELAY — it forwards messages between the
+// TRUST MODEL. The chess room (worker/src/games/relay-room.ts) is a RELAY — it forwards messages between the
 // two players and knows no rules. So every move that arrives over the socket is
 // re-validated here with chess.js (`applyMove`) and DROPPED if it is illegal,
 // rather than being applied to the board. A peer cannot corrupt this client's
@@ -182,7 +182,9 @@ export function useChessGame(
                 turnSeat: 0,
               });
             } else {
-              dispatch({ type: 'REMATCH_REQUESTED' });
+              // WHY a separate action: REMATCH_REQUESTED means "we asked" and would grey out
+              // our Accept button.
+              dispatch({ type: 'OPPONENT_REMATCH_REQUESTED' });
             }
             break;
           }
@@ -237,10 +239,25 @@ export function useChessGame(
 
   const requestRematch = useCallback(() => {
     if (!clientRef.current || !playerName) return;
-    rematchRequestedRef.current = true;
     clientRef.current.send({ type: 'rematch', username: playerName });
+    if (state.opponentWantsRematch && opponentRef.current) {
+      // Opponent asked first and is waiting; our message is their "yes". Start here too
+      // because the relay never echoes our own message back (see usePartyGame).
+      const play = startingPlay();
+      playRef.current = play;
+      seatRef.current = seatRef.current === 0 ? 1 : 0;
+      dispatch({
+        type: 'GAME_START',
+        seat: seatRef.current,
+        opponent: opponentRef.current,
+        play,
+        turnSeat: 0,
+      });
+      return;
+    }
+    rematchRequestedRef.current = true;
     dispatch({ type: 'REMATCH_REQUESTED' });
-  }, [playerName, dispatch]);
+  }, [playerName, dispatch, state.opponentWantsRematch]);
 
   const leaveGame = useCallback(() => {
     if (clientRef.current && playerName) {

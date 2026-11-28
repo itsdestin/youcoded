@@ -78,7 +78,7 @@ describe('the shared chrome definitions carry all three states', () => {
 });
 
 describe('the Button primitive presses', () => {
-  const pressable: ButtonVariant[] = ['primary', 'secondary', 'ghost', 'danger', 'danger-outline', 'on-accent'];
+  const pressable: ButtonVariant[] = ['primary', 'secondary', 'ghost', 'danger', 'danger-outline', 'on-accent', 'on-accent-outline', 'on-accent-solid'];
   it.each(pressable)('%s has an active: fill', (variant) => {
     expect(buttonClasses(variant)).toMatch(/(^|\s)active:bg-/);
   });

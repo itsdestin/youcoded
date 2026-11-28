@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../src/main/logger', () => ({ log: vi.fn(), rotateLog: vi.fn() }));
 
-import { makeClearSessionOn401 } from '../src/main/handler-utils';
+import { makeClearSessionOn401, setSessionLostListener } from '../src/main/handler-utils';
+import { bindAccountDeps } from '../src/main/ipc/account';
+import { findChannel } from '../src/main/ipc/channel-table';
+import { MarketplaceApiError } from '../src/renderer/state/marketplace-api-client';
 import { log } from '../src/main/logger';
 import type { MarketplaceAuthStore } from '../src/main/marketplace-auth-store';
 
@@ -91,5 +94,60 @@ describe('makeClearSessionOn401', () => {
     expect(clear({ ok: true, value: 42 })).toEqual({ ok: true, value: 42 });
     expect(store.token).toBe('tok');
     expect(log).not.toHaveBeenCalled();
+  });
+});
+
+// The notice (card #216): the same moment that is logged must also reach the screen — once per sign-out
+// event, for every path that signs the account out because the server said 401, and never for a chosen sign-out.
+describe('the "signed out by itself" notice', () => {
+  const lost = vi.fn();
+  beforeEach(() => { lost.mockClear(); vi.mocked(log).mockClear(); setSessionLostListener(lost); });
+
+  it('fires once for a burst of 401s from the call decorator', () => {
+    const store = fakeStore('tok');
+    const clear = makeClearSessionOn401(asStore(store), 'social');
+    for (let i = 0; i < 4; i++) clear({ ok: false, status: 401, message: 'expired' });
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(lost).toHaveBeenCalledWith({ surface: 'social' });
+  });
+
+  it('does not fire when there was no session to lose, or for other statuses', () => {
+    const clear = makeClearSessionOn401(asStore(fakeStore(null)), 'social');
+    clear({ ok: false, status: 401, message: 'x' });
+    makeClearSessionOn401(asStore(fakeStore('tok')), 'social')({ ok: false, status: 500, message: 'x' });
+    expect(lost).not.toHaveBeenCalled();
+  });
+
+  // The three account handlers that used to clear the session silently (no log, no notice).
+  const asDeps = (store: ReturnType<typeof fakeStore>, client: Record<string, unknown>) =>
+    bindAccountDeps({ store: store as unknown as MarketplaceAuthStore, client: client as never, installedSkillSource: null });
+  const ownerCtx = { door: 'desktop', broadcast: vi.fn() } as never;
+  const reject401 = () => { throw new MarketplaceApiError(401, 'invalid token'); };
+  const cases: Array<[string, string, string]> = [
+    ['account:user', 'authMe', 'account:user'],
+    ['account:refresh', 'authMe', 'account:refresh'],
+    ['account:export', 'exportData', 'account:export'],
+  ];
+  for (const [channel, method, surface] of cases) {
+    it(`${channel}: logs and raises the notice once when it finds the session dead`, async () => {
+      const store = { ...fakeStore('tok'), getUser() { return null; } };
+      asDeps(store as never, { [method]: async () => reject401() });
+      const def = findChannel(channel)!;
+      await def.handler({} as never, ownerCtx);
+      await def.handler({} as never, ownerCtx); // a second call after the sign-out finds no session
+      expect(store.token).toBeNull();
+      expect(lost).toHaveBeenCalledTimes(1);
+      expect(lost).toHaveBeenCalledWith({ surface });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(log).mock.calls[0][3]).toMatchObject({ surface, serverMessage: 'invalid token' });
+    });
+  }
+
+  it('a sign-out the person chose raises no notice', async () => {
+    const store = fakeStore('tok');
+    asDeps(store, { logout: async () => ({}) });
+    await findChannel('account:sign-out')!.handler(undefined as never, ownerCtx);
+    expect(store.token).toBeNull();
+    expect(lost).not.toHaveBeenCalled();
   });
 });

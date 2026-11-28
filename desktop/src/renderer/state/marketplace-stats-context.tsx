@@ -35,6 +35,9 @@ interface Ctx {
   loading: boolean;
   plugins: StatsResponse["plugins"];
   themes: StatsResponse["themes"];
+  /** Why the last read of the community totals failed, or null. WHY (error inventory 2026-09-10, Marketplace
+   *  row 14): a failed read used to become empty totals, which the detail page showed as "No votes yet". */
+  error: string | null;
   refresh(): Promise<void>;
   /** Write a plugin's vote totals straight into the shared stats, no network.
    *  Every card reads `plugins[id]`, and `/stats` is served Cache-Control
@@ -75,6 +78,8 @@ export function MarketplaceStatsProvider({
     cachedStats?.value.themes ?? {}
   );
 
+  const [error, setError] = useState<string | null>(null);
+
   // cancelledRef — prevents setState calls after the provider unmounts.
   // Mirrors the pattern in ThemeProvider and AccountProvider.
   const cancelledRef = useRef(false);
@@ -113,6 +118,7 @@ export function MarketplaceStatsProvider({
       if (cancelledRef.current) return;
       setPlugins(stats.plugins);
       setThemes(stats.themes);
+      setError(null);
       // Report success to the worker health indicator (if wired)
       onNetworkResult?.(true);
     } catch (err) {
@@ -122,8 +128,8 @@ export function MarketplaceStatsProvider({
         err
       );
       if (cancelledRef.current) return;
-      setPlugins({});
-      setThemes({});
+      // Totals already on screen stay (they are real); the failure is reported through `error`.
+      setError(err instanceof Error && err.message ? err.message : 'the community totals did not answer');
       // Report failure to the worker health indicator (if wired)
       onNetworkResult?.(false);
     } finally {
@@ -160,8 +166,8 @@ export function MarketplaceStatsProvider({
   }, []);
 
   const value = useMemo<Ctx>(
-    () => ({ loading, plugins, themes, refresh, applyThumbs, ensureLoaded }),
-    [loading, plugins, themes, refresh, applyThumbs, ensureLoaded]
+    () => ({ loading, plugins, themes, error, refresh, applyThumbs, ensureLoaded }),
+    [loading, plugins, themes, error, refresh, applyThumbs, ensureLoaded]
   );
 
   return (

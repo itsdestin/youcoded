@@ -620,6 +620,17 @@ describe('NativeSessionHost', () => {
     await host2.destroyAll();
   });
 
+  it('names a model for the open-time local load only when the chat runs on the local engine', async () => {
+    const typed = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT,
+      async (b) => (b.providerId === 'local' ? 'local-engine' : 'openrouter'), async () => null);
+    await typed.create({ sessionId: 'loc', cwd: root, binding: { providerId: 'local', modelId: 'Qwen-9B' } });
+    await typed.create({ sessionId: 'cloud', cwd: root, binding: { providerId: 'or', modelId: 'gpt-5.6-luna' } });
+    expect(await typed.localModelForSession('loc')).toBe('Qwen-9B');
+    expect(await typed.localModelForSession('cloud')).toBeNull();
+    expect(await typed.localModelForSession('not-live')).toBeNull();
+    await typed.destroyAll();
+  });
+
   it('list() surfaces sessions for the Resume Browser with provider tag', async () => {
     await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
     const rows = host.list();
@@ -934,8 +945,13 @@ describe('NativeSessionHost', () => {
         expect(claim).not.toHaveBeenCalled();
         expect(ledger.listFor(root, 'pending-report')[0].injectionAttempted).not.toBe(true);
         expect(model).not.toHaveBeenCalled();
+        finish(result);
+        // WHY: a report recovered at reopen waits for the user; connecting tools must not wake the model either.
+        await new Promise<void>(resolve => setTimeout(resolve, 50));
+        expect(model).not.toHaveBeenCalled();
         const completed = waitForTurnComplete(h, 1);
-        finish(result); await completed;
+        await vi.waitFor(() => expect(h.send('pending-report', 'continue').status).toBe('sent'));
+        await completed;
         await vi.waitFor(() => expect(ledger.listFor(root, 'pending-report')[0].delivered).toBe(true));
         expect(model).toHaveBeenCalledOnce();
       } finally { finish(result); await h.destroyAll(); }
@@ -963,7 +979,9 @@ describe('NativeSessionHost', () => {
       expect(ledger.listFor(root, 'closing-report')[0].injectionAttempted).not.toBe(true);
       mark.mockRestore();
       const delivered = waitForTurnComplete(h, 1);
-      await h.resume('closing-report', root); await delivered;
+      await h.resume('closing-report', root);
+      expect(model).not.toHaveBeenCalled(); // reopen alone never wakes the model
+      expect(h.send('closing-report', 'continue').status).toBe('sent'); await delivered;
       await vi.waitFor(() => expect(ledger.listFor(root, 'closing-report')[0].delivered).toBe(true));
       expect(model).toHaveBeenCalledOnce();
       await h.destroyAll();
@@ -995,14 +1013,16 @@ describe('NativeSessionHost', () => {
         // the still-stamped record before allowing that old pass to clean it up.
         await h.destroy(id);
         await h.resume(id, root);
+        // WHY: reopen no longer scans by itself; the user's next message is what reaches the report.
+        expect(h.send(id, 'continue').status).toBe('sent');
         await (h as any).live.get(id).running;
         expect((h as any).pendingDeliveryParents.has(id)).toBe(false);
         expect(ledger.listFor(root, id)[0].injectionAttempted).toBe(true);
-        expect(model).not.toHaveBeenCalled();
+        expect(model).toHaveBeenCalledOnce(); // the user's own turn only: the stamped report is not injected yet
         finish(); await outgoing;
         await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
         await h.drain(id);
-        expect(model).toHaveBeenCalledOnce();
+        expect(model).toHaveBeenCalledTimes(2);
       } finally { finish(); await outgoing; mark.mockRestore(); await h.destroyAll(); }
     });
 
@@ -1034,7 +1054,9 @@ describe('NativeSessionHost', () => {
         (h as any).queueDelivery(id); await oldReady;
         outgoing = (h as any).live.get(id).running;
         const oldToken = ledger.listFor(root, id)[0].deliveryClaimId;
-        await h.destroy(id); await h.resume(id, root); await newReady;
+        await h.destroy(id); await h.resume(id, root);
+        expect(h.send(id, 'continue').status).toBe('sent'); // reopen waits for the user before claiming
+        await newReady;
         const newToken = ledger.listFor(root, id)[0].deliveryClaimId;
         expect(newToken).toBeDefined(); expect(newToken).not.toBe(oldToken);
         releaseOld(); await outgoing;
@@ -1078,9 +1100,15 @@ describe('NativeSessionHost', () => {
         expect(model).not.toHaveBeenCalled();
         writes.mockRestore();
         expect(h.send(id, 'storage recovered')).toMatchObject({ status: 'sent' });
-        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        // WHY: wait for the turn itself (entry.running resolves when the whole drain, report
+        // splice + model request, has finished). The old wait on `delivered` + drain() only
+        // flushed the transcript append chain: `delivered` flips BEFORE the model request is
+        // dispatched, so slow storage let the model-call assertion run first (2026-11-14 flake).
+        await (h as any).live.get(id).running;
         await h.drain(id);
-        expect(model).toHaveBeenCalledTimes(2); // one explicit user turn, one report
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
+        // Card #148: the report is now supplied (history-only) before the user's turn, so one request carries both.
+        expect(model).toHaveBeenCalledTimes(1);
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
     });
 
@@ -1112,8 +1140,13 @@ describe('NativeSessionHost', () => {
         finish(); await outgoing;
         expect(model).not.toHaveBeenCalled();
         await h.resume(id, root);
-        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        expect(model).not.toHaveBeenCalled(); // reopen alone never wakes the model
+        expect(h.send(id, 'continue').status).toBe('sent');
+        // WHY: await the resumed generation's own delivery pass rather than polling `delivered`
+        // (which flips before the model request is dispatched; same race as the sibling test above).
+        await (h as any).live.get(id).running;
         await h.drain(id);
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
         expect(model).toHaveBeenCalledOnce();
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
     });
@@ -2338,6 +2371,18 @@ describe('NativeSessionHost', () => {
       expect(host.queuedMessagesFor(id)).toEqual([]);
     });
 
+    // Edit on a waiting message must give back its files as files, so the queue lists them (as the Claude Code queue already does);
+    // a message with no files lists none, so its row is exactly what it was.
+    it('lists a waiting message\'s attached files, and none for a message without files', () => {
+      host.send(id, 'first');
+      host.send(id, '/home/u/a.png /home/u/b c.pdf look at these', ['/home/u/a.png', '/home/u/b c.pdf']);
+      host.send(id, 'plain words');
+      const [withFiles, plain] = host.queuedMessagesFor(id);
+      expect(withFiles.content).toBe('/home/u/a.png /home/u/b c.pdf look at these');
+      expect(withFiles.attachments).toEqual(['/home/u/a.png', '/home/u/b c.pdf']);
+      expect(plain).not.toHaveProperty('attachments');
+    });
+
     it('a repeat with the same waiting messages is not announced again', () => {
       const seen: unknown[] = [];
       host.on('queue-changed', (e: any) => seen.push(e));
@@ -2447,7 +2492,11 @@ describe('NativeSessionHost', () => {
         let release!: () => void;
         const started = new Promise<void>((r) => { entered = r; });
         const gate = new Promise<void>((r) => { release = r; });
-        const notice = vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; });
+        // WHY: idle results run a notice turn (runNotice); busy ones splice at a boundary (spliceNotice). Stub both
+        // real session methods so the host's own deliverNotice routing stays exercised.
+        const hold = async () => { entered(); await gate; };
+        const runNotice = vi.spyOn(entry.session, 'runNotice').mockImplementation(hold);
+        const spliceNotice = vi.spyOn(entry.session, 'spliceNotice').mockImplementation(hold);
         const seen: string[] = [];
         h.on('transcript-event', (e: any) => { if (e.type === 'user-message') seen.push(e.data.text); });
         if (start === 'user turn tail') h.send(sid, 'opening');
@@ -2461,7 +2510,7 @@ describe('NativeSessionHost', () => {
         await entry.running;
         expect(entry.queue).toHaveLength(0);
         expect(h.isIdle(sid)).toBe(true);
-        expect(notice).toHaveBeenCalledTimes(1);
+        expect(runNotice.mock.calls.length + spliceNotice.mock.calls.length).toBe(1); // exactly one delivery, by whichever route the start allows
       } finally { await h.destroyAll(); }
     });
 
@@ -2616,7 +2665,10 @@ describe('NativeSessionHost', () => {
       let release!: () => void;
       const started = new Promise<void>((r) => { entered = r; });
       const gate = new Promise<void>((r) => { release = r; });
-      vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; throw new Error('notice failed'); });
+      // WHY: keep the failure present on both idle (runNotice) and safe-boundary (spliceNotice) paths, through the real routing.
+      const failing = async () => { entered(); await gate; throw new Error('notice failed'); };
+      vi.spyOn(entry.session, 'runNotice').mockImplementation(failing);
+      vi.spyOn(entry.session, 'spliceNotice').mockImplementation(failing);
       (host as any).queueHostNotice(id, 'notice', { kind: 'shell', runs: [] }, 'test');
       await started;
       const sent = host.send(id, 'survivor');
@@ -4434,6 +4486,93 @@ describe('NativeSessionHost', () => {
     // and asserts the OUTCOME: run 2's own report text actually reaches the
     // parent's conversation as a second injected notice, not that a field was
     // merely set.
+    it('a resumed interrupted task delivers its report before it disappears from the task list', async () => {
+      const home = new NativeHome(root);
+      const store = new SessionStore(home);
+      let releaseReport!: () => void;
+      let signalReportStarted!: () => void;
+      let releaseNotice!: () => void;
+      let signalNoticeStarted!: () => void;
+      const reportGate = new Promise<void>((resolve) => { releaseReport = resolve; });
+      const reportStarted = new Promise<void>((resolve) => { signalReportStarted = resolve; });
+      const noticeGate = new Promise<void>((resolve) => { releaseNotice = resolve; });
+      const noticeStarted = new Promise<void>((resolve) => { signalNoticeStarted = resolve; });
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        doStream: async () => {
+          calls += 1;
+          if (calls === 1) {
+            signalReportStarted();
+            await reportGate;
+            return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'RESUMED REPORT'), finishChunk('stop')) }) };
+          }
+          signalNoticeStarted();
+          await noticeGate;
+          return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'notice acknowledged'), finishChunk('stop')) }) };
+        },
+      });
+      const h = new NativeSessionHost(
+        store, async () => model as any, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home,
+      );
+      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+
+      // Build the same durable, interrupted child state task_id resume reads;
+      // use a real child header and ledger rather than a fake resume service.
+      const { childId } = await h.createChild('root-1', {
+        specialist: EXPLORER, prompt: 'first brief', workDir: root, parentToolCallId: 'tc-1',
+      });
+      await h.destroy(childId);
+      await (h as any).ledger.recordStart(root, 'root-1', {
+        childId, parentToolCallId: 'tc-1', agentType: EXPLORER.id, title: 'Resumed Explorer',
+        workDir: root, description: 'investigate the issue', background: true,
+        status: 'interrupted', startedAt: Date.now() - 1_000, endedAt: Date.now(),
+        delivered: false, owner: OWNER, missedSteers: [],
+      });
+
+      const events: any[] = [];
+      h.on('transcript-event', (event) => events.push(event));
+      const task = (h as any).live.get('root-1').session.toolByName.get('Task');
+      const services = (h as any).live.get('root-1').session.opts.toolServices;
+      const listTasks = () => task.execute({ list: true }, {
+        sessionId: 'root-1', cwd: root, signal: new AbortController().signal,
+        readRegistry: new Map(), todos: [], services,
+      });
+      const reservation = h.reserveSpecialist('root-1', { writer: false });
+      if (!reservation.ok) throw new Error('unreachable — no capacity/writer conflict in this test');
+      const outcome = await h.resumeSpecialist('root-1', {
+        childId, prompt: 'continue the investigation', background: true,
+        parentToolCallId: 'tc-2', reservation: reservation.token,
+      });
+      expect(outcome.status).toBe('ok-background');
+
+      // While the resumed model is held open, the Task list must reflect the
+      // live run. The transcript event is emitted before runNotice starts its
+      // model request; keep that request gated to test the report-pending state
+      // until the turn has actually completed.
+      await reportStarted;
+      expect((await listTasks()).text).toContain('Resumed Explorer (explorer): running');
+      releaseReport();
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.type === 'user-message'
+          && event.data?.injected === 'specialist-report'
+          && event.data?.text.includes('RESUMED REPORT'))).toBe(true);
+      });
+      await noticeStarted;
+      // runNotice emits the injected transcript event before the model turn
+      // finishes and before confirmDelivered's ledger write. Pin this boundary;
+      // this scripted test does not establish the cause of the reported incident.
+      expect((await listTasks()).text).toContain('report delivery pending');
+      releaseNotice();
+      await vi.waitFor(() => {
+        const record = (h as any).ledger.listFor(root, 'root-1').find((row: any) => row.childId === childId);
+        expect(record?.delivered).toBe(true);
+      });
+      await (h as any).live.get('root-1')?.running;
+      expect((await listTasks()).text).toBe('No specialists or background commands are running or awaiting delivery in this conversation.');
+      await h.destroyAll();
+    });
+
     it('a SECOND background run after a resume still gets delivered, carrying its OWN report (regression — stale injectionAttempted)', async () => {
       const home = new NativeHome(root);
       const store = new SessionStore(home);
@@ -4512,6 +4651,7 @@ describe('NativeSessionHost', () => {
       });
       const recAfterRun2 = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(recAfterRun2.rawReport).toContain('SECOND REPORT');
+      expect(recAfterRun2.runNumber).toBe(2); // the row keeps its original card id; the run number says which run
 
       // WHY await the parent's delivery pass first: injecting run 2's report
       // runs a turn that still appends to the session file under
@@ -5704,6 +5844,11 @@ describe('NativeSessionHost', () => {
       const resumed = await h2.resume('root-1', root);
       expect(resumed).toBe(true);
 
+      // Reopen alone must not start a model turn: the report waits for the user's next message.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+      expect(h2.send('root-1', 'continue').status).toBe('sent');
+
       await vi.waitFor(() => {
         expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
       });
@@ -5750,6 +5895,11 @@ describe('NativeSessionHost', () => {
       h2.on('transcript-event', (e) => events.push(e));
       const resumed = await h2.resume('root-1', root);
       expect(resumed).toBe(true);
+
+      // Reopen alone must not start a model turn: the report waits for the user's next message.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+      expect(h2.send('root-1', 'continue').status).toBe('sent');
 
       await vi.waitFor(() => {
         expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
@@ -5825,6 +5975,96 @@ describe('NativeSessionHost', () => {
       await h2.destroyAll();
     });
 
+    // Approved behaviour: "On reopen, an old helper report waits and is included with your next
+    // message instead" of starting a paid model turn by itself.
+    describe('reopen holds recovered reports for the next user message', () => {
+      async function seedAndReopen() {
+        const home = new NativeHome(root);
+        const store = new SessionStore(home);
+        const h = bootHost(home, store);
+        await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+        await (h as any).ledger.recordStart(root, 'root-1', {
+          childId: 'child-old', parentToolCallId: 'tc-1', agentType: 'explorer', title: 'Nadia',
+          workDir: root, description: 'find the config loader', background: true,
+          status: 'completed', startedAt: Date.now() - 60_000, endedAt: Date.now(), steps: 3,
+          rawReport: 'REPORT-OLD-TOKEN', delivered: false, owner: OWNER, missedSteers: [],
+        });
+        await h.destroy('root-1');
+        const prompts: any[] = [];
+        const capturing = async () => new MockLanguageModelV4({ doStream: async (o: any) => {
+          prompts.push(o);
+          return { stream: simulateReadableStream({ chunks: CHUNKS }) };
+        } }) as any;
+        const h2 = bootHost(home, store, capturing);
+        const events: any[] = [];
+        h2.on('transcript-event', (e) => events.push(e));
+        expect(await h2.resume('root-1', root)).toBe(true);
+        return { h2, events, prompts };
+      }
+      const countTokens = (prompts: any[]) => JSON.stringify(prompts).split('REPORT-OLD-TOKEN').length - 1;
+
+      it('makes no model call on reopen; the user\'s next turn carries the report exactly once', async () => {
+        const { h2, events, prompts } = await seedAndReopen();
+        await new Promise((r) => setTimeout(r, 150));
+        expect(prompts).toHaveLength(0);
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(0);
+
+        const done = waitForTurnComplete(h2, 1);
+        expect(h2.send('root-1', 'what did you find?').status).toBe('sent');
+        await done;
+        await vi.waitFor(() => {
+          const rec = (h2 as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === 'child-old');
+          expect(rec?.delivered).toBe(true);
+        });
+        expect(prompts).toHaveLength(1); // report + question ride in ONE request
+        expect(countTokens(prompts)).toBe(1);
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
+
+        // A second user turn never re-sends it.
+        const done2 = waitForTurnComplete(h2, 1);
+        h2.send('root-1', 'thanks');
+        await done2;
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
+        await h2.destroyAll();
+      });
+
+      it('a helper that finishes LIVE in the reopened, idle chat still notifies the assistant', async () => {
+        const { h2, prompts } = await seedAndReopen();
+        await new Promise((r) => setTimeout(r, 50));
+        expect(prompts).toHaveLength(0);
+        await (h2 as any).ledger.recordStart(root, 'root-1', {
+          childId: 'child-live', parentToolCallId: 'tc-2', agentType: 'explorer', title: 'Otis',
+          workDir: root, description: 'd', background: true,
+          status: 'completed', startedAt: Date.now(), endedAt: Date.now(), steps: 1,
+          rawReport: 'REPORT-LIVE-TOKEN', delivered: false, owner: OWNER, missedSteers: [],
+        });
+        (h2 as any).queueDelivery('root-1'); // what a finishing background helper calls
+        await vi.waitFor(() => expect(prompts.length).toBeGreaterThan(0));
+        await (h2 as any).live.get('root-1').running;
+        await vi.waitFor(() => {
+          const recs = (h2 as any).ledger.listFor(root, 'root-1');
+          expect(recs.every((r: any) => r.delivered)).toBe(true);
+        });
+        expect(JSON.stringify(prompts)).toContain('REPORT-LIVE-TOKEN');
+        await h2.destroyAll();
+      });
+
+      it('Stop still holds everything: a live arrival after Stop does not start a turn', async () => {
+        const { h2, prompts } = await seedAndReopen();
+        h2.interrupt('root-1');
+        await (h2 as any).ledger.recordStart(root, 'root-1', {
+          childId: 'child-live', parentToolCallId: 'tc-2', agentType: 'explorer', title: 'Otis',
+          workDir: root, description: 'd', background: true,
+          status: 'completed', startedAt: Date.now(), endedAt: Date.now(), steps: 1,
+          rawReport: 'REPORT-LIVE-TOKEN', delivered: false, owner: OWNER, missedSteers: [],
+        });
+        (h2 as any).queueDelivery('root-1');
+        await new Promise((r) => setTimeout(r, 150));
+        expect(prompts).toHaveLength(0);
+        await h2.destroyAll();
+      });
+    });
+
     it('a report CLAIMED by a dead instance but never confirmed is re-delivered after restart', async () => {
       const home = new NativeHome(root);
       const store = new SessionStore(home);
@@ -5845,6 +6085,11 @@ describe('NativeSessionHost', () => {
       h2.on('transcript-event', (e) => events.push(e));
       const resumed = await h2.resume('root-1', root);
       expect(resumed).toBe(true);
+
+      // Reopen alone must not start a model turn: the report waits for the user's next message.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+      expect(h2.send('root-1', 'continue').status).toBe('sent');
 
       await vi.waitFor(() => {
         expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
@@ -6448,10 +6693,12 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
   it.skipIf(!posix)('a mark whose run finished while it waited is dropped at delivery; the finished notice still goes out', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => { release = r; });
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
     let first = true;
     const factory2 = async () => new MockLanguageModelV4({
       doStream: async () => {
-        if (first) { first = false; await gate; }
+        if (first) { first = false; entered(); await gate; }
         return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'ok'), finishChunk('stop')) }) };
       },
     }) as any;
@@ -6460,7 +6707,8 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     await host.create({ sessionId: 'p3', cwd: root, binding });
     const injected: string[] = [];
     host.on('transcript-event', (e: any) => { if (e.type === 'user-message' && e.data.injected) injected.push(e.data.injected); });
-    host.send('p3', 'busy');                                  // parent held mid-turn
+    host.send('p3', 'busy');
+    await started; // WHY: inFlight may only be scheduled; prove the response actually started.
     const run = startIn('p3', 'echo a', 'ta');
     reg('p3').emit('long-running', run, 5 * 60_000);          // mark queued behind the busy turn
     await run.exited;                                         // ...then the run finishes (completion queued after it)

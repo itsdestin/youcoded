@@ -42,6 +42,8 @@ vi.mock('../src/renderer/hooks/use-stick-to-bottom', () => ({
     stickToBottom: mocks.stickToBottom,
     jumpToBottom: vi.fn(),
     releaseStick: vi.fn(),
+    holdPosition: vi.fn(),
+    noteUserScroll: vi.fn(),
   }),
 }));
 
@@ -154,6 +156,23 @@ describe('prepending older history does not disturb the reader', () => {
     expect(mocks.stickToBottom).toHaveBeenCalled();
   });
 
+  it('does not re-arm when the transcript confirms a message already on screen in the same batch as another entry', () => {
+    // The reducer rebuilds the pending bubble as confirmed (same `message`) and moves it to the tail; an entry
+    // landing in the same batch changes the length. That is not a new send: a reader who scrolled up (or jumped
+    // to a quote) since sending must stay where they are.
+    const message = { id: 'just-sent', role: 'user', content: 'just-sent', timestamp: 1 };
+    const older = userEntry('a');
+    mocks.state = baseState([older, { kind: 'user', message, pending: true }]);
+    const { rerender } = render(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+    mocks.stickToBottom.mockClear();
+
+    const marker = { kind: 'system-marker', marker: { id: 'm1', kind: 'model-switch', text: 'x', timestamp: 2 } };
+    mocks.state = baseState([older, marker, { kind: 'user', message, pending: false, uuid: 'u1' }]);
+    rerender(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+
+    expect(mocks.stickToBottom).not.toHaveBeenCalled();
+  });
+
   // --- the reader's own scrolling is never undone (freeze hunt 2026-10-23, item 1) ----------------
   // A real-layout stand-in: each entry has a fixed place in the DOCUMENT (docY), and its place on
   // screen is docY - scrollTop, exactly as a browser lays it out. So a test can scroll the way a
@@ -224,5 +243,36 @@ describe('prepending older history does not disturb the reader', () => {
       await act(async () => { fireResize(); });
       expect(h.scroller.scrollTop).toBe(300);
     } finally { h.restore(); vi.useRealTimers(); }
+  });
+
+  // Round 4 review: the "Couldn't load earlier messages" box above the messages holds the reader's place through the SAME element
+  // anchor (not a hand-rolled scrollTop nudge that double-corrected after the browser clamped on removal).
+  it('the failed-load notice appearing and going moves the view by exactly what the entries moved', async () => {
+    const realRect = Element.prototype.getBoundingClientRect;
+    let scroller!: HTMLElement;
+    const BOX = 60;
+    Element.prototype.getBoundingClientRect = function () {
+      const el = this as HTMLElement;
+      let top = 0;
+      if (!String(el.className ?? '').includes('chat-scroll') && el.classList?.contains('timeline-entry')) {
+        const base = (el.textContent ?? '').includes('older-visible') ? 450 : 550;
+        // entries sit one box lower in the document while the notice is shown
+        top = base + (document.querySelector('[data-history-failed-box]') ? BOX : 0) - (scroller?.scrollTop ?? 0);
+      }
+      return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    try {
+      (window as any).claude.detach.requestTranscriptPage = vi.fn().mockResolvedValue(null);   // the page fails
+      mocks.state = baseState([userEntry('older-visible'), userEntry('newest')], { cursor: { path: 'p', offset: 10, sizeAtRead: 99 }, hasMore: true, loading: false });
+      const view = render(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+      scroller = view.container.querySelector('.chat-scroll') as HTMLElement;
+      scroller.scrollTop = 400;
+      await vi.waitFor(() => expect(view.container.querySelector('[data-history-failed-box]')).toBeTruthy());
+      expect(scroller.scrollTop).toBe(400 + BOX);   // moved down by exactly the box, no more
+      // Try again: the box goes (entries move up by the box); the view follows by exactly that.
+      (window as any).claude.detach.requestTranscriptPage = vi.fn(() => new Promise(() => {}));   // the retry is still in flight
+      await act(async () => { (view.getByText('Try again') as HTMLElement).click(); });
+      expect(scroller.scrollTop).toBe(400);
+    } finally { Element.prototype.getBoundingClientRect = realRect; }
   });
 });

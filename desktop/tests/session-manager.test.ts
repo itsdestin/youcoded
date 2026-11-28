@@ -408,6 +408,18 @@ describe('SessionManager', () => {
     expect(sessions).toHaveLength(0);
   });
 
+  it('gives each Claude Code session its own messaging socket only when a folder is configured (the phone)', () => {
+    manager.createSession({ name: 'plain', cwd: tmpDir, skipPermissions: false });
+    expect(mockWorker.send.mock.calls[0][0].args).not.toContain('--messaging-socket-path');
+    const phone = new SessionManager({ claudeMessagingSocketDir: '/data/app/tmp' });
+    const info = phone.createSession({ name: 'phone', cwd: tmpDir, skipPermissions: false });
+    const args: string[] = mockWorker.send.mock.calls.at(-1)![0].args;
+    const at = args.indexOf('--messaging-socket-path');
+    expect(at).toBeGreaterThan(-1);
+    expect(args[at + 1]).toBe(path.join('/data/app/tmp', `ccmsg-${info.id.slice(0, 8)}.sock`));
+    phone.destroySession(info.id);
+  });
+
   it('sends spawn with --dangerously-skip-permissions when requested', () => {
     manager.createSession({ name: 'skip', cwd: tmpDir, skipPermissions: true });
 
@@ -607,6 +619,56 @@ describe('SessionManager', () => {
     messageHandler({ type: 'exit', exitCode: 0 });
     expect(exits).toHaveLength(1);
     expect(manager.listSessions()).toHaveLength(0);
+  });
+
+  // Review of the unexpected-exit fix: Node can deliver the process 'exit' event BEFORE the parent has read the worker's
+  // {type:'exit'} message (~2% of clean exits). The decision must wait for the channel, and the real message must win.
+  describe('a worker process exit', () => {
+    const lastHandler = (ev: string) => mockWorker.on.mock.calls.slice().reverse().find((c: any) => c[0] === ev)?.[1];
+    beforeEach(() => { vi.useFakeTimers(); (mockWorker as any).connected = true; });
+    afterEach(() => { vi.useRealTimers(); delete (mockWorker as any).connected; });
+
+    it('reports a clean exit as code 0 when the process exit event arrives BEFORE the exit message', () => {
+      manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      lastHandler('exit')();                                   // process 'exit' first ...
+      expect(codes).toEqual([]);                               // ... nothing decided yet
+      lastHandler('message')({ type: 'exit', exitCode: 0 });   // ... the real message then arrives
+      lastHandler('disconnect')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([0]);                              // exactly one answer, and it is the clean one
+    });
+
+    it('keeps a deliberate handoff stop clean (0) when the exit event comes first and the frame carries a signal code', () => {
+      const info = manager.createSession({ name: 'handoff', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      void manager.stopSessionForHandoff(info.id);
+      lastHandler('exit')();                                       // process exit event first (handoff entry cleared here)
+      lastHandler('message')({ type: 'exit', exitCode: 143 });     // then the frame, carrying SIGTERM's code
+      lastHandler('disconnect')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([0]);
+    });
+
+    it('reports a worker that died without any exit message as an unexpected exit (1), once the channel has closed', () => {
+      manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      lastHandler('exit')();
+      lastHandler('disconnect')();
+      expect(codes).toEqual([1]);
+    });
+
+    it('also decides after the settle time when the channel never reports closing', () => {
+      manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      lastHandler('exit')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([1]);
+    });
   });
 
   it('does not emit session-exit after explicit destroy', () => {
@@ -1082,5 +1144,26 @@ describe('shell sessions', () => {
       // one anyway (it is path.win32.basename that knows about backslashes).
       expect(shellDisplayName('powershell.exe')).toBe('powershell');
     });
+  });
+});
+
+// A session created through session.create without a name used to carry
+// `name: undefined` to every screen, where the header's hint crashed the whole
+// window. The New session button always sends "New Session"; every other door
+// (API callers, remote clients, the Android backend) now gets the same default.
+describe('a session created without a name', () => {
+  it('gets the normal default name, on both the terminal and the native branch', () => {
+    const manager = new SessionManager();
+    const pty = manager.createSession({ cwd: tmpDir, skipPermissions: false } as any);
+    expect(pty.name).toBe('New Session');
+    const native = manager.createSession({ cwd: tmpDir, skipPermissions: false,
+      provider: 'native', binding: { providerId: 'openrouter', modelId: 'test' } } as any);
+    expect(native.name).toBe('New Session');
+    expect(manager.createSession({ name: '  ', cwd: tmpDir, skipPermissions: false } as any).name).toBe('New Session');
+  });
+
+  it('keeps a name it was given exactly as it was', () => {
+    const manager = new SessionManager();
+    expect(manager.createSession({ name: ' My chat ', cwd: tmpDir, skipPermissions: false }).name).toBe(' My chat ');
   });
 });

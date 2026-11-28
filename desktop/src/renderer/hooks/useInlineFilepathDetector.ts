@@ -16,7 +16,7 @@
 //     an open-ended rule would otherwise put a clickable pill on.
 const EXT_SHAPE_RE = /^[A-Za-z0-9]{1,8}$/;
 
-function looksLikeExtension(ext: string): boolean {
+export function looksLikeExtension(ext: string): boolean {
   if (!EXT_SHAPE_RE.test(ext)) return false;
   if (!/[A-Za-z]/.test(ext)) return false;
   return ext === ext.toLowerCase() || ext === ext.toUpperCase();

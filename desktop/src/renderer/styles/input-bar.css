@@ -1,0 +1,14 @@
+/* WHY the empty box's hint stays on one line (Destin, 2026-11-03: "stop the 'message your assistant' text in the input
+   area from wrapping when the stop icon appears. it should just truncate with ellipsis"): the stop button takes room
+   beside the box, the hint then wrapped to two lines, and since an empty textarea is sized to its placeholder the box
+   grew a line taller too. Only while it is empty — typed text wraps as it always has. */
+.input-bar-textarea:placeholder-shown {
+  white-space: nowrap;
+  overflow-x: hidden;
+  text-overflow: ellipsis;
+}
+.input-bar-textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -373,7 +373,7 @@ describe('LocalSkillProvider.update', () => {
     inst.installPlugin.mockResolvedValue({ status: 'already_installed', via: 'YouCoded' });
     inst.upgradePluginFromLocal.mockResolvedValue({ status: 'installed' });
     const r = await p.update('local-plugin');
-    expect(inst.upgradePluginFromLocal).toHaveBeenCalledWith('local-plugin', 'local-plugin', 'youcoded');
+    expect(inst.upgradePluginFromLocal).toHaveBeenCalledWith('local-plugin', 'local-plugin', 'youcoded', undefined); // 4th: the catalog's scanned commit (none for our own repo)
     expect(r).toMatchObject({ ok: true, newVersion: '2.0.0' });
     expect(versions['local-plugin']).toBe('2.0.0');
   });

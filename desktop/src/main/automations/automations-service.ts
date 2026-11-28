@@ -12,6 +12,7 @@ import type { AutomationRun, AutomationSummary } from '../../shared/automation-t
 import { AutomationStore, type StoredAutomation } from './automation-store';
 import { AutomationRunner, type RunEngine, type StartResult } from './automation-runner';
 import { dueSince } from './schedule';
+import { reportFailure } from '../report-failure';
 
 export interface AutomationsServiceDeps {
   /** `~/.youcoded/automations` */
@@ -60,7 +61,7 @@ export class AutomationsService {
     this.pending = true;
     queueMicrotask(() => {
       this.pending = false;
-      void this.runner.summaries().then((jobs) => this.deps.broadcast(jobs)).catch(() => { /* the next change sends a fresh list */ });
+      void this.runner.summaries().then((jobs) => this.deps.broadcast(jobs)).catch(() => { /* benign: the next change sends a fresh list */ });
     });
   }
 
@@ -161,7 +162,10 @@ export class AutomationsService {
           else if (job.late === 'fallback' && job.lateFallback) await this.runner.start(job.id, 'missed', { instruction: job.lateFallback });
           else if (job.late === 'later') this.runLater(job, now);
           else await this.runner.start(job.id, 'missed');
-        } catch { /* its next due time is tried as usual */ }
+        } catch (err) {
+          // WHY reported (hidden-failures rule): a scheduled run that never started is otherwise invisible. Its next due time is tried as usual.
+          reportFailure({ what: 'start a scheduled automation', cause: err, where: 'Automations' });
+        }
       }
       for (const [id, at] of [...this.later]) {
         if (at > now) continue;
@@ -170,7 +174,7 @@ export class AutomationsService {
       }
     } finally { this.ticking = false; }
     // Remembered on disk so the next time the app opens it knows which times it slept through.
-    await fs.mkdir(this.deps.dir(), { recursive: true }).then(() => atomicWrite(this.checkedFile(), JSON.stringify({ checkedAt: this.lastChecked }))).catch(() => { /* the next check writes it again */ });
+    await fs.mkdir(this.deps.dir(), { recursive: true }).then(() => atomicWrite(this.checkedFile(), JSON.stringify({ checkedAt: this.lastChecked }))).catch(() => { /* benign: the next check writes it again */ });
   }
 
   private checkedFile(): string { return path.join(this.deps.dir(), 'checked.json'); }
@@ -194,14 +198,15 @@ export class AutomationsService {
     if (this.timer) return;
     let from = since;
     if (from === undefined) {
-      try { from = Number((JSON.parse(await fs.readFile(this.checkedFile(), 'utf8')) as { checkedAt?: unknown }).checkedAt); } catch { /* first launch: nothing was missed */ }
+      try { from = Number((JSON.parse(await fs.readFile(this.checkedFile(), 'utf8')) as { checkedAt?: unknown }).checkedAt); } catch { /* benign: first launch: nothing was missed */ }
     }
     if (this.timer) return;
     if (from !== undefined && Number.isFinite(from) && from < this.lastChecked) this.lastChecked = from;
-    await fs.mkdir(this.deps.dir(), { recursive: true }).catch(() => {});
+    await fs.mkdir(this.deps.dir(), { recursive: true }).catch(() => {}); // benign: if the folder cannot be made, the first save reports it
     // Runs cut off when the app last closed carry on before anything new is started.
-    await this.runner.recover().catch(() => { /* a run that cannot be picked up must not stop the schedule */ });
-    this.timer = setInterval(() => { void this.tick().catch(() => { /* the next check tries again */ }); }, TICK_MS);
+    // WHY reported, not thrown: a run that cannot be picked up must not stop the schedule, but the cause belongs in the log.
+    await this.runner.recover().catch((err) => reportFailure({ what: 'pick up automation runs after a restart', cause: err, where: 'Automations' }));
+    this.timer = setInterval(() => { void this.tick().catch((err) => reportFailure({ what: 'check which automations are due', cause: err, where: 'Automations' })); /* the next check tries again */ }, TICK_MS);
     // WHY unref: the schedule check must never keep the app from quitting.
     (this.timer as { unref?: () => void }).unref?.();
     await this.tick();

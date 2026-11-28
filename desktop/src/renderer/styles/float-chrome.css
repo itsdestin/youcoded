@@ -498,11 +498,11 @@
 /* ── Terminal ───────────────────────────────────────────────────────────────
    The terminal already sits on a pre-blurred copy of the wallpaper (painted
    once — no live blur), full-bleed behind the header. Here it becomes an inset
-   floating sheet like the others. Desktop only: on phones the message box stays
+   floating sheet like the others. Computer terminal layout only (device.ts): on phones the message box stays
    under the terminal and the terminal's box is sized by the app, so it keeps
    today's look. The inset is theme-driven, never view-driven, so the terminal
    is one size in both views (a resize would make the PTY re-emit its buffer). */
-html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll {
+html[data-term-layout="computer"] [data-chrome-style='float'] .terminal-overlay-scroll {
   top: calc(var(--top-chrome-bottom, 3rem) + 6px) !important;
   left: 8px !important;
   right: 8px !important;
@@ -518,11 +518,11 @@ html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scr
   --terminal-side-inset: 0px;
   --terminal-bottom-inset: 0px;
 }
-html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll .xterm {
+html[data-term-layout="computer"] [data-chrome-style='float'] .terminal-overlay-scroll .xterm {
   padding: 8px 6px 6px 10px;
 }
 /* Keep the blurred wallpaper copy aligned with the real wallpaper: stretch it
    back out to the window edges the card was pulled in from. */
-html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll > .terminal-wallpaper {
+html[data-term-layout="computer"] [data-chrome-style='float'] .terminal-overlay-scroll > .terminal-wallpaper {
   inset: calc(-1 * (var(--top-chrome-bottom, 3rem) + 6px)) -8px -8px -8px !important;
 }

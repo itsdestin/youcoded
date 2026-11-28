@@ -89,7 +89,7 @@ export class AutomationStore {
 
   /** One write at a time, in order; a failed write is retried by the next change (same as the page chats store). */
   private queue(work: () => Promise<void>): void {
-    this.saving = this.saving.catch(() => {}).then(work);
+    this.saving = this.saving.catch(() => {}).then(work); // benign: the earlier save already told its own caller; this only keeps the queue moving
   }
   private saveJobs(): void {
     const body = JSON.stringify({ v: 1, jobs: this.jobs ?? [] });
@@ -101,7 +101,7 @@ export class AutomationStore {
   }
 
   /** Resolves once every change so far is on disk (tests, and a clean quit). */
-  whenSaved(): Promise<void> { return this.saving.catch(() => {}); }
+  whenSaved(): Promise<void> { return this.saving.catch(() => {}); } // benign: the earlier save already told its own caller; this only keeps the queue moving
 
   async list(): Promise<StoredAutomation[]> { await this.load(); return [...this.jobs!]; }
 
@@ -220,7 +220,7 @@ export class AutomationStore {
       try {
         const r = JSON.parse(await fs.readFile(path.join(this.runsDir(jobId), n), 'utf8')) as StoredRun;
         if (r && typeof r.id === 'string' && typeof r.startedAt === 'number') out.push(r);
-      } catch { /* a half-written or damaged run file is left out of the list rather than breaking it */ }
+      } catch { /* benign: a half-written or damaged run file is left out of the list rather than breaking it */ }
     }
     return out.sort((a, b) => b.startedAt - a.startedAt);
   }

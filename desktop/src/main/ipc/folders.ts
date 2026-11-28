@@ -7,12 +7,14 @@
 import os from 'os';
 import { IPC } from '../../shared/backend-contract';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from '../folders-service';
+import { loadFolderUsage } from '../folder-usage';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 export const foldersChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.FOLDERS_LIST, kind: 'handle',
-    handler: () => listPickerFolders(),
+    // The usage stamps are loaded (async, once) before the sync list reads them from memory (folder-usage.ts).
+    handler: async () => { await loadFolderUsage(); return listPickerFolders(); },
     // A phone whose folder read failed still shows Home rather than an empty picker.
     remoteOnError: () => [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now(), exists: true }],
   }),

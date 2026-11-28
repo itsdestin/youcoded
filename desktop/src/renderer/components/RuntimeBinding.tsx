@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getCapabilities } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
-import { FieldError, FoldRow, Pill, SettingRow, Toggle } from './ui';
+import { ErrorState, FieldError, FoldRow, Pill, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
@@ -179,6 +179,12 @@ export interface NativeBinding {
    *  Shown beside the checkbox; a silent failure would leave the box ticked
    *  over a preference that was never stored. */
   memDismissError: string | null;
+  /** Why the provider/model lists could not be read — null when they could (or have not been asked
+   *  for yet). WHY it exists: a failed read used to look like "no providers", so Create stayed
+   *  greyed out with no reason given (error inventory 2026-09-10). */
+  loadError: string | null;
+  /** Ask for the lists again after a failed read. */
+  retryLoad: () => void;
 }
 
 // All derived binding state. Pure derivation (no state writes) apart from the one
@@ -193,6 +199,8 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
   const nativeSupported = isNativeSupported();
   const [providersList, setProvidersList] = useState<ProviderRow[]>([]);
   const [modelCatalog, setModelCatalog] = useState<CatalogRow[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retries, setRetries] = useState(0);
   // Local-engine memory guard (#2) — moved here from SessionStrip so BOTH
   // new-session forms enforce it.
   const [memVerdict, setMemVerdict] = useState<MemVerdict | null>(null);
@@ -207,16 +215,22 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
   useEffect(() => {
     if (!nativeSupported || runtime !== 'native' || !active) return;
     let cancelled = false;
+    // WHY no per-call `.catch(() => [])` (error inventory 2026-09-10, same fault as the model picker's):
+    // a failed read became an empty list, so the form looked like "no provider is set up" and Create
+    // stayed disabled without saying why. A failure is now kept and shown; lists already loaded stay.
     Promise.all([
-      window.claude.providers.list().catch(() => []),
-      window.claude.providers.catalog().catch(() => []),
+      window.claude.providers.list(),
+      window.claude.providers.catalog(),
     ]).then(([list, cat]) => {
       if (cancelled) return;
       setProvidersList(Array.isArray(list) ? (list as ProviderRow[]) : []);
       setModelCatalog(Array.isArray(cat) ? (cat as CatalogRow[]) : []);
+      setLoadError(null);
+    }).catch((e: unknown) => {
+      if (!cancelled) setLoadError(plainMessage(e, 'The lists did not come back.'));
     });
     return () => { cancelled = true; };
-  }, [nativeSupported, runtime, active, reconnects]);
+  }, [nativeSupported, runtime, active, reconnects, retries]);
 
   const readyProviders = providersList.filter((p) => p.ready);
   // NOTHING IS SUBSTITUTED (Destin, 2026-09-07 — "nothing should be overridden.
@@ -314,7 +328,7 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
     nativeSupported, readyProviders, modelCatalog, selectedProviderId, selectedProvider,
     providerModels, needsFreeformModel, selectedModelId, effectiveBinding, nativeCreateBlocked,
     memVerdict, memDetailOpen, setMemDetailOpen, setBinding, memDismissed, dismissMemoryWarning,
-    memDismissError,
+    memDismissError, loadError, retryLoad: () => setRetries((n) => n + 1),
   };
 }
 
@@ -331,6 +345,15 @@ export function NativeExtras({ nb, preset, onPreset }: {
 }) {
   return (
     <>
+      {/* A failed read of the provider lists. WHY here: Create is greyed out while the lists are
+          missing, and this says why and offers the retry instead of leaving a dead button. */}
+      {nb.loadError && (
+        <ErrorState
+          variant="inline"
+          message={`Couldn't load your models: ${nb.loadError}`}
+          onRetry={nb.retryLoad}
+        />
+      )}
       {/* Preset picker (spec §3.4): the native harness personality —
           Assistant (asks first) vs Coder (agentic, auto-edits). Both carry
           the full tool suite; they differ in prompt + starting permission

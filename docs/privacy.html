@@ -129,7 +129,7 @@
 <p><strong>Challenges.</strong> A game invite you send is relayed through the server to the friend you invite, live. It is not stored.</p>
 <p><strong>How long:</strong> Until you delete your account, unfriend, or block (unfriending and blocking remove the link). Friend requests expire at 90 days.</p>
 <h3 id="35-games" tabindex="-1">3.5 Games</h3>
-<p><strong>Playing a live game (Connect 4, chess).</strong> Your in-game name (your YouCoded display name, or your GitHub username if you have not set one) and your moves and in-game chat are relayed through a game room hosted on PartyKit (which runs on Cloudflare) to the other player. The room is discarded when the game ends. We do not save moves or chat.</p>
+<p><strong>Playing a live game (Connect 4, chess).</strong> Your in-game name (your YouCoded display name, or your GitHub username if you have not set one) and your moves and in-game chat are relayed through a game room on YouCoded&#x27;s own server (hosted by Cloudflare) to the other player. The room is discarded when the game ends. We do not save moves or chat.</p>
 <p><strong>What IS saved (only if signed in).</strong></p>
 <ul>
 <li><strong>Solo game best scores</strong> (for example Flappy and 2048). We keep your single best score for each game, when you set it, and how many runs you submitted. Your friends can see your best score on a friends-only leaderboard. Nobody else can.</li>
@@ -190,11 +190,10 @@
 <h2 id="4-other-companies-that-handle-data-for-youcoded" tabindex="-1">4. Other companies that handle data for YouCoded</h2>
 <p>Each has its own policy for what it does with the data it receives:</p>
 <ul>
-<li><strong>Cloudflare</strong> hosts YouCoded&#x27;s server, database, the live connections (online status, sync signals), the daily count store, the safety check on reviews, and the game rooms (through PartyKit). It sees every request, including your internet address, and keeps request logs. Cloudflare keeps YouCoded&#x27;s server logs for 3 days. <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare&#x27;s privacy policy</a>.</li>
+<li><strong>Cloudflare</strong> hosts YouCoded&#x27;s server, database, the live connections (online status, sync signals), the daily count store, the safety check on reviews, and the game rooms. It sees every request, including your internet address, and keeps request logs. Cloudflare keeps YouCoded&#x27;s server logs for 3 days. <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare&#x27;s privacy policy</a>.</li>
 <li><strong>GitHub</strong> hosts the app&#x27;s source code and releases, the marketplace and theme lists, and the sign-in; and it holds your private sync repositories and any bug report you send. <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub&#x27;s privacy statement</a>.</li>
 <li><strong>Anthropic</strong>, <strong>OpenAI</strong>, <strong>Google</strong>, <strong>OpenRouter</strong> (and the models behind it) and other AI providers you choose receive your prompts. <a href="https://www.anthropic.com/privacy">Anthropic</a>, <a href="https://openai.com/consumer-privacy/">OpenAI</a>, <a href="https://openrouter.ai/docs/guides/privacy/data-collection">OpenRouter data collection</a>.</li>
 <li><strong>Google (Drive, Fonts)</strong>, <strong>Apple (iCloud)</strong> if you choose them.</li>
-<li><strong>PartyKit</strong> runs the live game rooms.</li>
 <li><strong>Hugging Face, npm, Node.js, Termux</strong>: download sources for optional components.</li>
 <li><strong>Exa, Tavily, DuckDuckGo, Plaid</strong> and any MCP servers or integrations you connect.</li>
 </ul>

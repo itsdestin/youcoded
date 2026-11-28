@@ -437,4 +437,22 @@ export class ClaudeQueue {
       if (canRetireQueue(r)) { await this.options.storage.retire(id, r.revision); this.records.delete(id); }
     });
   }
+  /**
+   * Let go of a conversation's live mark when no running helper holds it any more (`held` says which incarnations still do).
+   * WHY: a chat whose cleanup failed, or whose Claude Code helper restarted, left the record marked live for an incarnation
+   * that no longer exists, and every later bind refused with "already bound to another live incarnation" until the app
+   * restarted — the chat could never send. This is exactly what close() would have done: in-flight deliveries are kept
+   * for recovery (never resent) and the queue is paused, as after an app restart.
+   */
+  releaseStaleLive(alias: QueueAlias, held: (incarnation: string) => boolean): Promise<void> {
+    return this.serial(async () => {
+      if (!this.restored) return;
+      const previous = [...this.records.values()].find(r => sameAlias(r.alias, alias));
+      if (!previous?.live || held(previous.live.incarnation)) return;
+      const r = structuredClone(previous); r.paused = true; delete r.pauseCause; r.live = null;
+      for (const i of r.items) if (i.status === 'delivering' || i.status === 'uncertain') this.quarantine(r, i);
+      await this.commit(r, previous.revision);
+      if (canRetireQueue(r)) { await this.options.storage.retire(r.queueId, r.revision); this.records.delete(r.queueId); }
+    });
+  }
 }

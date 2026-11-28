@@ -1,0 +1,34 @@
+name: Release watch
+
+# Hourly: did an app release change outside the normal release process? (scripts/release-watch.mjs)
+#
+# WHY: a stolen GitHub login or token could publish a poisoned installer or update. Every real
+# release is made by the release workflow, so a release or file uploaded by anyone else, or a
+# file swapped into an old release, pings Destin's phone within the hour (NTFY_TOPIC secret).
+on:
+  schedule:
+    # Off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '37 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Check recent releases for changes made outside the release workflow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: node scripts/release-watch.mjs

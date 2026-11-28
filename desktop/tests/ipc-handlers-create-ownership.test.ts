@@ -119,6 +119,7 @@ vi.mock('../src/main/harness/native-session-host', () => {
     getBinding(_id: string) { return undefined; }
 
     modelForSession(_id: string) { return undefined; }
+    async localModelForSession(_id: string) { return null; }
 
     async destroy(_id: string) { /* no-op */ }
 

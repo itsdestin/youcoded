@@ -112,7 +112,7 @@ export function ConnectedAccountsBody({ status, refresh }: {
 
             {viaGhCli && (
               <p className="text-2xs text-fg-muted leading-relaxed">
-                Connected through the GitHub CLI installed on this computer, so
+                Connected through the GitHub CLI installed on this device, so
                 there's nothing for YouCoded to disconnect here — to sign out, run{' '}
                 <code className="font-mono">gh auth logout</code> in a terminal.
               </p>

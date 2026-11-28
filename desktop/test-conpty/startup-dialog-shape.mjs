@@ -133,6 +133,64 @@ export function wrapsInto(prevRow, row, width) {
   return 'ambiguous';
 }
 
+/**
+ * Describe a FIRST-INSTALL screen (theme picker, sign-in method) — the screens
+ * Claude Code draws before it has any dialog chrome.
+ *
+ * WHY separate from readDialogShape: these screens have no "Enter to confirm"
+ * footer, the theme picker is unnumbered and marks the current choice with a
+ * "✔", and a decorative logo above them animates (so the whole screen never
+ * holds still). We therefore describe only the question: the paragraph above
+ * the option block, and the option rows around the ❯ cursor. The result has the
+ * same fields as shapeSummary() input so diffSummaries() compares it unchanged.
+ * Returns {present:false} when no ❯ row is on screen.
+ */
+export function readScreenShape(rows) {
+  const lines = rows.map((r) => r.replace(/\s+$/, ''));
+  const cursorIdx = lines.findIndex((l) => CURSOR.test(l));
+  if (cursorIdx < 0) return { present: false };
+  let first = cursorIdx;
+  while (first > 0 && lines[first - 1].trim()) first--;
+  let last = cursorIdx;
+  while (last + 1 < lines.length && lines[last + 1].trim()) last++;
+  const raw = [];
+  for (let i = first; i <= last; i++) {
+    // Drop the cursor, then a "✔" (the current theme) — neither is part of the label.
+    const t = lines[i].trim().replace(/^[❯>]\s+/, '').replace(/^[✔✓]\s+/, '');
+    raw.push({ i, t });
+  }
+  const allNumbered = raw.every((r) => NUMBERED.test(r.t)) || raw.filter((r) => NUMBERED.test(r.t)).length >= 2;
+  const opts = [];
+  let cursorIndex = -1;
+  for (const r of raw) {
+    // A row that is not numbered, among numbered ones, is a wrapped label (narrow screens).
+    if (allNumbered && !NUMBERED.test(r.t) && opts.length) { opts[opts.length - 1].text += ' ' + r.t; continue; }
+    if (r.i === cursorIdx) cursorIndex = opts.length;
+    opts.push({ text: r.t });
+  }
+  const options = opts.map((o) => {
+    const n = NUMBERED.exec(o.text);
+    return { label: n ? o.text.slice(n[0].length) : o.text, number: n ? Number(n[1]) : null };
+  });
+  // The question: the paragraph just above the options (skip the blank gap).
+  let end = first - 1;
+  while (end >= 0 && !lines[end].trim()) end--;
+  let start = end;
+  while (start > 0 && lines[start - 1].trim()) start--;
+  const para = end >= 0 ? lines.slice(start, end + 1).map((l) => l.trim()) : [];
+  return {
+    present: true,
+    kind: 'screen',
+    heading: para[0] ?? '',
+    body: para.slice(1),
+    options,
+    cursorIndex,
+    selection: options.length && options.every((o) => o.number !== null) ? 'numbered-digits' : 'cursor-arrows',
+    footer: '',
+    extraRows: [],
+  };
+}
+
 /** Temp paths change every run; the drift check compares everything else. */
 export function normalizeVolatile(text) {
   return String(text)

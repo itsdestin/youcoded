@@ -54,6 +54,15 @@ export type ClaudeAccountStatus =
        *  account, so the card can say which one it is instead of promising
        *  plan limits that do not exist. */
       apiKey: boolean;
+      /** When this sign-in ends — `claude auth status`'s `loginExpiresAt`, ISO time.
+       *  Shown on the Settings card (card #236, round 1 Q-warn-ahead "a line in
+       *  Settings"). Absent on API-key logins and older CLIs. */
+      expiresAt?: string;
+      /** True once that time has passed, or a reply came back "sign-in failed" since
+       *  the last successful check. The models stay switched ON regardless — the
+       *  2026-09-09 decision above still holds; this only changes the words and
+       *  offers Sign in again. */
+      expired?: boolean;
     }
   /** The CLI ran and said `loggedIn: false`. */
   | { state: 'signed-out' }

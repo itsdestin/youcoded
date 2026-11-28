@@ -19,6 +19,8 @@ import { isPlaceholderModelId } from '../../shared/model-ids';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { toolOutcome } from '../utils/tool-outcome';
+import { Tooltip } from './ui';
+import { ClaudeSignInNotice, ClaudeConnectionNotice } from './SignInNotices';
 
 interface Props {
   turn: AssistantTurn;
@@ -30,6 +32,8 @@ interface Props {
   showTimestamps: boolean;
   /** This turn is the one the model is writing right now (the chat's currentTurnId). False/absent for finished and history turns. */
   streaming?: boolean;
+  /** The conversation's most recent reply — only its sign-in card offers buttons (card #236). */
+  latest?: boolean;
 }
 
 // Non-end_turn stop reasons rendered inline under the affected turn.
@@ -81,14 +85,15 @@ function ReasoningSection({ content }: { content: string }) {
   useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
   return (
     <div className="mb-2">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1 text-2xs text-fg-muted hover:text-fg-dim select-none"
-        title="Show the model's reasoning"
-      >
-        <ChevronIcon className="w-3 h-3" expanded={expanded} />
-        <span className="italic">{expanded ? 'Hide reasoning' : 'Show reasoning'}</span>
-      </button>
+      <Tooltip text="Show the model's reasoning">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-1 text-2xs text-fg-muted hover:text-fg-dim select-none"
+        >
+          <ChevronIcon className="w-3 h-3" expanded={expanded} />
+          <span className="italic">{expanded ? 'Hide reasoning' : 'Show reasoning'}</span>
+        </button>
+      </Tooltip>
       {expanded && (
         <div className="mt-1 pl-2 border-l-2 border-edge-dim text-xs text-fg-dim">
           {/* Reasoning streams in too (before the reply) — same per-word saving. */}
@@ -123,35 +128,36 @@ function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
   // lives, and it resolves the denominator per source (Destin, 2026-08-16).
 
   return (
-    <div
-      className="text-3xs text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
-      title="Per-turn metadata from transcript"
-    >
-      {/* Fix: `<synthetic>` is CC's placeholder for a notice it wrote itself
-          (session limit, out of credits, /login), not a model — printing it
-          raw here showed the user a fake model name. Nothing replaces it: the
-          turn genuinely ran on no model. */}
-      {turn.model && !isPlaceholderModelId(turn.model) && (() => {
-        // The mark only; the id stays raw and mono. This strip exists to show
-        // the EXACT transcript values, so prettifying the id here would defeat
-        // its purpose — the mark just makes the company scannable when a long
-        // conversation switched models partway through.
-        const b = resolveModelBrand(turn.model);
-        return (
-          <span className="inline-flex items-center gap-1">
-            {b?.icon && <span style={{ color: b.color }} className="inline-flex"><ProviderIcon icon={b.icon} size={10} /></span>}
-            <span>{turn.model}</span>
-          </span>
-        );
-      })()}
-      {u && (
-        <>
-          <span>in {u.inputTokens.toLocaleString()}</span>
-          <span>out {u.outputTokens.toLocaleString()}</span>
-          {u.cacheReadTokens > 0 && <span>cached {u.cacheReadTokens.toLocaleString()}</span>}
-        </>
-      )}
-    </div>
+    <Tooltip text="Per-turn metadata from transcript">
+      <div
+        className="text-3xs text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
+      >
+        {/* Fix: `<synthetic>` is CC's placeholder for a notice it wrote itself
+            (session limit, out of credits, /login), not a model — printing it
+            raw here showed the user a fake model name. Nothing replaces it: the
+            turn genuinely ran on no model. */}
+        {turn.model && !isPlaceholderModelId(turn.model) && (() => {
+          // The mark only; the id stays raw and mono. This strip exists to show
+          // the EXACT transcript values, so prettifying the id here would defeat
+          // its purpose — the mark just makes the company scannable when a long
+          // conversation switched models partway through.
+          const b = resolveModelBrand(turn.model);
+          return (
+            <span className="inline-flex items-center gap-1">
+              {b?.icon && <span style={{ color: b.color }} className="inline-flex"><ProviderIcon icon={b.icon} size={10} /></span>}
+              <span>{turn.model}</span>
+            </span>
+          );
+        })()}
+        {u && (
+          <>
+            <span>in {u.inputTokens.toLocaleString()}</span>
+            <span>out {u.outputTokens.toLocaleString()}</span>
+            {u.cacheReadTokens > 0 && <span>cached {u.cacheReadTokens.toLocaleString()}</span>}
+          </>
+        )}
+      </div>
+    </Tooltip>
   );
 }
 
@@ -281,7 +287,7 @@ export interface VisualBubble {
   /** Every reasoning segment of the bubble, joined by a blank line, keyed by
    *  the first one's messageId. */
   reasoning?: { content: string; messageId: string };
-  text?: { content: string; messageId: string; findIndex: number };
+  text?: { content: string; messageId: string; findIndex: number; apiError?: string };
   plan?: { content: string; messageId: string; planFilePath?: string; allowedPrompts?: unknown };
   /** Every tool group in the bubble, in call order. Rendered as ONE group. */
   toolGroupIds: string[];
@@ -316,7 +322,7 @@ export function splitIntoBubbles(turn: Pick<AssistantTurn, 'segments'>): VisualB
       // text / tool / text shape keeps one bubble per text block).
       if (spoken()) { bubbles.push(current!); current = null; }
       const bubble = current ?? open(seg.messageId);
-      bubble.text = { content: seg.content, messageId: seg.messageId, findIndex: textIndex++ };
+      bubble.text = { content: seg.content, messageId: seg.messageId, findIndex: textIndex++, apiError: seg.apiError };
     } else if (seg.type === 'plan') {
       // A plan counts as speech; the following ExitPlanMode group attaches below.
       if (spoken()) { bubbles.push(current!); current = null; }
@@ -445,6 +451,9 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   if (prev.showTimestamps !== next.showTimestamps) return false;
   // The turn ending flips this with no change to the turn object; the text must redraw once as one piece.
   if (prev.streaming !== next.streaming) return false;
+  // WHY (card #236 review F2): `latest` flips true to false on the OLD reply when the person sends another
+  // message, with no change to the turn object. Without this the sign-in card stayed on screen instead of leaving.
+  if (prev.latest !== next.latest) return false;
 
   // Same turn object (checked above) ⇒ same segments ⇒ same group IDs. We only
   // need to walk one side's IDs.
@@ -461,7 +470,7 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   return true;
 }
 
-export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps, streaming }: Props) {
+export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps, streaming, latest }: Props) {
   // Read opt-in metadata preference here so the strip below only renders when
   // the user has explicitly turned it on in PreferencesPopup (default false).
   const { showTurnMetadata } = useTheme();
@@ -536,6 +545,12 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   return (
     <>
       {shown.map(({ bubble, sentFiles }, i) => {
+        // Card #236: a reply Claude Code wrote ITSELF because the sign-in ran out
+        // ("Login expired · Please run /login") becomes the sign-in card, chosen by
+        // CC's own label, never by its words.
+        if (bubble.text?.apiError === 'authentication_failed' && bubble.toolGroupIds.length === 0) {
+          return <ClaudeSignInNotice key={bubble.key} latest={!!latest} />;
+        }
         const hasTools = bubble.toolGroupIds.length > 0;
         // A sent-files card counts as content: a bubble holding only that card
         // must get the prose padding, not the tight tools-only padding.
@@ -578,7 +593,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
             </div>
           )}
         </>);
-        return (
+        const normal = (
           <div key={bubble.key} className="flex justify-start px-4 py-0.5">
             <div className={`assistant-bubble max-w-[85%] break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : reasoningOnly ? 'py-2.5' : 'py-3.5'}`}>
               {/* Fixed order, one of each (Destin, 2026-09-02): the reasoning
@@ -631,6 +646,13 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
             </div>
           </div>
         );
+        // Card #236 (round 2 S-offline-chat): Claude Code's own connection-error reply on the LATEST
+        // turn asks the app's connection check; only a confirmed "offline" swaps it for the
+        // No internet card. Online, or an older reply, keeps today's bubble — never a guess.
+        const connectionError = bubble.text?.apiError === 'server_error' || bubble.text?.apiError === 'unknown';
+        return connectionError && latest
+          ? <ClaudeConnectionNotice key={bubble.key} fallback={normal} />
+          : normal;
       })}
     </>
   );

@@ -387,7 +387,7 @@ const BASE = [
   // ── Pop-ups the user opens with a slash command ──────────────────────────
   { name: 'slash-config', description: '/config settings panel (search box, tabs); first Esc clears the search, second closes', steps: slash('config', 'Search settings', { close: [ESC, ESC] }) },
   { name: 'slash-model', description: '/model picker', steps: slash('model', 'Select model') },
-  { name: 'slash-permissions', description: '/permissions (tabs + search)', steps: slash('permissions', 'Recently denied') },
+  { name: 'slash-permissions', description: '/permissions (tabs + search)', steps: slash('permissions', 'Recently (blocked|denied)') },
   { name: 'slash-hooks', description: '/hooks (a list; reworded in 2.1.286, so anchored on its read-only notice)', steps: slash('hooks', 'This menu is read-only') },
   { name: 'slash-resume', description: '/resume (search, wrapped footer)', steps: slash('resume', 'Resume session') },
   { name: 'slash-add-dir', description: '/add-dir (a text-entry pop-up)', steps: slash('add-dir', 'Add directory to workspace') },
@@ -396,7 +396,8 @@ const BASE = [
   { name: 'slash-theme', description: '/theme (menu with a diff preview inside)', steps: slash('theme', 'Choose the text style') },
   { name: 'slash-login', description: '/login (menu)', steps: slash('login', 'Select login method') },
   { name: 'slash-help', description: '/help (tabs, shortcut table)', steps: slash('help', 'for shell mode') },
-  { name: 'slash-usage', description: '/usage (information panel)', steps: slash('usage', 'Total cost') },
+  // 2.1.326 renamed the panel's "Total cost" row to "Estimated cost" (drift run 2026-11-17).
+  { name: 'slash-usage', description: '/usage (information panel)', steps: slash('usage', '(Total|Estimated) cost') },
   { name: 'slash-effort', description: '/effort (slider)', steps: slash('effort', 'Faster') },
   { name: 'slash-memory', description: '/memory (menu)', steps: slash('memory', 'Auto-memory') },
   {

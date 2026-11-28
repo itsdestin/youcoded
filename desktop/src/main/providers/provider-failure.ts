@@ -20,6 +20,7 @@
 // (@ai-sdk/provider-utils handleFetchError: "Cannot connect to API: …",
 // "Failed to process successful response").
 
+import { isWordedContextOverflow } from './context-overflow';
 import { log } from '../logger';
 
 type FailureKind =
@@ -57,7 +58,8 @@ export const MAX_RETRY_AFTER_MS = 60_000;
  *  retry-after up to MAX_RETRY_AFTER_MS. */
 export function retryWaitMs(error: unknown, attempt: number, delays: readonly number[]): number | null {
   const failure = classifyFailure(error);
-  if (failure.kind !== 'temporary' || attempt >= delays.length) return null;
+  // A confirmed-offline failure is never retried by the ladder (card #236): the person presses Try again.
+  if (failure.kind !== 'temporary' || failure.code === 'no-internet' || attempt >= delays.length) return null;
   return failure.retryAfterSec !== undefined ? Math.min(failure.retryAfterSec * 1000, MAX_RETRY_AFTER_MS) : delays[attempt];
 }
 
@@ -107,11 +109,40 @@ function networkCodeOf(e: any): string | undefined {
   return undefined;
 }
 
+/** True when the failed request went to THIS machine or the local network (the local engine, Ollama,
+ *  LM Studio, a LAN server). WHY (card #236 review F3): such a failure is the local server being down, not the
+ *  internet — blaming the connection there would invent a cause, and local models are meant to work offline.
+ *  Reads the request address the AI SDK puts on its error (`url`), never the message. */
+export function failedAgainstLocalServer(error: unknown, providerType?: string): boolean {
+  if (providerType === 'local-engine') return true;
+  const e: any = (error as any)?.lastError ?? error;
+  let host = '';
+  try { host = new URL(String(e?.url ?? '')).hostname.replace(/^\[|\]$/g, ''); } catch { return false; }
+  if (!host) return false;
+  if (host === 'localhost' || host === '::1' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  const m = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (!m) return false;
+  const a = Number(m[1]); const b = Number(m[2]);
+  return a === 127 || a === 10 || a === 0 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+}
+
+/** A network failure the app's own connection check confirmed (card #236): the computer is offline.
+ *  Thrown by the harness's retry layer so the turn ends at once instead of waiting out the ladder. */
+export class NoInternetError extends Error {
+  readonly noInternet = true;
+  constructor(readonly cause: unknown) { super('No internet connection.'); this.name = 'NoInternetError'; }
+}
+
 export function classifyFailure(error: unknown): ProviderFailure {
   const e: any = (error as any)?.lastError ?? error;
   if (!e || typeof e !== 'object') return { kind: 'unknown', code: 'unknown' };
+  // Still a TEMPORARY failure (Try again is right) but with its own code, which the chat draws as the red No internet card.
+  if (e.noInternet === true) return { kind: 'temporary', code: 'no-internet' };
   // Codes an earlier layer already decided (OpenRouter's ProviderAccountError,
   // ChatGPT sign-in) — those layers read the provider's real answer.
+  // The harness's own pre-send "cannot fit" refusal (context-overflow.ts) is the same kind and code as the
+  // engine's refusal below, so both show one card with Summarise (fault 5).
+  if (e.failureKind === 'too-long') return { kind: 'too-long', code: 'context-too-long' };
   if (typeof e.errorCode === 'string') return { kind: 'account', code: e.errorCode };
 
   const status: number | undefined = e.statusCode ?? e.status;
@@ -129,7 +160,9 @@ export function classifyFailure(error: unknown): ProviderFailure {
   // context_length_exceeded; llama.cpp exceed_context_size_error.
   if (status === 413 || type === 'request_too_large') return { kind: 'too-long', code: 'request-too-large' };
   if (codeField === 'context_length_exceeded' || orType === 'context_length_exceeded'
-    || type === 'exceed_context_size_error' || /^prompt is too long: \d+ tokens > \d+ maximum$/.test(message)) {
+    || type === 'exceed_context_size_error' || /^prompt is too long: \d+ tokens > \d+ maximum$/.test(message)
+    // Card #176: the worded refusals (DeepSeek, Mistral, ...) get the same card and Summarise button.
+    || isWordedContextOverflow(status, message)) {
     return { kind: 'too-long', code: 'context-too-long' };
   }
 
@@ -180,6 +213,14 @@ export function classifyFailure(error: unknown): ProviderFailure {
 export function logTurnFailure(sessionId: string, error: unknown): ProviderFailure {
   const failure = classifyFailure(error);
   const e: any = (error as any)?.lastError ?? error;
-  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status });
+  // WHY the NUMBERS of a too-long refusal (2026-11-09): a local turn ended "too long" with
+  // ~22.6k of a 32k window used, and the log held only kind/code, so whether the engine
+  // counted the prompt, the reply allowance or something else could not be told. Only the
+  // digits are kept ("request (34100 tokens) exceeds … (32768 tokens)" → [34100, 32768]):
+  // the trace stays content-free, as the test for this function requires.
+  const tokenCounts = failure.kind === 'too-long'
+    ? (String(e?.responseBody ?? e?.message ?? '').match(/\d{3,7}/g) ?? []).slice(0, 4).map(Number)
+    : [];
+  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status, ...(tokenCounts.length ? { tokenCounts } : {}) });
   return failure;
 }

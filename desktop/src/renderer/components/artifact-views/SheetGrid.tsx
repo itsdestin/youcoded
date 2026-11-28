@@ -17,6 +17,7 @@ import {
 } from './sheet-window';
 import { rangeToTsv } from './sheet-copy';
 import { notifySheetDrawn, registerSheetSelection } from './artifact-find-bridge';
+import { Tooltip } from '../ui';
 
 /** What one cell shows. `style` is the cell's complete look (border, padding, alignment...) except the selection ring. */
 export interface GridCell {
@@ -114,19 +115,19 @@ const Row = memo(function Row({ r, height, items, selCol, rc0, rc1, model }: Row
         if (it.c >= rc0 && it.c <= rc1) style = { ...style, backgroundColor: RANGE_BG };
         if (it.c === selCol) style = { ...style, outline: `2px solid ${SEL}`, outlineOffset: -2 };
         return (
-          <td
-            key={it.c}
-            colSpan={it.colSpan > 1 ? it.colSpan : undefined}
-            rowSpan={it.rowSpan > 1 ? it.rowSpan : undefined}
-            style={style}
-            title={cell.title}
-            data-r={r}
-            data-c={it.c}
-            data-cell={cell.addr}
-            aria-colindex={it.c + 2}
-          >
-            {cell.text}
-          </td>
+          <Tooltip key={it.c} text={cell.title ?? ''}>
+            <td
+              colSpan={it.colSpan > 1 ? it.colSpan : undefined}
+              rowSpan={it.rowSpan > 1 ? it.rowSpan : undefined}
+              style={style}
+              data-r={r}
+              data-c={it.c}
+              data-cell={cell.addr}
+              aria-colindex={it.c + 2}
+            >
+              {cell.text}
+            </td>
+          </Tooltip>
         );
       })}
     </tr>

@@ -42,7 +42,7 @@ describe('AttachmentChip', () => {
       const { container, unmount } = render(<AttachmentChip path={path} onRemove={() => {}} />);
       await flush();
       const chip = container.firstElementChild as HTMLElement;
-      expect(chip.getAttribute('title')).toBe(name);
+      expect(chip.getAttribute('data-hint')).toBe(name);
       expect(chip.getAttribute('data-file-kind')).toBeTruthy();
       // The strip: the visible name, next to an svg glyph.
       const strip = within(chip).getByText(name);

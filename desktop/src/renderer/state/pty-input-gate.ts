@@ -18,7 +18,7 @@ import { getScreenInputBlock } from './screen-input-store';
 //
 // Every AUTOMATED PTY writer (submit-retry nudge, chat sends, command sends)
 // must consult these predicates first. Deliberate menu-driving writes
-// (PlanApprovalCard keys, TrustGate buttons, terminal-view keystrokes) must NOT
+// (PlanApprovalCard keys, PromptCard buttons, terminal-view keystrokes) must NOT
 // go through this gate — driving the menu is their whole purpose.
 
 /**

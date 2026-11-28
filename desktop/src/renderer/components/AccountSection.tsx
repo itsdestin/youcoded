@@ -4,7 +4,8 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
 import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SectionLabel, SettingRow, Callout } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, InputGroup, SectionLabel, SettingRow, Callout } from './ui';
+import { plainMessage } from '../utils/ipc-error';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
@@ -348,6 +349,10 @@ function SignedInBody({
   // surface the friends UI uses directly — the context only owns the auth token
   // boundary (profile/handle/delete), not the social graph.
   const [blocks, setBlocks] = useState<BlockRow[] | null>(null);
+  // WHY (error inventory 2026-09-10, Settings row 86): a failed read left `blocks` null and the whole
+  // section simply did not appear, so someone who HAD blocked people saw nothing and could not tell
+  // it from "I have blocked no one". The failure is now shown, with Try again.
+  const [blocksError, setBlocksError] = useState<string | null>(null);
   // In-flight id (single-fire guard) + per-row unblock error text.
   const [unblockingId, setUnblockingId] = useState<string | null>(null);
   const [unblockErrors, setUnblockErrors] = useState<Record<string, string>>({});
@@ -359,9 +364,14 @@ function SignedInBody({
   const [exportError, setExportError] = useState<string | null>(null);
 
   const refetchBlocks = async () => {
-    const res = await window.claude.social.listBlocks();
-    // Leave blocks null on failure so the section simply doesn't render.
-    setBlocks(res.ok ? res.value : null);
+    try {
+      const res = await window.claude.social.listBlocks();
+      // On failure keep any list already on screen; say so instead of showing nothing.
+      if (res.ok) { setBlocks(res.value); setBlocksError(null); }
+      else setBlocksError(res.message || 'the server did not say why');
+    } catch (e) {
+      setBlocksError(plainMessage(e, 'the request did not complete'));
+    }
   };
 
   useEffect(() => {
@@ -470,6 +480,12 @@ function SignedInBody({
       {/* Blocked users — only rendered when the list is non-empty (loading and
           empty both leave `blocks` falsy so nothing shows in settings). One
           card, each person a nested row. */}
+      {blocksError && (
+        <section>
+          <SectionLabel className="mb-2">Blocked users</SectionLabel>
+          <ErrorState variant="inline" message={`Couldn't load your blocked users: ${blocksError}`} onRetry={() => { void refetchBlocks(); }} />
+        </section>
+      )}
       {blocks && blocks.length > 0 && (
         <section>
           <SectionLabel className="mb-2">Blocked users</SectionLabel>

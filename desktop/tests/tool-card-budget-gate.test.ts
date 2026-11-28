@@ -145,6 +145,7 @@ describe('friendlyToolDisplay — malformed (non-string) inputs never leak [obje
   it('Read: object-valued offset/limit are treated as absent, not interpolated', () => {
     const d = friendlyToolDisplay(tool('Read', { file_path: '/a/b.ts', offset: { bad: true }, limit: { bad: true } }));
     expect(d.detail).not.toContain('[object Object]');
-    expect(d.detail).toBe('· /a/b.ts');
+    // WHY: tool rows show the file NAME since 2026-11-01 (phone test: full paths were unreadable); the expanded card keeps the path.
+    expect(d.detail).toBe('· b.ts');
   });
 });

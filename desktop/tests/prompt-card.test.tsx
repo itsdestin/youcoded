@@ -127,9 +127,9 @@ describe('PromptCard — Resume Session', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('does not run shortcuts for the folder-trust dialog (TrustGate owns it)', () => {
-    // The trust prompt renders behind TrustGate's full-screen takeover, so a
-    // stray "1" must not trust a folder the user never saw the question for.
+  it('shows the folder-trust question as an ordinary card with Claude Code\'s own two choices', () => {
+    // WHY (2026-11-01): the full-screen trust takeover was removed; trust is a
+    // card like every other menu, answered through the same onSelect path.
     const menu = parseInkSelect(' ❯ 1. Yes, I trust this folder\n   2. No, exit');
     if (!menu) throw new Error('trust fixture no longer parses');
     const prompt: InteractivePrompt = {
@@ -140,8 +140,10 @@ describe('PromptCard — Resume Session', () => {
     expect(prompt.title).toBe('Trust This Folder?');
 
     render(<PromptCard prompt={prompt} sessionId="s1" onSelect={onSelect} />);
-    fireEvent.keyDown(window, { key: '1' });
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByText('Trust This Folder?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /No, exit/ }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0][1]).toBe('No, exit');
   });
 });
 

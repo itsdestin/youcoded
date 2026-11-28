@@ -84,6 +84,9 @@ interface UpdateStatus {
   /** #183: installing asks for a password (Linux package, non-administrator Mac), so
    *  quitting does not install it — only Restart to update does. */
   needs_password?: boolean;
+  /** #186: this copy came from a package other than the official one (AUR youcoded-bin), so the app
+   *  neither downloads nor installs for it; the footer says to update with the package manager. */
+  managed_by_other_package?: boolean;
   /** #183 F5: a quit really would install it (staged, not refused, under the failure limit); the switch is separate. */
   installs_on_quit?: boolean;
 }
@@ -104,6 +107,14 @@ interface Props {
   open: boolean;
   onClose: () => void;
   updateStatus: UpdateStatus;
+}
+
+// WHY (Destin, 2026-11-23): each release's notes open with a "**Claude Code CLI baseline:** …"
+// line for the release team. It means nothing to users, so the popup leaves it out; the file on
+// GitHub keeps it.
+const BASELINE_LINE = /^\s*\*\*Claude Code CLI baseline:\*\*.*(?:\r?\n)?/gm;
+function withoutBaseline(body: string): string {
+  return body.replace(BASELINE_LINE, '').trim();
 }
 
 export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
@@ -429,7 +440,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     );
   } else if (loading || !data) {
     body = <LoadingState what="changelog" />;
-  } else if (updateStatus.update_available) {
+  } else if (updateStatus.update_available || data.entries.length > 0) {
+    // WHY entries even with no update waiting (Destin, 2026-11-22): the no-update view used to
+    // draw the raw file, so its "# Changelog" title, intro line and the empty "[Unreleased]"
+    // placeholder showed at the top of the official notes. The parsed entries drop all three,
+    // and both views now look the same. The raw-markdown branch below is only a fallback for a
+    // file with no version headings at all.
     // Filter by CHRONOLOGICAL position, not semver. CHANGELOG.md is authored
     // top-newest-bottom-oldest, so source order is release order. Semver math breaks
     // when a project resets its version numbers (e.g. YouCoded went 2.4.0 → 1.0.0);
@@ -437,7 +453,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // resets correctly.
     const currentIdx = data.entries.findIndex(e => e.version === updateStatus.current);
     let shown: ChangelogEntry[];
-    if (currentIdx === -1) {
+    if (!updateStatus.update_available) {
+      // No update waiting: every version, newest first.
+      shown = data.entries;
+    } else if (currentIdx === -1) {
       // User's current version isn't in the changelog (never-released local build,
       // stale file, etc.) — fall back to newest entry only.
       shown = data.entries.length > 0 ? [data.entries[0]] : [];
@@ -447,6 +466,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       // CHANGELOG lags a fresh release).
       shown = [data.entries[0]];
     } else {
+      // Only the versions newer than the user's, never the ones they already have.
       shown = data.entries.slice(0, currentIdx);
     }
     // WHY a labelled card per version (Destin, close-session-4#CS4-1; guide: nothing bare on
@@ -461,7 +481,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             {/* text-fg text-sm: the notes set no colour of their own (in chat they inherit
                 the bubble's); here they inherited the page default, near-invisible on dark
                 themes like Halftone Dimension (seen on close-session-5's preview). */}
-            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={e.body} /></div>
+            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={withoutBaseline(e.body)} /></div>
           </section>
         ))}
       </>
@@ -500,7 +520,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         // notes with no fade and drew a full-width line above its footer (guide: no full-width
         // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
         // in view and the notes fade see-through under it.
-        footer={updateStatus.update_available ? (
+        footer={updateStatus.update_available && updateStatus.managed_by_other_package ? (
+          // WHY a plain card and no button (card #186): the official download would conflict with the
+          // package this copy came from, so there is nothing for Update now to do. Not an error box:
+          // nothing failed. Same first-level card the release notes above use.
+          <div className={`${CARD_LEVEL_1} p-3 text-sm text-fg`} role="status">
+            This copy of YouCoded was installed from another package, so it can't update itself. Update it with your package manager.
+          </div>
+        ) : updateStatus.update_available ? (
           // WHY full width (Destin, close-session-4#CS4-1: "the button should be full width as
           // well"; guide: a lone button is full width): it hugged its label at the right.
           <div className="flex flex-col">

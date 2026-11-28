@@ -15,7 +15,7 @@ import type { TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import type { TriggerIndex, PathTrigger } from '../src/main/harness/injection/path-triggers';
 import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
-import { makeOpts, fakeTool } from './helpers/harness-fakes';
+import { FAKE_SUMMARY, makeOpts, fakeTool } from './helpers/harness-fakes';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { buildTriggerIndex } from '../src/main/harness/injection/path-triggers';
 import { rebuildHistoryWithOrigins } from '../src/main/harness/history-rebuild';
@@ -435,7 +435,7 @@ describe('path-triggered injection', () => {
   it('successful automatic summary rearms a retired rule without treating its summary mention as the rule', async () => {
     const rule = { id: 'rule:/project/r.md', source: 'rules/r.md', body: 'AUTO-RULE-MARKER' };
     const { markAppGenerated } = await import('../src/main/harness/compaction');
-    const model = scriptedModel([stream(...textChunks('sum', `Summary mentions ${rule.body}`), finishChunk('stop')),
+    const model = scriptedModel([stream(...textChunks('sum', `${FAKE_SUMMARY}\nSummary mentions ${rule.body}`), finishChunk('stop')),
       stream(toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls')),
       stream(...textChunks('done', 'done'), finishChunk('stop'))]);
     const session = new HarnessSession(makeOpts({ contextLength: 8192, triggers: always(rule),

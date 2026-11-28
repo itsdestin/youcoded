@@ -1,0 +1,13 @@
+/* The terminal's scroll bar: one bar, ours (.terminal-scrollbar-thumb, globals.css). */
+/* WHY (Destin, 2026-11-10, two pictures: "doubled grey terminal scroll bar under green youcoded bar" on the computer;
+   on the phone "the edge of a terminal scrollbar visible but no youcoded scroll bar"): the terminal library (xterm 6)
+   stopped using the browser's scroll bar and draws its OWN grey one, which the two rules above do not reach. Hide it
+   everywhere, so the only bar is ours. The mouse wheel, touch swipes and the arrow buttons scroll as before. */
+.terminal-overlay-scroll .xterm .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+}
+/* Phone layout, framed themes: the terminal runs edge to edge under the frame's side strips there (no
+   --terminal-side-inset), so our bar sat hidden under the right strip. Keep it just inside the frame. */
+html[data-term-layout="phone"] body:not([data-chrome-style="floating"]):not([data-chrome-style="float"]):not([data-input-style="floating"]) .terminal-scrollbar-thumb {
+  right: calc(2px + var(--frame-edge, 0px));
+}

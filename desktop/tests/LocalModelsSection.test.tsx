@@ -32,8 +32,8 @@ function setupModelsMock(overrides: Record<string, any> = {}) {
   return (globalThis as any).window.claude.models;
 }
 
-// Destin's real 2026-08-26 interruption. The app's gb() is binary, so these
-// render as 74.2 GB of 113.0 GB (66%), not Hugging Face's 79.7 of 121.3.
+// Destin's real 2026-08-26 interruption. Sizes count 1000 per unit (card #143), so these
+// render as 79.7 GB of 121.3 GB (66%) — the numbers Hugging Face shows.
 const unfinished: InstalledLocalModel = {
   id: 'Half-UD-Q4_K_XL-00001-of-00004', sizeBytes: 79_674_559_677,
   quant: 'UD-Q4_K_XL', quantDescription: 'Balanced', parts: 4, status: 'unfinished',
@@ -60,7 +60,7 @@ describe('LocalModelRow', () => {
     expect(notice.className).toContain('bg-amber-500/10');
     expect(notice.contains(screen.getByText('Resume'))).toBe(true);
     expect(notice.contains(screen.getByText('Delete'))).toBe(true);
-    expect(screen.getByText('66% — 74.2 of 113.0 GB')).toBeTruthy();
+    expect(screen.getByText('66% — 79.7 of 121.3 GB')).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByText('Resume')); });
     expect(window.claude.models.resume).toHaveBeenCalledWith('Half-UD-Q4_K_XL-00001-of-00004');
   });
@@ -150,7 +150,7 @@ describe('LocalModelRow', () => {
   it('a live download shows a progress bar and Pause in place of Resume and Delete', () => {
     render(<LocalModelRow model={unfinished} progress={liveOf('downloading')} onRefresh={async () => {}} />);
     // The progress line carries the state word (the coloured band is gone).
-    expect(screen.getByText('Downloading · 70% — 79.2 of 113.0 GB · part 3 of 4')).toBeTruthy();
+    expect(screen.getByText('Downloading · 70% — 85.0 of 121.3 GB · part 3 of 4')).toBeTruthy();
     expect(screen.getByLabelText('Download progress')).toBeTruthy();
     expect(screen.queryByText('Resume')).toBeNull();
     // WHY Delete is absent while bytes move: two stop-shaped buttons differing
@@ -164,7 +164,7 @@ describe('LocalModelRow', () => {
     render(<LocalModelRow model={untraceable} onRefresh={async () => {}} />);
     expect(screen.queryByText('Resume')).toBeNull();
     expect(screen.queryByText(/%/)).toBeNull();      // no total on disk = no honest percentage
-    expect(screen.getByText('74.2 GB downloaded')).toBeTruthy();
+    expect(screen.getByText('79.7 GB downloaded')).toBeTruthy();
     // A danger notice inside the card says what to do, in plain grey text, with
     // Delete inside it — no red strip, no explanation hidden behind an (i).
     const notice = screen.getByText('Damaged download').closest('.rounded-lg.border') as HTMLElement;
@@ -176,7 +176,7 @@ describe('LocalModelRow', () => {
   it('the delete confirmation names the real number of bytes at stake', async () => {
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
     await act(async () => { fireEvent.click(screen.getByText('Delete')); });
-    expect(screen.getByText(/Delete 74\.2 GB\? This removes every downloaded piece/)).toBeTruthy();
+    expect(screen.getByText(/Delete 79\.7 GB\? This removes every downloaded piece/)).toBeTruthy();
   });
 
   it('deleting cancels first and waits for the cancelled event when the stream still shows it live', async () => {
@@ -361,11 +361,11 @@ describe('fields main computes', () => {
       // lower down — and the total is the number a user actually decides on.
       render(<SizeLine q={quantWith({ contextBytesIsUpperBound: true })} />);
       openBubble();
-      expect(screen.getByText('up to 4.0 GB')).toBeTruthy();
+      expect(screen.getByText('up to 4.3 GB')).toBeTruthy();
       cleanup();
       render(<SizeLine q={quantWith({})} />);
       openBubble();
-      expect(screen.getByText('4.0 GB')).toBeTruthy();
+      expect(screen.getByText('4.3 GB')).toBeTruthy();
     });
 
     it('R8: has NO advice line when the estimator sent none', () => {
@@ -380,13 +380,13 @@ describe('fields main computes', () => {
     it('says "up to" for the context share when it is an upper bound', () => {
       render(<SizeLine q={quantWith({ contextBytesIsUpperBound: true })} />);
       openBubble();
-      expect(screen.getByText('includes up to 1.6 GB for a 32k context')).toBeTruthy();
+      expect(screen.getByText('includes up to 1.7 GB for a 32k context')).toBeTruthy();
     });
 
     it('states the context share exactly when it is a reading', () => {
       render(<SizeLine q={quantWith({})} />);
       openBubble();
-      expect(screen.getByText('includes 1.6 GB for a 32k context')).toBeTruthy();
+      expect(screen.getByText('includes 1.7 GB for a 32k context')).toBeTruthy();
       expect(screen.queryByText(/up to/)).toBeNull();
     });
   });

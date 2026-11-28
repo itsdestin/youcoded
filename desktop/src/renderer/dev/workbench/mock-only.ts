@@ -113,6 +113,12 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Finishing Pages, step 1: `pages.openWebsite` / `pages.forgetOpenSite` were designed here
   // and came off when pages:open-website / pages:forget-open-site landed on every surface
   // (2026-10-24). The fakes in mock-shim.ts stay so the ask and the site list stay reviewable.
+  // Card #236 (sign-in expiry + no internet): its three rows (`claudeCode.signIn`, `claudeCode.cancelSignIn`,
+  // `network.check`) are GONE (2026-11-18) — main + preload + remote-shim carry the real channels
+  // (main/claude-sign-in.ts, main/network-check.ts); the fakes in mock-shim.ts stay so the workbench can
+  // still show the waiting, back-in and offline cards without a browser or a network.
+  // Office Home's row actions (card #143): office.rename / duplicate / forgetRecent rows are GONE —
+  // main + preload + remote-shim carry the real channels; the fakes in mock-shim.ts stay.
   // Automatic updates (#183): its last row (update.restartToUpdate) is GONE (T3): main + preload +
   // remote-shim carry the real channel; the hand-written mock in mock-shim.ts stays.
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE

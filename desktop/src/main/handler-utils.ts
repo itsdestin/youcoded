@@ -51,32 +51,44 @@ export async function wrap<T>(run: () => Promise<T>): Promise<ApiResult<T>> {
 // burst, and signOut() is idempotent, so this would otherwise write one line
 // per in-flight request for a single sign-out event.
 //
-// STILL MISSING, deliberately: the user-facing notice. Part 4 of
-// docs/active/specs/2026-08-11-presence-self-healing-design.md asks for a log
-// line AND a notice; the notice needs a surface and copy decision on an auth
-// screen. This half makes the event diagnosable; it does not yet make it
-// visible.
+// The user-facing notice (card #216) is raised by clearSessionAfter401 below.
 const MAX_LOGGED_SERVER_MESSAGE = 200;
+
+// WHY (card #216): the log line used to be the only trace of the sign-out. Now the same moment also tells the
+// screen (social-handlers registers the listener and relays it as a presence event), so the person sees a notice.
+type SessionLostListener = (info: { surface: string }) => void;
+let sessionLostListener: SessionLostListener | null = null;
+/** One listener; a later registration replaces the earlier one (hot reload). Pass null to clear. */
+export function setSessionLostListener(fn: SessionLostListener | null): void { sessionLostListener = fn; }
+
+/**
+ * The ONE place the app signs the account out because the SERVER rejected the session (a 401). Shared by the
+ * 401 decorator below and the three account handlers that used to call store.signOut() silently.
+ * WHY only when a session existed: several calls can 401 in one burst, but only the first finds a token, so the
+ * log line and the on-screen notice both happen once per sign-out event. A sign-out the person chose never comes
+ * through here (account:sign-out / sign-out-all / delete call store.signOut() themselves), so it gets no notice.
+ */
+export function clearSessionAfter401(store: MarketplaceAuthStore, surface: string, serverMessage: string): void {
+  const hadSession = store.getToken() !== null;
+  store.signOut();
+  if (!hadSession) return;
+  log('WARN', 'Auth', 'account session cleared — a call came back 401', {
+    surface,
+    // CAPPED because this is the 401 RESPONSE BODY, verbatim and
+    // server-controlled: marketplace-api-client falls back to the raw
+    // text when the body is not JSON, so a proxy or captive portal
+    // answering with an HTML page would write that whole page here. The
+    // log keeps only its last 500 lines, so one such entry can evict
+    // every useful line around it. 200 characters is more than any real
+    // server message and cannot cost more than one line.
+    serverMessage: serverMessage.slice(0, MAX_LOGGED_SERVER_MESSAGE),
+  });
+  try { sessionLostListener?.({ surface }); } catch { /* a notice that fails to send must never undo the sign-out */ }
+}
 
 export function makeClearSessionOn401(store: MarketplaceAuthStore, surface: string) {
   return <T>(result: ApiResult<T>): ApiResult<T> => {
-    if (!result.ok && result.status === 401) {
-      const hadSession = store.getToken() !== null;
-      store.signOut();
-      if (hadSession) {
-        log('WARN', 'Auth', 'account session cleared — a call came back 401', {
-          surface,
-          // CAPPED because this is the 401 RESPONSE BODY, verbatim and
-          // server-controlled: marketplace-api-client falls back to the raw
-          // text when the body is not JSON, so a proxy or captive portal
-          // answering with an HTML page would write that whole page here. The
-          // log keeps only its last 500 lines, so one such entry can evict
-          // every useful line around it. 200 characters is more than any real
-          // server message and cannot cost more than one line.
-          serverMessage: result.message.slice(0, MAX_LOGGED_SERVER_MESSAGE),
-        });
-      }
-    }
+    if (!result.ok && result.status === 401) clearSessionAfter401(store, surface, result.message);
     return result;
   };
 }

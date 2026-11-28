@@ -14,9 +14,11 @@
 import { guardDownload } from './download-guard';
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
-import { isContextOverflow } from '../providers/context-overflow';
+import { isContextOverflow, ContextCannotFitError } from '../providers/context-overflow';
+import { capResultAndSave } from './tool-result-room';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
-import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, NoInternetError, failedAgainstLocalServer, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { checkInternet as realCheckInternet } from '../network-check';
 import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
@@ -202,7 +204,8 @@ import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageDat
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire, encodeImagesForWire } from './wire-adapter';
-import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
+import { LocalPrewarm } from './local-prewarm';
+import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, isJunkSummary, summaryOrStandIn, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
@@ -221,7 +224,7 @@ import { retainedRuleMessages } from './injection/retained-rule-visibility';
 import { mcpToolsFor, estimateToolSchemaTokens } from './mcp/mcp-tools';
 import type { ReadyServer } from './mcp/mcp-manager';
 import {
-  costForUsage, providerCostFromMetadata, costDisagreement,
+  costForUsage, providerCostFromMetadata, servedByFromMetadata, costDisagreement,
   COST_DISAGREEMENT_THRESHOLD, addComparableTurn, sessionCostDisagreement, modelCostDisagreements,
   NO_SESSION_COST_TOTALS, COST_GAP_RELOG_FACTOR,
   type ModelPricing, type SessionCostTotals,
@@ -284,6 +287,9 @@ export interface HarnessSessionOpts {
   toolServices?: ToolServices;
   /** Test hook: step-level retry backoff (ms). Defaults to [1000, 2000, 4000]. */
   retryDelays?: number[];
+  /** Test hook (card #236): the app's own "is this computer online?" check, asked when a step fails
+   *  with a network error. Defaults to the real one (network-check.ts). */
+  checkInternet?: () => Promise<boolean>;
   /** Test hook: streaming inactivity watchdog timings (ms). Silence past
    *  `stallWarningMs` warns the user; a further `stallCountdownMs` of silence
    *  triggers the auto-retry / session-error. Default 60_000 / 15_000. */
@@ -373,10 +379,10 @@ export interface HarnessSessionOpts {
 // parallel_tool_calls:false; cloud factories ignore it. `cacheKey` is this
 // session's id: the ChatGPT-plan factory sends it as the endpoint's
 // prompt_cache_key so every step of one session shares a cached prefix
-// (chatgpt backend design §4.2); every other factory ignores it.
+// (chatgpt backend design §4.2); every other factory ignores it. `helper`: a helper agent — the local engine never gives it a chat's slot (slot-pins.ts).
 export type ModelFactory = (
   binding: ModelBinding,
-  opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
+  opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string; helper?: boolean },
 ) => Promise<LanguageModel>;
 
 // One collected tool-call from a step's stream (input already PARSED to an
@@ -414,6 +420,7 @@ interface StepResult {
    *  that is the fixed transcript token shape, and this is a dollar figure
    *  from a different source. */
   providerCostUsd?: number;
+  servedBy?: string; // card #69: company OpenRouter says served this request; diagnostic only
   /** Milliseconds from this step's FIRST real output chunk to the end of its
    *  stream — i.e. time actually spent generating. Excludes prefill (before the
    *  first chunk) and everything outside the stream (tool execution, permission
@@ -748,6 +755,10 @@ export class HarnessSession extends EventEmitter {
   private history: ModelMessage[] = [];
   private abort: AbortController | null = null;
   private interrupted = false;
+  /** The engine REFUSED the last request as too long while our own estimate said it fit (measured: ~22.6k of 32k).
+   *  WHY kept: Summarise pressed on that card must still be able to fall back to the app's own note (standInSummary);
+   *  judging only by our estimate left exactly that chat a dead end (final review F1). Cleared by the next turn or summary. */
+  private windowRefused = false;
   private _currentUsageProgress: TranscriptEvent | null = null;
   private lastUsageProgressTimestamp = 0;
   /** Latest in-flight root-turn progress event for a late-attaching host window.
@@ -1064,12 +1075,11 @@ export class HarnessSession extends EventEmitter {
     this.profile = opts.profile ?? CLOUD_DEFAULT;
   }
 
-  /** Resume path: NativeSessionHost rebuilds history from stored events, or —
-   *  with a `seed` — restores a durable accepted-history checkpoint (cache
-   *  Stage 4). Without a seed the capture starts empty at the next revision, so
-   *  the session becomes durable again at its first publish. */
+  /** restoreMode distinguishes rebuilt histories from exact accepted prefixes.
+   *  Legacy defaults: no seed reconstructs; a seed preserves an exact prefix. */
   seedHistory(messages: ModelMessage[], seed?: AcceptedHistorySeed & {
     continuationBinding?: string; messageOrigins?: Array<string[] | null>;
+    restoreMode?: 'exact' | 'reconstructed';
   }): void {
     this.history = messages;
     this.reconcileTriggerVisibility();
@@ -1079,7 +1089,8 @@ export class HarnessSession extends EventEmitter {
       seed.messageOrigins.every(part => part === null || part.every(uuid => known.has(uuid)))
       ? seed.messageOrigins.map(part => part ? [...part] : null)
       : messages.map(() => null);
-    this.legacyReopenFit = !seed;
+    // WHY: UUID/origin capture also seeds rebuilds; only restoreMode proves an exact accepted prefix.
+    this.legacyReopenFit = (seed?.restoreMode ?? (seed ? 'exact' : 'reconstructed')) === 'reconstructed';
     this.failedCompactionRevision = null;
     this.usageAnchor = null;
     this._contextUsedTokens = null;
@@ -1174,6 +1185,7 @@ export class HarnessSession extends EventEmitter {
     // Filtering (rather than clearing all history) preserves ordinary text and
     // local call/results while preventing incompatible private parts reaching wire.
     if (changed) this.stripOpenAIContinuation();
+    if (changed) this.warmup.cancel();   // it read the old model's copy
     // Caches are model-scoped on every provider, so a real swap makes the next
     // request a known full miss. A same-binding call (a pricing or context
     // refresh) moves nothing and must not claim to.
@@ -1199,10 +1211,9 @@ export class HarnessSession extends EventEmitter {
     if (changed) this.seededContinuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
-    // WHY: a history that fit the old provider must never reach a stricter one.
-    // Re-applying the gate here (not only on the error path) means the first
-    // request after a switch already carries the note, not the picture.
-    if (profile) this.enforceImageLimits();
+    // WHY: a history that fit the old provider must never reach a stricter one. Card #66 f3: only MARKED here (a sync gate noted shrinkable
+    // pictures); the next request's maybeCompact SHRINKS (async, resize worker) inside its own turn — no race with a send, the switch stays instant.
+    if (profile) this.imagesRefitPending = true;
     // Same applied-only-when-provided shape as contextLength: a swap to a
     // model with no published price must be able to CLEAR a price the old
     // model had, so `null` is a real value here and only `undefined` skips.
@@ -1523,7 +1534,7 @@ export class HarnessSession extends EventEmitter {
     // allowlist decides what the model is TOLD about, and a request for anything
     // outside it can't arrive because it was never advertised.
     return allow
-      ? { list: () => catalog.list().filter((s) => allow.includes(s.id)), load: (id) => catalog.load(id) }
+      ? { list: () => catalog.list().filter((s) => allow.includes(s.id)), load: (id) => catalog.load(id), scopeOf: catalog.scopeOf ? (id) => catalog.scopeOf?.(id) : undefined }
       : catalog;
   }
 
@@ -1538,7 +1549,7 @@ export class HarnessSession extends EventEmitter {
    *  and reading either without it would report the pre-sync state on a session
    *  that has not taken a turn yet. It is the same call every turn makes, and the
    *  syncs are idempotent. */
-  contextInventory(): { toolNames: string[]; droppedMcpServers: string[]; skills: Array<{ id: string; description: string }>; skillsOffered: boolean; promptParts: Array<{ id: string; label: string; text: string }>; systemPrompt: string; presetName: string; injectionBudgetTokens: number } {
+  contextInventory(): { toolNames: string[]; droppedMcpServers: string[]; skills: Array<{ id: string; description: string; scope?: 'global' | 'project' }>; skillsOffered: boolean; promptParts: Array<{ id: string; label: string; text: string }>; systemPrompt: string; presetName: string; injectionBudgetTokens: number } {
     this.buildAiTools();
     return {
       promptParts: this.opts.promptParts ?? [],
@@ -1547,7 +1558,7 @@ export class HarnessSession extends EventEmitter {
       injectionBudgetTokens: this.profile.injectionBudgetTokens,
       toolNames: [...this.toolByName.keys()],
       droppedMcpServers: [...this._droppedMcpServers],
-      skills: this.scopedSkillCatalog().list(),
+      skills: ((c) => c.list().map((sk) => ({ ...sk, scope: c.scopeOf?.(sk.id) })))(this.scopedSkillCatalog()), // scope: the panel's Global/Project tabs sort on it (#251)
       // The whole point of the panel on a small model: below the catalog
       // threshold the Skill tool is never attached, so the model is never told a
       // single skill exists. The user can still run one with /name — which is
@@ -1941,13 +1952,9 @@ export class HarnessSession extends EventEmitter {
   /** Automatic selection retires complete groups into one summary. A failed
    * candidate leaves accepted history intact and fences this exact revision. */
   private async maybeCompact(model: LanguageModel, aiTools: Record<string, any>, force = false): Promise<boolean> {
-    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
-    this.enforceImageLimits();
-    const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
-      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
-    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
-      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.maxOutputTokens, estimatedInput });
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07); after a switch, shrink first (setBinding, f3).
+    if (this.imagesRefitPending) { this.imagesRefitPending = false; await this.fitImagesToLimits(); } else this.enforceImageLimits();
+    const { plan } = this.planNow();
     if (!force && plan.status === 'fits') return false;
     if (this.failedCompactionRevision === this.capture.revision) return false;
     // Routine compaction summarizes; legacy prune transforms remain available
@@ -1967,10 +1974,10 @@ export class HarnessSession extends EventEmitter {
     // differ (provenance labels for app-generated user-role messages).
     const keep = this.history.slice(cut);
     const sourceRevision = this.capture.revision;
-    let generated: { text: string; usage?: StepUsage } = { text: '' };
+    let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
     this.summaryInputCannotFit = false;
-    try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
-    const summary = generated.text;
+    generated = await this.summaryWithRetry(model, span, aiTools);
+    const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep), span, (force || plan.replyCap <= 0) && !generated.threw && !this.interrupted && this.abort?.signal.aborted !== true);   // force = the engine itself refused the request
     if (!summary.trim() || !this.compactionCandidateFits(summary, keep)) {
       this.failedCompactionRevision = this.capture.revision;
       return false;
@@ -2037,6 +2044,44 @@ export class HarnessSession extends EventEmitter {
     return true;
   }
 
+  /** Cut a tool result to the room the next request has left (tool-result-room.ts). `gathered` is the
+   *  results already collected for this step, which are not in history yet. */
+  private capToolText(toolName: string, text: string, gathered: any[]): Promise<string> {
+    const { plan, used } = this.planNow();
+    const room = plan.trigger - used - (gathered.length ? messageTokens({ role: 'tool', content: gathered } as ModelMessage) : 0);
+    return capResultAndSave(this.opts.sessionId, toolName, text, room, FIT_MORE_HINT[toolName]);
+  }
+
+  /** The budget plan for the history as it stands, and the tokens that history occupies. Shared by the
+   *  automatic summary, the tool-result cut and the stand-in summary so all three judge one number. */
+  private planNow() {
+    const used = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
+      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
+    return { used, plan: planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.maxOutputTokens, estimatedInput: used }) };
+  }
+
+  /** Ask for a summary; a junk answer (empty, tool-call markup, implausibly short — isJunkSummary) is
+   *  asked for ONCE more with a plain-prose reminder. Returns '' when both are junk, so the caller
+   *  keeps history untouched (fault 2). A thrown request counts as junk. */
+  private async summaryWithRetry(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage; threw?: boolean }> {
+    // WHY tokens x 4, not JSON length: the span's real size as the budget sees it. Opaque reasoning ciphertext
+    // makes the JSON ~100k characters for a few hundred tokens, which would demand an impossibly long summary.
+    const spanChars = messagesTokens(span) * APPROX_CHARS_PER_TOKEN;
+    this.summaryInputCannotFit = false;   // per-request flag; a stale true from an earlier call must not skip this one
+    // WHY `threw`: a request that FAILED (engine down, no network, timeout) may work in a minute, so
+    // it must never be answered by dropping history — only a model that answered uselessly is.
+    let threw = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (this.interrupted || this.abort?.signal.aborted || this.summaryInputCannotFit) break;   // retrying cannot help these
+      let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
+      try { generated = await this.generateSummary(model, span, aiTools, focus, attempt > 0); threw = generated.threw === true; } catch { threw = true; }
+      if (!isJunkSummary(generated.text, spanChars)) return generated;
+    }
+    return { text: '', threw };
+  }
+
   /** Adopt a pruned history and its bookkeeping consequences. */
   private commitPrune(pruned: ModelMessage[]): void {
     const before = this.history;
@@ -2081,8 +2126,19 @@ export class HarnessSession extends EventEmitter {
    *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
   private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
 
-  /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
-  private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
+  private imagesRefitPending = false;   // set by a model switch; see setBinding's WHY (card #66 f3)
+  /** enforceImageLimits, but SHRINKING over-limit pictures first. WHY the checks after the await: a switch landing mid-shrink
+   *  rewrites history (its strip drops private parts, rebuilds historyOrigins); adopting a result built from the OLD array
+   *  would revive them and misalign origins. So: discard, fit once more against the newest limits, then the non-shrinking
+   *  gate (never loops). A Stop discards and re-marks, so the next request shrinks rather than leaving the note. */
+  private async fitImagesToLimits(again = true): Promise<boolean> {
+    const from = this.history, length = from.length, signal = this.abort?.signal;
+    const next = await fitHistoryToImageLimits(from, this.imageLimits, this.opts.toolServices?.images, signal);
+    if (signal?.aborted) { this.imagesRefitPending = true; return false; }
+    if (this.history === from && from.length === length) return this.adoptImageRewrite(next);
+    this.imagesRefitPending = false;
+    return again ? this.fitImagesToLimits(false) : this.enforceImageLimits();
+  }
 
   /** A step stopped at the output limit: queue the continue / split message and
    *  withdraw any cut-off tool card. False = recovery spent; end the turn as before. */
@@ -2137,20 +2193,52 @@ export class HarnessSession extends EventEmitter {
    *  step parks and cleared the moment it un-parks or the step ends. Null means
    *  nothing is parked, which is the entire race guard for the Retry button. */
   private resolveRetry: (() => void) | null = null;
+  private lastPrefillReading: PrefillProgress | null = null; // previous reading → toReport's per-batch ETA rate
+  // The background read of this chat's opening (local-prewarm.ts). While a turn
+  // waits for it, its progress IS the turn's reading progress on screen.
+  private readonly warmup = new LocalPrewarm();
+  private warmupLast: PrefillProgress | null = null;
+  private warmupWaiting = false;
+
+  /** Read this chat's opening into the local engine now, so the next message
+   *  reuses it (local-prewarm.ts). Same model, system text, tools and history
+   *  as the next request, plus a one-character placeholder message in place of
+   *  the user's — everything before it is what the next request will reuse. */
+  prewarm(): void {
+    if (this.abort || this.opts.isSpecialistChild || this.history.at(-1)?.role === 'user') return;
+    const binding = this.binding;
+    this.warmup.start(async (signal) => {
+      this.warmupLast = null;
+      const model = await this.modelFactory(binding, {
+        serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
+        onPrefillProgress: (p) => { this.warmupLast = p; if (this.warmupWaiting) this.emitPrefillProgress(p); },
+        cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
+      });
+      const prefix = [...this.history];
+      const tools = this.buildAiTools();
+      const messages = adaptForWire(prefix, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision });
+      const result = streamText({ model, system: this.systemText, messages: encodeImagesForWire([...messages, { role: 'user', content: '.' }]),
+        ...(Object.keys(tools).length > 0 ? { tools } : {}), maxOutputTokens: 1, abortSignal: signal, onError: () => { /* thrown below */ } });
+      for await (const part of result.fullStream as AsyncIterable<any>) if (part.type === 'error') throw part.error;
+      return { prefix, modelId: binding.modelId, promptTokens: messagesTokens(messages) + Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN) };
+    });
+  }
+
   private emitPrefillProgress(p: PrefillProgress): void {
     // Prefill progress after the first token would be describing work the user
     // can already see the result of; the notice is a pre-output affordance only.
     if (this.abort == null) return;
     // Proof of life FIRST, before any throttling — a throttled-away report must
     // still reset the stall clock, or the throttle itself could cause a stall.
-    this.rearmStallWatchdog?.();
+    this.rearmStallWatchdog?.(); this.rearmSummaryWatchdog?.();   // a summary request still READING is alive too (final review F6)
     // Same local-only gate as the opening estimate below — one rule for the
     // whole affordance, so a hosted provider that ever started reporting
     // progress still can't put a prefill readout on a cloud session. Deliberately
     // BELOW the re-arm above: a report is proof of life whether or not we render
     // it, and gating the re-arm too would let a healthy stream trip the watchdog.
     if (!this.profile.announcePrefill) return;
-    const report = toReport(p);
+    const report = toReport(p, this.lastPrefillReading); // kept even when throttled below; other streams ignored
+    this.lastPrefillReading = p;
     const isFinal = report.newProcessed >= report.newTotal;
     const now = Date.now();
     if (!isFinal && now - this.lastPrefillEmitAt < 400) return;
@@ -2230,6 +2318,7 @@ export class HarnessSession extends EventEmitter {
     // Idle here (abort was null), so no turn owns this flag; a leftover from the
     // last turn's Stop must not make this summary read as stopped.
     this.interrupted = false;
+    const refused = this.windowRefused; this.windowRefused = false;
     try {
       const contextUsedBefore = this._contextUsedTokens;
       const cut = this.compactionCut(true, focus, targetContextLength);
@@ -2239,19 +2328,21 @@ export class HarnessSession extends EventEmitter {
       const span = this.history.slice(0, cut);
       if (span.length === 0) return { ok: false, reason: 'nothing-to-compact' };
       const sourceRevision = this.capture.revision;
-      let generated: { text: string; usage?: StepUsage } = { text: '' };
+      let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
       try {
         const model = await this.modelFactory(this.binding, {
           serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
-          cacheKey: this.opts.sessionId,
+          onPrefillProgress: () => this.rearmSummaryWatchdog?.(),   // a slow local read must not be timed out while it is progressing
+          cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
         });
         // The same tool set a turn would carry, so the summary request's
         // prefix matches the conversation's (see generateSummary).
-        generated = await this.generateSummary(model, span, this.buildAiTools(), focus);
+        generated = await this.summaryWithRetry(model, span, this.buildAiTools(), focus);
       } catch {
-        generated = { text: '' };
+        generated = { text: '', threw: true };
       }
-      const summary = generated.text;
+      const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep, focus, targetContextLength), span,
+        !this.interrupted && !generated.threw && targetContextLength === undefined && (refused || this.planNow().plan.replyCap <= 0));
       // WHY: Stop is not a model failure; say so, so the user is not told to
       // retry. `interrupted`, not the abort signal: the stall timeout aborts too.
       if (this.interrupted) return { ok: false, reason: 'interrupted' };
@@ -2288,6 +2379,7 @@ export class HarnessSession extends EventEmitter {
       this.historyOrigins[0] = [summaryUuid];
       this.capture.recordEvent(summaryUuid);   // same reasoning as maybeCompact's
       this.capture.markSummary(summaryUuid, this.historyOrigins[1]?.[0]);
+      this.legacyReopenFit = false; // WHY: the committed summary ends reconstructed-prefix recovery.
       return { ok: true };
     } finally {
       this.abort = null;
@@ -2303,7 +2395,6 @@ export class HarnessSession extends EventEmitter {
    *  while the conversation keeps its file, its id and its full readable
    *  scrollback. Chosen over "start a new session" so a reset doesn't scatter
    *  half-conversations through the user's history.
-   *
    *  Refuses while a turn is in flight rather than yanking history out from
    *  under a running turn — the same reasoning (and the same honest coded
    *  refusal) as compactNow. */
@@ -2320,9 +2411,9 @@ export class HarnessSession extends EventEmitter {
     // /clear is exactly when a user looks at the chip to confirm it worked.
     const contextUsedAfter = this.reprojectContextUsed(estimateBefore);
     this.prefixMoved = true;   // the next request shares nothing with the last one — a known full miss
-    // No seed: the accepted list empties AND takes the next revision, so a
-    // checkpoint published before the clear can never be restored over it.
+    // No seed: empty capture advances revision, invalidating pre-clear checkpoints.
     this.capture.reset();
+    this.legacyReopenFit = false; // WHY: post-clear history is wholly live, never eligible for recovery trimming.
     // Fix 1 (CRITICAL, 2026-08-11): the dedupe cache must not outlive the
     // history it was vouching for. Left alive, a model that re-Reads an
     // unchanged file after /clear gets "already visible earlier in this
@@ -2371,13 +2462,15 @@ export class HarnessSession extends EventEmitter {
   /** Model-generated summary of the retired span. Only the summarizer's tool
    * output copy may be shortened; the accepted history is never front-trimmed.
    * WHY: incomplete streams and failed fits must leave history untouched. */
-  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage }> {
+  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string, plainProseNudge = false): Promise<{ text: string; usage?: StepUsage; threw?: boolean }> {
     // Preserve the whole retired prefix. The old hard trim removed messages
     // from the front of this span, potentially losing the original request or
     // a paired tool batch before the model could summarize either.
     // Provenance rides at the END of the instruction so the span stays
     // byte-identical to what the provider cached (see summaryProvenanceNote).
-    const instruction = summarizePrompt(focus) + summaryProvenanceNote(span);
+    // WHY the nudge (retry only): the first answer was junk, often a tool call from a small model; say plainly what is wanted.
+    const instruction = summarizePrompt(focus) + summaryProvenanceNote(span)
+      + (plainProseNudge ? '\n\nReply with the written summary only, as plain text. Do not call any tool or write tool-call markup.' : '');
     const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
@@ -2480,7 +2573,7 @@ export class HarnessSession extends EventEmitter {
       complete = finishReason === 'stop' && text.trim().length > 0;
       usage = { inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0, ...cacheTokensForStep(u, meta) };
     }
-    return { text: complete && !stopped ? text.trim() : '', usage };
+    return { text: complete && !stopped ? text.trim() : '', usage, ...(settled === 'stop' ? { threw: true } : {}) };   // 'stop' here = the request failed, timed out or was stopped: not an answer
     } finally {
       clearTimeout(stopTimer);
       abortSignal.removeEventListener('abort', resolveStop);
@@ -2534,8 +2627,11 @@ export class HarnessSession extends EventEmitter {
    *  not a status update, it is new information the parent must act on.
    *  Callers (NativeSessionHost.runTurns) are responsible for only calling
    *  this at an idle boundary — beginTurn's own re-entrancy guard would throw
-   *  if it were called mid-turn, by design (never splice into a running turn:
-   *  role alternation + the local prompt cache both depend on it). */
+   *  if it were called mid-turn, by design. A report that finishes while a turn
+   *  runs is NOT turned into a second turn: the driver splices it history-only
+   *  at its own safe gaps (spliceNotice, appended at the tail, never inside a
+   *  stream, tool run or call/result group — role alternation and the local
+   *  prompt cache prefix depend on that). */
   async runNotice(text: string, meta?: InjectedMeta): Promise<void> {
     // G-1: the discriminant tells the renderer which card folds this turn —
     // a Task card (specialist report) or a Bash card (shell-complete).
@@ -2558,10 +2654,38 @@ export class HarnessSession extends EventEmitter {
    *  already accepts: the retired per-turn `<specialists-status>` block ran it
    *  in production for weeks, and `<project-rule>` injections still do.
    *  Same idle-only precondition as runNotice: never mid-turn. */
+  // Card #148: a helper's or background command's finished report used to wait for the turn to END
+  // (or for the next human message), so the assistant could sit idle with a report pending. The host
+  // now hands it over at the driver's own safe gaps: after a completed response, after the first empty
+  // response, after a complete tool batch. Never during a stream, a tool run or a compaction.
+  private deliveryBoundary?: () => Promise<void>;
+  // WARNING for future callers: this is a SESSION-WIDE flag, true for the whole await of the host's drain, not a
+  // permission handed to one call. While it is true, ANY spliceNotice on this session skips the "turn in flight"
+  // refusal. That is safe only because the driver is serialized and parked at its gap while the drain runs, and
+  // the host's drain is the only caller. Never call spliceNotice from elsewhere during that window, and never await
+  // anything slow or unrelated inside the drain callback. (Narrowing it to a per-call token would need the token
+  // threaded through the host's drainDeliveries/deliverNotice; not done.)
+  private atDeliveryBoundary = false;
+
+  /** Host-owned drain; only the serialized driver invokes it, after accepted groups. */
+  setDeliveryBoundary(drain: () => Promise<void>): void { this.deliveryBoundary = drain; }
+
+  /** True when the drain added anything to history (the caller then runs another step). */
+  private async absorbBackgroundResults(): Promise<boolean> {
+    if (!this.deliveryBoundary || this.interrupted || this.abort?.signal.aborted) return false;
+    const before = this.history.length;
+    // WHY: allow history-only splicing in this narrow gap; never a reentrant send, never a split
+    // tool-call/result group, never a reset of the human-approval step counter.
+    this.atDeliveryBoundary = true;
+    try { await this.deliveryBoundary(); }
+    finally { this.atDeliveryBoundary = false; }
+    return this.history.length !== before;
+  }
+
   async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
     // WHY: a quiet history mutation must obey the same startup gate as a model turn.
     this.opts.assertReady?.();
-    if (this.abort) {
+    if (this.abort && !this.atDeliveryBoundary) {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
     }
     const injected = injectedLabel(meta);
@@ -2679,7 +2803,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort) {
       throw new Error('HarnessSession: a turn is already in flight — callers must serialize send()/runSkill() per session.');
     }
-    this.interrupted = false;
+    this.interrupted = false; this.windowRefused = false;
     this._currentUsageProgress = null;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
     if (text !== null) this.acceptUserMessage(text, attachments, emit, appGenerated);
@@ -2758,6 +2882,7 @@ export class HarnessSession extends EventEmitter {
     let turnProviderCostUsd: number | undefined;
     let stepsCounted = 0;
     let stepsWithProviderCost = 0;
+    const turnServedBy: string[] = []; // card #69: distinct serving companies this turn
     // Time spent GENERATING, summed over the turn's steps. Not wall-clock: a turn
     // includes prefill, tool execution and permission waits, and dividing output
     // tokens by all of that reports a decode speed several times slower than the
@@ -2793,6 +2918,15 @@ export class HarnessSession extends EventEmitter {
     let partialAssistantText = '';
 
     try {
+      // A background read of this chat's opening still going: wait for it rather
+      // than read the same text twice side by side (local-prewarm.ts), showing its
+      // progress as this turn's. Then only what came after it counts as new.
+      const warm = await this.warmup.beforeTurn(this.abort.signal, () => {
+        this.warmupWaiting = true;
+        if (this.warmupLast) this.emitPrefillProgress(this.warmupLast);
+      });
+      this.warmupWaiting = false;
+      if (warm && warm.modelId === this.binding.modelId && warm.prefix.every((m, i) => this.history[i] === m)) this.lastStepPromptTokens = warm.promptTokens;
       // Serial-only when the profile constrains args AND the model can't do parallel
       // tool calls (spec §4.2 — small local models): the factory injects
       // parallel_tool_calls:false on the local-engine branch. Cloud factories ignore it.
@@ -2802,7 +2936,7 @@ export class HarnessSession extends EventEmitter {
         // already drives, so the UI upgrades from "reading N tokens" to a real
         // percentage and countdown without a second event type.
         onPrefillProgress: (p) => this.emitPrefillProgress(p),
-        cacheKey: this.opts.sessionId,
+        cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
       });
       const modelContinuationBinding = openAIContinuationBinding(model);
       if (modelContinuationBinding !== this.continuationBinding) {
@@ -2899,8 +3033,8 @@ export class HarnessSession extends EventEmitter {
               turnUsage.expectedRebuild = true;
               continue;
             }
-            if (overflowRetried || !replayable || !isContextOverflow(err, this.binding.providerId, this.profile.providerType)
-              || !await this.maybeCompact(model, aiTools, true)) throw err;
+            const overflow = isContextOverflow(err, this.binding.providerId, this.profile.providerType);
+            if (overflowRetried || !replayable || !overflow || !await this.maybeCompact(model, aiTools, true)) { this.windowRefused = overflow; throw err; }
             overflowRetried = true;
             this.prefixMoved = true;
             turnUsage.expectedRebuild = true;
@@ -2930,7 +3064,7 @@ export class HarnessSession extends EventEmitter {
         // limit can stop the run BEFORE the next step is sent, not at the end of the whole turn.
         if (this.opts.onStepUsage) {
           try { await this.opts.onStepUsage({ tokens: step.usage.inputTokens + step.usage.outputTokens, costUsd: turnFree ? null : costForUsage(step.usage, turnPricing) }); }
-          catch { /* a counting failure must never break the run itself */ }
+          catch { /* benign: a counting failure must never break the run itself */ }
         }
         if (step.measuredUsage) {
           measuredTurnUsage.inputTokens += step.measuredUsage.inputTokens;
@@ -2945,6 +3079,7 @@ export class HarnessSession extends EventEmitter {
           stepsWithProviderCost++;
           turnProviderCostUsd = (turnProviderCostUsd ?? 0) + step.providerCostUsd;
         }
+        if (step.servedBy && !turnServedBy.includes(step.servedBy)) turnServedBy.push(step.servedBy);
         generationMs += step.generationMs;
 
         // WHY: after a silent step, retain measured counters but withdraw the
@@ -3064,6 +3199,8 @@ export class HarnessSession extends EventEmitter {
         const orderlyFinish = step.finishReason === undefined
           || ORDERLY_EMPTY_FINISHES.has(step.finishReason);
         if (isEmptyStep && orderlyFinish) {
+          const background = await this.absorbBackgroundResults();
+          if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
           consecutiveEmptySteps++;
           if (consecutiveEmptySteps === 1) {
             // Withdraw any preparing card the dead step left on screen — the
@@ -3093,8 +3230,8 @@ export class HarnessSession extends EventEmitter {
             });
             continue turnLoop;
           }
-          // WHY: second empty is a final boundary; new input re-arms recovery.
-          if (absorbReadyMessage()) {
+          // WHY: second empty is a final boundary; new input (or a delivered report) re-arms recovery.
+          if (absorbReadyMessage() || background) {
             consecutiveEmptySteps = 0;
             continue turnLoop;
           }
@@ -3104,10 +3241,14 @@ export class HarnessSession extends EventEmitter {
         consecutiveEmptySteps = 0;   // any real step re-arms the single retry
 
         if (step.toolCalls.length === 0) {
-          // WHY: no await before completion; late heads use the host drain.
-          if (absorbReadyMessage()) continue turnLoop;
-          // Cut off at the output limit: continue / ask to split, inside the turn (truncation-recovery.ts).
+          const background = await this.absorbBackgroundResults();
+          if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
+          // WHY truncation first: a delivered report also makes `background` true, and continuing on that alone
+          // would skip the continue/split request for a reply cut off at the output limit (truncation-recovery.ts).
+          // The report is already in history, so the continuation request carries both.
+          if (absorbReadyMessage()) continue turnLoop;   // a ready human message still wins, as before
           if (step.finishReason === 'length' && this.recoverTruncation(step, truncationRecoveries)) { truncationRecoveries++; continue turnLoop; }
+          if (background) continue turnLoop;
           // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;
@@ -3176,6 +3317,8 @@ export class HarnessSession extends EventEmitter {
                 this.emitEvent('user-interrupt', abandonedTurnUsage());
                 return;
               }
+              await this.absorbBackgroundResults();
+              if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
               absorbReadyMessage(); // ready human correction precedes replan
               continue turnLoop;
             }
@@ -3235,10 +3378,15 @@ export class HarnessSession extends EventEmitter {
           // Turn the tool's promised image paths into deliverable parts, charging
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
-          const delivered = this.resolveToolImages(payload, imageBudget, call.toolCallId);
-          // WHY: the tool-result event is also the visible persisted transcript.
-          // Never trim it here for a small model; an unfit newest group must
-          // fail explicitly, not erase data before the summarizer can see it.
+          // WHY the cap sits here (fault 1, 2026-11-08): this is the one point where the result is
+          // not yet in history OR the transcript, so the model, the saved chat and a reopen all see
+          // the same (cut) text, and the call/result pairing is untouched (same part, shorter text).
+          // Room = what the next request can still hold below the compaction trigger, counting the
+          // results already gathered for this step. A big window never bites in practice.
+          const delivered = this.resolveToolImages({ ...payload, text: await this.capToolText(call.toolName, payload.text, resultParts) }, imageBudget, call.toolCallId);
+          // WHY: the tool-result event is also the visible persisted transcript,
+          // so it carries exactly the (possibly room-capped) text the model got —
+          // never a second, different trim here.
           recordResult(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
@@ -3259,6 +3407,8 @@ export class HarnessSession extends EventEmitter {
         // AFTER the tool results so the model reads the rule alongside what it
         // just learned, and before it decides the next step.
         this.injectPathTriggers(step.toolCalls);
+        await this.absorbBackgroundResults();
+        if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
 
         // WHY (Destin, 2026-09-28 PR-review deck Q-1): a message sent mid-task is
         // read once the whole batch of actions the assistant already chose has
@@ -3402,6 +3552,7 @@ export class HarnessSession extends EventEmitter {
           // prevent — and it would be wrong for every non-OpenRouter provider,
           // which is most of them.
           ...(providerCostUsd === undefined ? {} : { providerCostUsd }),
+          ...(turnServedBy.length ? { servedBy: turnServedBy } : {}),
         },
       });
     } catch (err: any) {
@@ -3497,8 +3648,11 @@ export class HarnessSession extends EventEmitter {
       // occupancy, not a lower chars/4 estimate that promises extra output.
       estimatedInput: requestOccupancy({ history: fittedHistory, identity: this.requestSizingIdentity(),
         revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens });
+    // WHY a typed error (fault 5): it must reach the user as the same 'too-long' card (with Summarise)
+    // as the engine's own refusal. The automatic summary was already tried by maybeCompact before this
+    // request unless that exact history had already failed (failedCompactionRevision fence).
     if (requestPlan.replyCap <= 0)
-      throw new Error('The conversation cannot fit this model’s context window.');
+      throw new ContextCannotFitError();
     const streamArgs: any = {
       model,
       system: this.systemText,
@@ -3963,6 +4117,7 @@ export class HarnessSession extends EventEmitter {
     // for THIS request when the provider reported one; undefined otherwise.
     const providerMetadata = await result.providerMetadata;
     const providerCostUsd = providerCostFromMetadata(providerMetadata);
+    const servedBy = servedByFromMetadata(providerMetadata);
     const finishReason = await result.finishReason;
     const reasoningTokens = usage?.outputTokenDetails?.reasoningTokens;
     // Acceptance is fenced separately from dispatch. If auth ownership moved
@@ -4023,6 +4178,7 @@ export class HarnessSession extends EventEmitter {
       // rather than present-and-undefined — the turn accumulator counts
       // reporting steps, and "present but undefined" would muddy that.
       ...(providerCostUsd === undefined ? {} : { providerCostUsd }),
+      ...(servedBy === undefined ? {} : { servedBy }),
       generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0,
       attempt,
     };
@@ -4350,6 +4506,15 @@ export class HarnessSession extends EventEmitter {
       } catch (err: any) {
         const waitMs = this.abort?.signal.aborted ? null : retryWaitMs(err, attempt, this.retryDelays);
         if (waitMs === null) throw err;
+        // WHY (card #236): a network failure is either a blip or the computer being offline. Ask the app's
+        // own check BEFORE the retry ladder (about a minute of waiting): offline ends the turn at once with
+        // the red "No internet" card, whose Try again is the existing continue-turn. Online (or a check
+        // that cannot say) keeps today's behaviour exactly. Only on the first failure of a step.
+        // (Not for a server on this machine or the local network: that failure is the server, not the internet.)
+        if (attempt === 0 && classifyFailure(err).code === 'network' && !failedAgainstLocalServer(err, this.profile.providerType)
+          && !(await (this.opts.checkInternet ?? realCheckInternet)().catch(() => true))) {
+          throw new NoInternetError(err);
+        }
         // WHY: retrying the whole step must first erase ONLY its failed attempt;
         // previously a late provider error left streamed text on disk and screen.
         retractAttempt?.();
@@ -4405,5 +4570,5 @@ export class HarnessSession extends EventEmitter {
     return this.pendingSteers.splice(0);
   }
 
-  destroy(): void { this._currentUsageProgress = null; this.abort?.abort(); this.removeAllListeners(); }
+  destroy(): void { this._currentUsageProgress = null; this.abort?.abort(); this.warmup.cancel(); this.removeAllListeners(); }
 }

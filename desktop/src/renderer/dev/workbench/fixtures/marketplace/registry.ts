@@ -1180,6 +1180,23 @@ export const INSTALLED_SKILLS = [
     "installedAt": "2026-08-01T12:00:00Z"
   },
   {
+    // Plugin off-switch: installed, then listed as unsafe by the marketplace server. Not bundled
+    // (bundled plugins cannot be removed), not in MARKETPLACE_PLUGINS (a blocked plugin is not listed in the store).
+    "id": "tab-tidy",
+    "displayName": "Tab Tidy",
+    "description": "Closes the browser tabs you are done with and keeps a short list of what you had open.",
+    "category": "personal",
+    "prompt": "/tab-tidy",
+    "source": "marketplace",
+    "pluginName": "tab-tidy",
+    "type": "plugin",
+    "author": "@pat-rivera",
+    "version": "0.4.2",
+    "visibility": "published",
+    "installedAt": "2026-08-01T12:00:00Z",
+    "blocked": {}
+  },
+  {
     "id": "encyclopedia-compile",
     "displayName": "Encyclopedia Compile",
     "description": "Compiles the user's Encyclopedia — a single, narratively coherent life history document — from eight modular source files. Invoke when the user says \"compile my encyclopedia\", \"build the encyclopedia\", or similar. Supports four detail levels to control how much intimate personal detail appears in the output.",
@@ -1294,6 +1311,14 @@ export const INSTALLED_SKILLS = [
 ] as const;
 
 export const INSTALLED_PACKAGES = {
+  "tab-tidy": {
+    "version": "0.4.2",
+    "source": "marketplace",
+    "installedAt": "2026-08-01T12:00:00Z",
+    "removable": true,
+    "components": [],
+    "status": "installed"
+  },
   "civic-report": {
     "version": "1.0.2",
     "source": "marketplace",

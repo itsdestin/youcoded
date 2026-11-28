@@ -9,7 +9,7 @@
 //     CAPABILITY. Ask `getCapabilities().x`. The host decides the answer and sends it in the handshake (seam S7,
 //     shared/capabilities.ts); nothing here guesses it from the platform.
 //   · "Does this screen LOOK or FEEL different?" (touch-sized buttons, a soft keyboard, a narrower layout) is a property of
-//     the device. Ask `isAndroid()` / `isTouchDevice()` / `getPlatform()`. These are genuine look-and-feel differences, not
+//     the device. Ask `isAndroid()` / `getPlatform()` (and renderer/device.ts for layout questions). These are genuine look-and-feel differences, not
 //     capability gaps. `isRemoteMode()` is the connection mode: the conversation lives on a computer this screen is
 //     watching, which changes WHEN state is available (catching up after a drop), not what the screen can do.
 import { useEffect, useState } from 'react';
@@ -66,8 +66,33 @@ export function isAndroid(): boolean {
   return getPlatform() === 'android'
 }
 
-export function isTouchDevice(): boolean {
-  return getPlatform() === 'android' || getPlatform() === 'browser'
+/** The word for the device the app's own work happens on: "phone" in the Android app running its own on-phone
+ *  backend, "computer" everywhere else (desktop, a remote browser, or a phone paired to a computer — there the
+ *  work really is on the computer). WHY: phone users read "this computer" as wrong/confusing (2026-11-01 test, #10).
+ *  Read at call time (never cache at import: connection mode changes). */
+export function deviceNoun(): 'phone' | 'computer' {
+  return getPlatform() === 'android' && _connectionMode === 'local' ? 'phone' : 'computer'
+}
+
+/** Which Platform a page adopts once its backend has said hello (remote-shim's auth:ok).
+ *
+ *  WHY this lives here and is pure: the Android app's page is a file:// page that starts as 'android'. The handshake
+ *  used to overwrite that with 'browser' (a rule meant for a phone's plain web browser reaching a computer), so the
+ *  real app showed DESKTOP settings and screens (2026-11-01 phone test, finding 6). The test pins every case.
+ *  - Android app (its own page, see android-page.ts): ALWAYS stays 'android' — talking to its own phone backend or to a paired computer.
+ *  - Phone web browser (touch-first, http): 'browser', whatever the computer says.
+ *  - Mouse-first browser: whatever the computer says, defaulting to 'browser'.
+ *  - A reconnect-in-progress from the Android app (preserve) keeps what it has. */
+export function platformAfterHandshake(input: {
+  current: string | undefined
+  inAndroidApp: boolean
+  preserve: boolean
+  touchFirst: boolean
+  hostPlatform?: string
+}): string | undefined {
+  if (input.inAndroidApp && input.current === 'android') return 'android'
+  if (input.preserve) return input.current
+  return input.touchFirst ? 'browser' : (input.hostPlatform || 'browser')
 }
 
 // ─── What this screen can do (capabilities) ──────────────────────────────────

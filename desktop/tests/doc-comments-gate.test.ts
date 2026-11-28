@@ -11,11 +11,27 @@
 // every test in this file (and the corresponding new cases in
 // doc-comments-ipc-handlers.test.ts / doc-comments-remote-relay.test.ts)
 // fails to even import against the pre-fix commit (58ee463df).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { refuseUnknownProjectRoot } from '../src/main/doc-comments/doc-comments-gate';
+
+// WHY this file has a home folder of its own (2026-11-09): the whole suite shares one throwaway home, and the
+// folder picker saves "Home" into it as a known folder the first time any test lists folders. When such a test ran
+// first, "$HOME is refused" failed here (it passed alone). What the gate knows must not depend on test order.
+let refuseUnknownProjectRoot: typeof import('../src/main/doc-comments/doc-comments-gate').refuseUnknownProjectRoot;
+let ownHome = '';
+const sharedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+beforeAll(async () => {
+  ownHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ycd-doc-comments-gate-home-'));
+  process.env.HOME = ownHome; process.env.USERPROFILE = ownHome;
+  vi.resetModules();   // the folder and project lists work out their paths when first loaded
+  ({ refuseUnknownProjectRoot } = await import('../src/main/doc-comments/doc-comments-gate'));
+});
+afterAll(() => {
+  process.env.HOME = sharedHome.HOME; process.env.USERPROFILE = sharedHome.USERPROFILE;
+  fs.rmSync(ownHome, { recursive: true, force: true });
+});
 
 describe('refuseUnknownProjectRoot', () => {
   it('proceeds (returns null) when projectRoot is not supplied at all', async () => {

@@ -102,7 +102,19 @@ function started(j: Journal, s: OfficeSession): Promise<void> {
     // appending to the same folder, which this replaces. And the chain waits for the start, so no
     // line is appended to a folder not made yet.
     j.start = j.chain.then(async () => {
-      // A journal left from before that was not recovered (the editor began afresh) goes now.
+      // A journal left from before that was not recovered (the editor began afresh) goes now —
+      // unless it still holds edits no save has: then it is set aside as this file's held edits,
+      // offered (Recover / Discard) at the next open. WHY (independent review, 2026-11-14): an
+      // open that could not replay it (its writes still settling past the 2 s wait, a base too
+      // large) began afresh, and the first new keystroke here silently deleted the old typing.
+      const old = await readJournal(j.dir);
+      if (old && old.info.path === s.path && old.rev > old.info.savedRev) {
+        const held = heldDir(s.path);
+        // A held set already waiting keeps its place; this one is kept beside it (still on disk,
+        // pruned like any old journal) rather than replacing either.
+        const to = (await exists(held)) ? `${held}-${Date.now()}` : held;
+        await fsp.rename(j.dir, to).catch((e) => log('WARN', 'Office', 'could not set earlier unsaved edits aside', { error: String(e) }));
+      }
       await fsp.rm(j.dir, { recursive: true, force: true });
       await fsp.mkdir(path.join(j.dir, 'media'), { recursive: true, mode: 0o700 });
       // Still the Editor.bin the editor opened: write_editor_bin waits for this before replacing it.
@@ -297,9 +309,67 @@ export async function discardRecoveryFor(file: string): Promise<void> {
   await discardHeldRecovery(file);
 }
 
+/** A file was renamed in the app: its journal (and a set-aside `.held` one) follow it. The folders
+ *  are keyed on the path and their info.json records it (offerRecovery refuses a journal whose
+ *  info.path differs), so both are moved and rewritten. WHY best-effort: the rename has already
+ *  happened; a journal that cannot follow is only logged. A target key that already has a folder
+ *  is left alone (nothing is merged). The file must not be open (the caller checked). */
+export async function moveRecovery(oldFile: string, newFile: string): Promise<void> {
+  if (!root) return;
+  const writePath = async (dir: string, file: string) => {
+    const infoFile = path.join(dir, 'info.json');
+    const info = JSON.parse(await fsp.readFile(infoFile, 'utf8'));
+    info.path = file;
+    await fsp.writeFile(`${infoFile}.part`, JSON.stringify(info));
+    await fsp.rename(`${infoFile}.part`, infoFile); // whole or not at all, like writeInfo
+  };
+  for (const [from, to] of [
+    [path.join(root, keyOf(oldFile)), path.join(root, keyOf(newFile))],
+    [heldDir(oldFile), heldDir(newFile)],
+  ]) {
+    try {
+      if (!(await exists(from))) continue;
+      // WHY the path is rewritten BEFORE the folder moves: a journal must never sit under the new
+      // key still naming the old path (offerRecovery would refuse it and startup would sweep it).
+      // If the rewrite fails nothing has moved and the journal stays whole under the old key.
+      await writePath(from, newFile);
+      // WHY set aside, not skipped: a journal already under the new key belongs to some other file
+      // that once had this name. Skipping would leave this one to be swept as "file gone"; instead
+      // the other is renamed out of the way (pruneRecovery removes it after 30 quiet days).
+      const aside = `${to}.stale-${Date.now()}`;
+      const hadTarget = await exists(to);
+      if (hadTarget) await fsp.rename(to, aside);
+      try {
+        await fsp.rename(from, to);
+      } catch (e) {
+        // Undo, so nothing is left half-moved.
+        if (hadTarget) await fsp.rename(aside, to).catch(() => {});
+        await writePath(from, oldFile).catch(() => {});
+        throw e;
+      }
+    } catch (e) {
+      log('WARN', 'Office', 'a recovery journal could not follow a rename', { code: (e as NodeJS.ErrnoException)?.code ?? null });
+    }
+  }
+}
+
 /** Startup tidy-up (fix round 1), never awaited by anyone: journals of files that are gone, and
  *  journals nothing touched for 30 days, are removed. */
 export const RECOVERY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** WHY not plain `!exists` (office review 2026-11-14): any failed look counted as "gone", so a
+ *  file on a USB stick or network drive that was not connected at launch — or a permission
+ *  hiccup — had its unsaved edits deleted for good. Gone means: the file is missing (ENOENT) AND
+ *  its folder is still there to say so. Anything else keeps the journal (30-day rule still applies). */
+async function surelyGone(file: string): Promise<boolean> {
+  try {
+    await fsp.stat(file);
+    return false;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') return false;
+    return exists(path.dirname(file));
+  }
+}
 export async function pruneRecovery(now = Date.now()): Promise<void> {
   if (!root) return;
   const names = await fsp.readdir(root).catch(() => [] as string[]);
@@ -308,7 +378,7 @@ export async function pruneRecovery(now = Date.now()): Promise<void> {
     try {
       const info = JSON.parse(await fsp.readFile(path.join(dir, 'info.json'), 'utf8')) as { path?: unknown };
       const touched = Math.max(...(await Promise.all(['info.json', 'changes.log'].map((f) => fsp.stat(path.join(dir, f)).then((st) => st.mtimeMs, () => 0)))));
-      const gone = typeof info.path !== 'string' || !(await exists(info.path));
+      const gone = typeof info.path !== 'string' || (await surelyGone(info.path));
       if (!gone && now - touched < RECOVERY_MAX_AGE_MS) continue;
       if (typeof info.path === 'string' && journals.has(info.path)) continue; // being written right now
     } catch { /* no readable info: a broken journal, nothing can recover it */ }

@@ -17,6 +17,8 @@ import { loadFixture } from './fixture-loader';
 import type { SessionTotals } from '../../state/session-totals';
 import type { ScenarioId } from './scenarios';
 import { RUNS } from './specialist-runs';
+// Card #143 a: a picture the practice chat can really draw (react-markdown drops data: pictures), for `shoot chat/menu/image`.
+import shootPictureUrl from '../../components/brand/app-icon-192.png';
 
 // @ts-ignore TS1343 — Vite rewrites import.meta.glob statically at build time.
 const convos = import.meta.glob('./fixtures/conversations/*.jsonl', {
@@ -207,7 +209,7 @@ export function buildHydratePayload(): SerializedChatState {
       const target = isCcQuestion ? 'claude-code' : 'native';
       const targetIndex = sources.findIndex(([name]) => name === target);
       sources.splice(targetIndex >= 0 ? targetIndex : sources.length, targetIndex >= 0 ? 1 : 0,
-        [`bubbles-${bubbleName}`, raw, isCcQuestion ? 'wb-1' : 'wb-2']);
+        [`bubbles-${bubbleName}`, raw.replace('__SHOOT_PICTURE__', shootPictureUrl), isCcQuestion ? 'wb-1' : 'wb-2']);
     } else {
       console.warn(`[workbench] no bubble-grouping fixture named "${bubbleName}"`);
     }
@@ -235,6 +237,16 @@ export function buildHydratePayload(): SerializedChatState {
       if (action.type === 'SPECIALIST_RUN_CHANGED') RUNS.set(action.run.childId, action.run);
     }
   }
+
+  // `?phoneBrowser=site|final|handoff` (card #205): the Browser's open card as the computer publishes it to a phone (session:live `browser-ask`).
+  // A phone has no Browser of its own, so this fact is the only thing that draws the card there.
+  const phoneBrowser = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('phoneBrowser');
+  const phonePrompts: Record<string, import('../../../shared/browser-types').BrowserPrompt> = {
+    site: { kind: 'site', id: 'p1', host: 'reddit.com', allowAlways: true, message: 'Let the assistant click and type on reddit.com?' },
+    final: { kind: 'final', id: 'p2', host: 'reddit.com', message: 'The assistant wants to click "Post reply" on reddit.com.' },
+    handoff: { kind: 'handoff', id: 'p4', message: 'Please sign in to your Reddit account, then press I\'m done.' },
+  };
+  if (phoneBrowser && phonePrompts[phoneBrowser]) state = chatReducer(state, { type: 'BROWSER_ASK_CHANGED', sessionId: 'wb-1', prompt: phonePrompts[phoneBrowser] });
 
   const override = STATUSBAR_TOTALS_OVERRIDE[currentScenario() ?? 'default'];
   if (override) {

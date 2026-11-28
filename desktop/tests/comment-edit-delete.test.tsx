@@ -11,6 +11,7 @@ import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { CommentCard } from '../src/renderer/components/comments/CommentCard';
 import { HighlightHoverCard } from '../src/renderer/components/comments/HighlightHoverCard';
 import type { DocComment } from '../src/renderer/state/doc-comments-store';
+import { getByHint, queryByHint } from './helpers/hint-queries';
 
 afterEach(cleanup);
 
@@ -39,7 +40,7 @@ describe('CommentCard — Edit/Delete icons next to the Resolve toggle (E-1)', (
     expect(screen.queryByLabelText(/edit comment/i)).toBeNull();
     expect(screen.queryByLabelText(/delete comment/i)).toBeNull();
     // The resolve toggle itself is unaffected.
-    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+    expect(getByHint(document.body, /resolve this comment/i)).toBeTruthy();
   });
 
   it('renders both icons, alongside the resolve toggle, when wired', () => {
@@ -52,7 +53,7 @@ describe('CommentCard — Edit/Delete icons next to the Resolve toggle (E-1)', (
     );
     expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
     expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
-    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+    expect(getByHint(document.body, /resolve this comment/i)).toBeTruthy();
   });
 
   it('a DRAFT (nothing persisted yet) gets neither icon, even when the handlers are wired', () => {
@@ -372,7 +373,7 @@ describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fi
     );
     const editBtn = screen.getByLabelText(/edit comment/i);
     const deleteBtn = screen.getByLabelText(/delete comment/i);
-    const resolveBtn = screen.getByTitle(/resolve this comment/i);
+    const resolveBtn = getByHint(document.body, /resolve this comment/i);
     expect(editBtn.className).toContain('cursor-pointer');
     expect(deleteBtn.className).toContain('cursor-pointer');
     expect(resolveBtn.className).toContain('cursor-pointer');
@@ -416,7 +417,7 @@ describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fi
       />,
     );
     const editBtn = screen.getByLabelText(/edit comment/i);
-    const resolveBtn = screen.getByTitle(/resolve this comment/i);
+    const resolveBtn = getByHint(document.body, /resolve this comment/i);
     expect(editBtn.className).toContain('cursor-pointer');
     expect(resolveBtn.className).toContain('cursor-pointer');
     expect(editBtn.parentElement?.className).toContain('cursor-pointer');
@@ -438,7 +439,7 @@ describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fi
       />,
     );
     const editBefore = screen.getByLabelText(/edit comment/i);
-    const resolveBefore = screen.getByTitle(/resolve this comment/i);
+    const resolveBefore = getByHint(document.body, /resolve this comment/i);
     rerender(
       <CommentCard
         comment={{ ...c1 }}
@@ -447,7 +448,7 @@ describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fi
       />,
     );
     expect(screen.getByLabelText(/edit comment/i)).toBe(editBefore);
-    expect(screen.getByTitle(/resolve this comment/i)).toBe(resolveBefore);
+    expect(getByHint(document.body, /resolve this comment/i)).toBe(resolveBefore);
   });
 });
 
@@ -469,7 +470,7 @@ describe('CommentCard — while editing: hide reply box + delete/resolve, show t
     fireEvent.click(screen.getByLabelText(/edit comment/i));
     expect(screen.queryByLabelText(/^edit comment$/i)).toBeNull();
     expect(screen.queryByLabelText(/delete comment/i)).toBeNull();
-    expect(screen.queryByTitle(/resolve this comment/i)).toBeNull();
+    expect(queryByHint(document.body, /resolve this comment/i)).toBeNull();
     expect(screen.getByLabelText(/cancel editing/i)).toBeTruthy();
     expect(screen.getByText('Editing')).toBeTruthy();
   });
@@ -498,13 +499,13 @@ describe('CommentCard — while editing: hide reply box + delete/resolve, show t
     );
     fireEvent.click(screen.getByLabelText(/edit comment/i));
     const pill = screen.getByLabelText(/cancel editing/i);
-    expect(pill.getAttribute('title')).toMatch(/cancel editing/i);
+    expect(pill.getAttribute('data-hint')).toMatch(/cancel editing/i);
     fireEvent.click(pill);
     expect(onEditText).not.toHaveBeenCalled();
     expect(screen.getByText('Original note.')).toBeTruthy();
     expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
     expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
-    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+    expect(getByHint(document.body, /resolve this comment/i)).toBeTruthy();
   });
 
   it("editing a reply hides only THAT reply's own Delete and the thread's reply box — the comment's own actions and the other reply stay put", () => {
@@ -530,7 +531,7 @@ describe('CommentCard — while editing: hide reply box + delete/resolve, show t
     // The comment's own Edit/Delete/Resolve are untouched.
     expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
     expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
-    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+    expect(getByHint(document.body, /resolve this comment/i)).toBeTruthy();
   });
 });
 
@@ -638,7 +639,7 @@ describe('HighlightHoverCard — while editing: hide reply box + delete/resolve,
     expect(screen.getByPlaceholderText(/reply/i)).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/edit comment/i));
     expect(screen.queryByLabelText(/^delete comment$/i)).toBeNull();
-    expect(screen.queryByTitle(/resolve this comment/i)).toBeNull();
+    expect(queryByHint(document.body, /resolve this comment/i)).toBeNull();
     expect(screen.queryByPlaceholderText(/reply/i)).toBeNull();
     expect(screen.getByLabelText(/cancel editing/i)).toBeTruthy();
   });
@@ -650,7 +651,7 @@ describe('HighlightHoverCard — while editing: hide reply box + delete/resolve,
     fireEvent.click(screen.getByLabelText(/cancel editing/i));
     expect(onEditText).not.toHaveBeenCalled();
     expect(screen.getByText('Original.')).toBeTruthy();
-    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+    expect(getByHint(document.body, /resolve this comment/i)).toBeTruthy();
   });
 
   it('clearing the text swaps Save for Delete, and Enter-while-empty opens the confirm', () => {
@@ -674,6 +675,6 @@ describe('HighlightHoverCard — while editing: hide reply box + delete/resolve,
     expect(screen.queryByPlaceholderText(/^reply…$/i)).toBeNull();
     expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
     expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
-    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+    expect(getByHint(document.body, /resolve this comment/i)).toBeTruthy();
   });
 });

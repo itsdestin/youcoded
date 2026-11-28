@@ -20,6 +20,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import type { TranscriptEvent } from '../src/shared/types';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+import { SHORT_FAKE_SUMMARY } from './helpers/harness-fakes';
 // WHY: these tests feed the mock model RAW provider stream parts on purpose, with
 // deliberately minimal shapes (usage carries only `total`, finishReason may be
 // partial). The strict LanguageModelV4StreamPart type demands every usage field,
@@ -67,9 +68,9 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     const { markAppGenerated } = await import('../src/main/harness/compaction');
     const oldRule = '<project-rule source="rules/old.md">\nOld\n</project-rule>';
     const keptRule = '<project-rule source="rules/new.md">\nNew\n</project-rule>';
-    const session = new HarnessSession(OPTS as any, async () => textModel('Summary mentions Old'));
+    const session = new HarnessSession(OPTS as any, async () => textModel(SHORT_FAKE_SUMMARY));
     session.seedHistory([
-      { role: 'user', content: 'old request' }, markAppGenerated({ role: 'user', content: oldRule } as any),
+      { role: 'user', content: 'old request' + ' padding'.repeat(60) }, markAppGenerated({ role: 'user', content: oldRule } as any),
       { role: 'assistant', content: 'old answer' }, { role: 'user', content: 'recent request' },
       { role: 'user', content: 'latest request' }, markAppGenerated({ role: 'user', content: keptRule } as any),
     ] as any);
@@ -78,7 +79,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     expect((session as any).retainedTriggerMessages.has(keptRule)).toBe(true);
   });
   it('summarizes, emits compact-summary, and replaces history with summary + recent turns', async () => {
-    const session = seeded(4, textModel('Earlier: user asked about X; we did Y.'));
+    const session = seeded(4, textModel('Earlier: user asked about X; we did Y. ' + SHORT_FAKE_SUMMARY));
     const events = collect(session);
 
     const result = await session.compactNow();
@@ -100,7 +101,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     const commit = vi.fn(({ event }: { event: TranscriptEvent }) =>
       new Promise<TranscriptEvent>(resolve => { complete = resolve; }));
     const session = new HarnessSession({ ...OPTS, commitCompaction: commit } as any,
-      async () => textModel('short handoff'));
+      async () => textModel(SHORT_FAKE_SUMMARY));
     const events = collect(session);
     for (let i = 0; i < 3; i++) await session.send(`question ${i} ${'x'.repeat(400)}`);
     const before = session.acceptedHistory().messages;
@@ -119,7 +120,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
   it('names the kept tail\'s first user message so the chat dims only what was summarized', async () => {
     const commit = vi.fn(async ({ event }: { event: TranscriptEvent }) => event);
     const session = new HarnessSession({ ...OPTS, commitCompaction: commit } as any,
-      async () => textModel('short handoff'));
+      async () => textModel(SHORT_FAKE_SUMMARY));
     const events = collect(session);
     for (let i = 0; i < 3; i++) await session.send(`question ${i} ${'x'.repeat(400)}`);
     expect(await session.compactNow()).toEqual({ ok: true });
@@ -132,7 +133,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
 
   it('passes manual focus as non-authoritative guidance to the same summary request', async () => {
     const calls: any[] = [];
-    const inner = textModel('Short handoff');
+    const inner = textModel(SHORT_FAKE_SUMMARY);
     const model = new MockLanguageModelV4({ doStream: async (options: any) => {
       calls.push(options);
       return inner.doStream(options);
@@ -149,7 +150,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     // `autoCompaction` exists solely so a SPONTANEOUS compaction can bypass the
     // renderer's compactionPending guard. /compact already sets that flag, so
     // tagging it auto here would make the manual marker skip its own pending state.
-    const session = seeded(4, textModel('a summary'));
+    const session = seeded(4, textModel(SHORT_FAKE_SUMMARY));
     const events = collect(session);
 
     await session.compactNow();
@@ -199,7 +200,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
   it('releases the abort controller so the session still works after a compaction', async () => {
     // compactNow takes this.abort for the duration; a leaked controller would
     // brick every later send() via the re-entrancy guard.
-    const session = seeded(4, textModel('a summary'));
+    const session = seeded(4, textModel(SHORT_FAKE_SUMMARY));
     await session.compactNow();
     expect((session as any).abort).toBeNull();
     await expect(session.send('still working?')).resolves.toBeUndefined();
@@ -224,7 +225,7 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
       await vi.advanceTimersByTimeAsync(4 * 60_000);
       expect((session as any).abort?.signal.aborted).toBe(false);
       controller.enqueue({ type: 'text-start', id: 'p' });
-      controller.enqueue({ type: 'text-delta', id: 'p', delta: 'a complete handoff' });
+      controller.enqueue({ type: 'text-delta', id: 'p', delta: SHORT_FAKE_SUMMARY });
       await vi.advanceTimersByTimeAsync(59_000);
       expect((session as any).abort?.signal.aborted).toBe(false);
       controller.enqueue({ type: 'text-end', id: 'p' });
@@ -354,7 +355,7 @@ describe('native /compact focus propagation', () => {
   it('correlates the live successful summary without changing committed source references or digests', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-compact-op-'));
     const store = new SessionStore(new NativeHome(root));
-    const host = new NativeSessionHost(store, async () => textModel('short summary'), async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null);
+    const host = new NativeSessionHost(store, async () => textModel(SHORT_FAKE_SUMMARY), async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null);
     try {
       await host.create({ sessionId: 's', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
       for (let i = 0; i < 3; i++) {

@@ -99,7 +99,7 @@ async function savedRun(file: string): Promise<{ messages: ModelMessage[]; cutOf
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     // A last line cut off mid-write is simply left out.
-    try { events.push(JSON.parse(line) as TranscriptEvent); } catch { /* skip */ }
+    try { events.push(JSON.parse(line) as TranscriptEvent); } catch { /* benign: skip */ }
   }
   if (!events.some((e) => e.type === 'user-message')) return null;
   // A step that was asked for but has no result: the app closed while it ran (or before it began).
@@ -201,7 +201,7 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       let writing: Promise<void> = Promise.resolve();
       session.on('transcript-event', (e) => {
         // One line per event, in order. A failed write must not stop the run; the run list still gets its summary.
-        writing = writing.then(() => fs.appendFile(transcript, `${JSON.stringify(e)}\n`)).catch(() => {});
+        writing = writing.then(() => fs.appendFile(transcript, `${JSON.stringify(e)}\n`)).catch(() => {}); // benign: a step that cannot be written only means this run cannot be picked up after a restart
         if (e.type === 'assistant-text') {
           const d = e.data as { text?: string; partId?: string };
           // A new part is a new reply; the same part is more of the same one.
@@ -221,11 +221,11 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       await writing;
       if (failure) throw new Error(failure);
       return { ...readEnding(lastReply), ...(run.resume && !saved ? { startedOver: true } : {}) };
-    })().finally(() => { void dispose?.().catch(() => {}); void pageConnection?.close().catch(() => {}); });
+    })().finally(() => { void dispose?.().catch(() => {}); void pageConnection?.close().catch(() => {}); }); // benign: cleanup after the run ended; the run's own result is already recorded
 
     return {
       done,
-      stop: () => { stopped = true; try { session?.interrupt(); } catch { /* already ended */ } },
+      stop: () => { stopped = true; try { session?.interrupt(); } catch { /* benign: already ended */ } },
     };
   };
 }

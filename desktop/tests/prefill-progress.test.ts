@@ -339,10 +339,15 @@ describe('toReport — measures the work actually being done', () => {
     expect(r.fraction).toBeCloseTo(0.5, 5);
   });
 
-  it('handles `processed` counting from ZERO rather than from the cache', () => {
-    // We have never captured a WARM reading, so which origin llama.cpp counts
-    // from is unverified. Under this reading, processed(500) < cache(9000) means
-    // it is already relative to the new work.
+  it('a real warm reading counts cached tokens as processed, so the new work starts at zero', () => {
+    // Captured from b10665 on the Z13: the first reading of a re-sent prompt.
+    const r = toReport({ total: 13_470, cache: 13_466, processed: 13_466, timeMs: 11 });
+    expect(r.newTotal).toBe(4);
+    expect(r.newProcessed).toBe(0);
+  });
+
+  it('still copes if a build ever counts `processed` from the cache instead', () => {
+    // processed(500) < cache(9000) means it is already relative to the new work.
     const r = toReport({ total: 10_000, cache: 9_000, processed: 500, timeMs: 1_000 });
     expect(r.newTotal).toBe(1_000);
     expect(r.newProcessed).toBe(500);
@@ -366,6 +371,33 @@ describe('toReport — measures the work actually being done', () => {
     const r = toReport({ total: 10_000, cache: 9_000, processed: 9_500, timeMs: 1_000 });
     // 500 new tokens in 1000ms = 0.5/ms; 500 remaining → ~1000ms.
     expect(r.etaMs).toBe(1_000);
+  });
+
+  // Real readings from a 13,470-token prompt on a 27B model (b10665, Z13); the
+  // reply's first token came at time_ms 88,142. Each batch costs more than the
+  // last, so the average since the start promises too early a finish.
+  const LONG = [
+    { total: 13_470, cache: 0, processed: 2048, timeMs: 9295 },
+    { total: 13_470, cache: 0, processed: 4096, timeMs: 21_718 },
+    { total: 13_470, cache: 0, processed: 6144, timeMs: 34_537 },
+  ];
+
+  it('the ETA uses the latest batch, which is closer to the truth than the average', () => {
+    const actualLeft = 88_142 - LONG[2].timeMs;
+    const averaged = toReport(LONG[2]).etaMs!;
+    const latest = toReport(LONG[2], LONG[1]).etaMs!;
+    expect(latest).toBeGreaterThan(averaged);
+    expect(Math.abs(latest - actualLeft)).toBeLessThan(Math.abs(averaged - actualLeft));
+  });
+
+  it('a faster batch never makes the ETA more optimistic than the average', () => {
+    const fastBatch = { ...LONG[1], processed: 6144, timeMs: 22_000 };
+    expect(toReport(fastBatch, LONG[1]).etaMs).toBe(toReport(fastBatch).etaMs);
+  });
+
+  it('a previous reading from another stream is ignored', () => {
+    const other = { total: 900, cache: 0, processed: 100, timeMs: 50 };
+    expect(toReport(LONG[2], other).etaMs).toBe(toReport(LONG[2]).etaMs);
   });
 });
 

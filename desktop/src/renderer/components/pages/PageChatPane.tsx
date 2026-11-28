@@ -244,7 +244,7 @@ function PageChatsList({ page, chats, current, onPick, onClose }: { page: PageSu
   useEffect(() => {
     let gone = false;
     void (async () => {
-      const rows = await window.claude.session.browse().catch(() => []) as Array<{ sessionId: string; name?: string }>;
+      const rows = await window.claude.session.browse().catch(() => []) as Array<{ sessionId: string; name?: string }>; // benign: no conversation list means no names to match; the chats still open
       if (!gone) setNames(new Map(rows.filter((r) => r.name).map((r) => [r.sessionId, r.name!])));
     })();
     return () => { gone = true; };

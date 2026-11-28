@@ -32,5 +32,6 @@ export const gameChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.ARCADE_SUBMIT_SCORE, kind: 'handle', handler: (p) => getArcadeOps()?.submitScore(p?.game, p?.score) ?? UNAVAILABLE }),
   // An absent game means EVERY game: passing undefined through is the whole filter, so it is not coerced to '' (that
   // would ask the Worker for the game literally named "", i.e. always nothing).
+  defineChannel({ name: IPC.ARCADE_ROOM_TICKET, kind: 'handle', handler: (p) => getArcadeOps()?.roomTicket(String(p?.game ?? ''), String(p?.room ?? '')) ?? UNAVAILABLE }),
   defineChannel({ name: IPC.ARCADE_RECORDS, kind: 'handle', handler: (p) => getArcadeOps()?.records(p?.game ?? undefined) ?? UNAVAILABLE }),
 ];

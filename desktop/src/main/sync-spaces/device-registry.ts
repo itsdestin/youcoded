@@ -29,6 +29,18 @@ import { laterOf, isConflictCopyName, extractConflictBase } from '../conversatio
 
 export const DEVICE_REGISTRY_SCHEMA = 1;
 
+/** The name this device goes by in "Your devices", sync messages and conflict copies.
+ *  WHY (2026-11-01 phone test): on Android the backend runs inside a small bundled Linux,
+ *  whose hostname is always "localhost", so the phone listed itself as "localhost · Linux".
+ *  The Android app passes the phone's own name (RuntimeInstaller → YOUCODED_DEVICE_NAME). */
+export function selfDeviceName(): string {
+  return process.env.YOUCODED_DEVICE_NAME?.trim() || os.hostname();
+}
+
+/** The default name a phone used to register under before selfDeviceName existed. A row
+ *  still carrying it was never named by a person, so a better default may replace it. */
+const OLD_PHONE_DEFAULT_NAME = 'localhost';
+
 export interface DeviceRecord {
   schemaVersion: number;
   id: string;        // stable device id (UUID) — the immutable filename identity
@@ -154,18 +166,21 @@ export function upsertSelf(
       return {
         schemaVersion: DEVICE_REGISTRY_SCHEMA,
         id: input.id,
-        name: input.name ?? os.hostname(), // default friendly name
+        name: input.name ?? selfDeviceName(), // default friendly name
         platform: input.platform,
         lastSeen: now,
         updatedAt: now,
       };
     }
     // Only a provided-and-different name is a real rename.
-    const nameChanged = input.name !== undefined && input.name !== cur.name;
+    // A phone row still named "localhost" (registered before selfDeviceName) takes the
+    // phone's real name once — it was never chosen by a person, so nothing is overwritten.
+    const healedName = input.name ?? (cur.name === OLD_PHONE_DEFAULT_NAME && selfDeviceName() !== OLD_PHONE_DEFAULT_NAME ? selfDeviceName() : undefined);
+    const nameChanged = healedName !== undefined && healedName !== cur.name;
     const next: DeviceRecord = {
       schemaVersion: DEVICE_REGISTRY_SCHEMA,
       id: cur.id,
-      name: nameChanged ? input.name! : cur.name,
+      name: nameChanged ? healedName! : cur.name,
       platform: input.platform, // keep fresh
       lastSeen: now,            // liveness always advances
       updatedAt: nameChanged ? now : cur.updatedAt,

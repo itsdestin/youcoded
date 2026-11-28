@@ -72,6 +72,25 @@ describe('standalone Claude control mod', () => {
     expect(h.results.find(r => r.requestId === 'clear').result.status).toBe('accepted')
   })
 
+  it('keeps controls alive when session.end gives any other reason and Claude Code carries on', async () => {
+    // It used to switch the helper off for good, so every later send in the chat said "Queue identity is not ready".
+    const h = harness([op('end', { kind: 'command', command: 'compact' }), op('after', { kind: 'send-text', text: 'still here', sendId: 'after' })])
+    h.$.command.run.mockImplementationOnce(async () => { await h.event('session.end', { reason: 'other' }); return { text: '' } })
+    await h.start()
+    await vi.waitFor(() => expect(h.submitted).toEqual(['still here']))
+  })
+  it('reports the conversation even when the model name is missing, and tries again when a report is lost', async () => {
+    const h = harness([])
+    h.$.session.model = async () => null as any
+    const states = () => h.$.http.fetch.mock.calls.filter(([url]: any) => url.endsWith('/state')).map(([, init]: any) => JSON.parse(init.body).state)
+    let refuse = 1
+    const real = h.$.http.fetch.getMockImplementation()!
+    h.$.http.fetch.mockImplementation(async (url: string, init: any) => url.endsWith('/state') && refuse-- > 0 ? { ok: false, status: 503, text: '{}', headers: {} } : real(url, init))
+    await h.start()
+    await vi.waitFor(() => expect(states().length).toBeGreaterThanOrEqual(2))
+    // The host refuses a whole report holding an empty field, and the conversation id in it is what links the chat.
+    expect(states().every((st: any) => !('model' in st) && st.claudeSessionId === 'cc-id')).toBe(true)
+  })
   it('serializes mutation operations but keeps polling and addressed Stop independent', async () => {
     const h = harness([
       op('1', { kind: 'send-text', text: 'first', sendId: 'one' }),

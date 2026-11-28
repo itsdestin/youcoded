@@ -101,6 +101,19 @@ android {
             // would otherwise collide on 127.0.0.1:9901 and the dev app's
             // WebView would hang forever on "Connecting...".
             buildConfigField("int", "BRIDGE_PORT", "9951")
+            // WHY shrunk like the release (Destin, 2026-11-10: "two builds is weird and confusing", he wants "a single
+            // way to test the app"): the Dev copy used to skip R8, so everything tested on a phone ran code the release
+            // never ships, and a separate shrunk test copy that closed the gap was built but rarely installed, so it was
+            // removed. The Dev
+            // copy now goes through the same shrinking and renaming with the same rules, and is the one copy to test.
+            // It stays debuggable, so the page can still be inspected and its files read while diagnosing; R8 therefore
+            // keeps debug information and skips some optimisations the real release applies (not identical, by design).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         release {
             isMinifyEnabled = true
@@ -112,32 +125,6 @@ android {
             signingConfig = signingConfigs.getByName("release")
             resValue("string", "app_name", "YouCoded")
             buildConfigField("int", "BRIDGE_PORT", "9901")
-        }
-        // ReleaseTest: same R8 / shrinker / proguard config as `release`, but
-        // signed with the debug keystore and installed as a SEPARATE app
-        // ("YouCoded ReleaseTest") via applicationIdSuffix.
-        //
-        // Why this exists: debug builds skip R8 minification entirely, which
-        // hides any bug whose trigger involves R8 obfuscation, shrinking, or
-        // inlining. The PluginInstaller reflection bug shipped silently from
-        // 2026-03-25 through v1.2.2 because every dev/CI build was debug — no
-        // pre-release verification ever ran the same code path the user would.
-        // assembleReleaseTest reproduces release behavior (R8 effects intact)
-        // without needing the production release keystore, so anyone can run
-        // it locally or in CI before tagging. Side-by-side install also means
-        // the user's real app data is never touched during verification.
-        //
-        // Bridge port shifted to avoid colliding with both the production app
-        // (9901) and the regular debug app (9951). Uninstall + reinstall of
-        // releaseTest is safe at any time.
-        create("releaseTest") {
-            initWith(getByName("release"))
-            applicationIdSuffix = ".releasetest"
-            versionNameSuffix = "-releasetest"
-            resValue("string", "app_name", "YouCoded ReleaseTest")
-            signingConfig = signingConfigs.getByName("debug")
-            buildConfigField("int", "BRIDGE_PORT", "9961")
-            matchingFallbacks += listOf("release")
         }
     }
 
@@ -154,7 +141,7 @@ android {
     // so each variant gets its own build of them (runtimeTasks below); the backend is the same for all.
     sourceSets {
         if (!ciPackagingDependencies) getByName("main").assets.srcDir(layout.buildDirectory.dir("backend-assets"))
-        for (variant in listOf("debug", "release", "releaseTest").filter { !ciPackagingDependencies }) {
+        for (variant in listOf("debug", "release").filter { !ciPackagingDependencies }) {
             getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("runtime/$variant/jniLibs"))
             getByName(variant).assets.srcDir(layout.buildDirectory.dir("runtime/$variant/assets"))
         }
@@ -299,7 +286,7 @@ val buildBackend = tasks.register<Exec>("buildBackend") {
 }
 
 val runtimeTasks = mutableMapOf<String, org.gradle.api.tasks.TaskProvider<Exec>>()
-val variantAppIds = mapOf("Debug" to "com.youcoded.app.dev", "Release" to "com.youcoded.app", "ReleaseTest" to "com.youcoded.app.releasetest")
+val variantAppIds = mapOf("Debug" to "com.youcoded.app.dev", "Release" to "com.youcoded.app")
 for ((variant, appId) in variantAppIds) {
     val runtimeTask = tasks.register<Exec>("buildRuntime$variant") {
         description = "Build the phone's programs for $appId (app/runtime/build-runtime.sh)"
@@ -352,7 +339,7 @@ if (ciPackagingDependencies) {
         // not a growing list of individual internal model/analyzer task names.
         // WHY: AndroidTest/UnitTest model readers insert a test kind between
         // the variant and Lint, so suffix/prefix-only matching missed them.
-        // Resolve longest first to keep ReleaseTest distinct from Release.
+        // Resolve longest first (harmless with two variants; keeps a future longer variant name from matching a shorter one).
         tasks.matching { task ->
             task.name.contains("lint", ignoreCase = true) &&
                 variantAppIds.keys.sortedByDescending { it.length }.firstOrNull {

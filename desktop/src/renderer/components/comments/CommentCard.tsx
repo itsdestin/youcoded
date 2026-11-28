@@ -4,7 +4,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ErrorState } from '../ui/states';
 import { CompleteToggle } from '../SessionCardDetails';
-import { formatRelativeTime } from '../../utils/format-time';
+import { formatRelativeTime, formatFullDateTime } from '../../utils/format-time';
+import { Tooltip } from '../ui/Tooltip';
 import type { DocComment } from '../../state/doc-comments-store';
 import { Avatar, authorName, authorNameInline } from './Avatar';
 import { ReplyField } from './ReplyField';
@@ -217,7 +218,12 @@ export function CommentCard({
     <>
       <div className="flex items-center gap-1.5 min-w-0">
         <span className="font-medium text-fg truncate">{authorName(c.author)}</span>
-        <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(c.createdAt)}</span>
+        {/* WHY the hint (card #39): "5h ago" alone gives no exact time; hovering (or press-and-hold on touch)
+            shows the full date and time. Tooltip adds no wrapper element, so the row's layout is unchanged;
+            a missing time gives an empty hint, which Tooltip does not show. */}
+        <Tooltip text={formatFullDateTime(c.createdAt)}>
+          <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(c.createdAt)}</span>
+        </Tooltip>
         {actions && <div className="ml-auto shrink-0">{actions}</div>}
       </div>
       {cell && <div className="text-2xs text-fg-muted truncate">{cell}</div>}

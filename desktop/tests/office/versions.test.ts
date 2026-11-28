@@ -11,6 +11,7 @@ const watcher = vi.hoisted(() => ({ noteOwnWrite: vi.fn() }));
 vi.mock('../../src/main/artifacts/project-watcher', () => watcher);
 
 import { list, pruneAll, pruneKeep, restore, snapshot, versionsDir } from '../../src/main/office/versions';
+import { awaitSaveDirSweeps } from '../../src/main/office/office-commands';
 
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
 
@@ -141,6 +142,18 @@ describe('the versions store', () => {
     expect((await readFile(path.join(vdir, `${versions[0].id}.before-restore.docx`))).equals(edited)).toBe(true);
     expect(watcher.noteOwnWrite).toHaveBeenCalledWith(file);
     // Nothing is left beside the file (the private write folder is removed).
+    expect((await readdir(dir)).filter((n) => n.startsWith('.'))).toEqual([]);
+  });
+
+  it('removes a hidden leftover save folder over an hour old beside the file when restoring', async () => {
+    const opened = await snapshot(userData, file, 'opened', memo);
+    const stale = path.join(dir, '.plan.docx.office-save-abc123');
+    await mkdir(stale);
+    await writeFile(path.join(stale, 'plan.docx'), 'document content');
+    const when = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(stale, when, when);
+    await expect(restore(userData, file, opened!.id)).resolves.toEqual({ ok: true });
+    await awaitSaveDirSweeps();
     expect((await readdir(dir)).filter((n) => n.startsWith('.'))).toEqual([]);
   });
 

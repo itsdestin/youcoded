@@ -37,7 +37,7 @@ async function realLocation(p: string): Promise<string> {
   let head = path.resolve(p);
   const tail: string[] = [];
   for (;;) {
-    try { return path.join(await fs.realpath(head), ...tail); } catch { /* not there yet: try its folder */ }
+    try { return path.join(await fs.realpath(head), ...tail); } catch { /* benign: not there yet: try its folder */ }
     const up = path.dirname(head);
     if (up === head) return path.resolve(p);
     tail.unshift(path.basename(head));

@@ -206,6 +206,16 @@ export function shortenPathTokens(text: string): string {
     .replace(/\u0000(\d+)\u0000/g, (_marker, index) => protectedTokens[Number(index)]);
 }
 
+/** Drop the attachment paths a sent message opens with ("/data/.../a.txt /data/.../b.png What is in these?").
+ *  WHY (2026-11-01 phone test): the paths are file plumbing, not what the conversation is about, so a title built
+ *  from the first words read "yc-attach-test.txt W…". Only leading ROOTED paths go (absolute or drive-letter),
+ *  and only when words follow them; an attachment-only message keeps its text so it still gets some title. */
+export function stripLeadingAttachmentPaths(text: string): string {
+  const raw = String(text ?? '');
+  const rest = raw.replace(/^\s*(?:(?:[A-Za-z]:[\\/]|\/)\S*\s+)+/, '');
+  return rest.trim() ? rest : raw;
+}
+
 // How people open a request. Stripping these is what turns a quoted sentence
 // into something that reads like a name: "can you help me fix the scroll bug"
 // is a sentence about ME asking; "Fix the scroll bug" is what the conversation
@@ -262,7 +272,7 @@ const stripLeading = (text: string, phrases: readonly string[]): string => {
  * which is always better than a blank.
  */
 export function basicNameFrom(firstMessage: string): string {
-  const collapsed = shortenPathTokens(String(firstMessage ?? ''))
+  const collapsed = shortenPathTokens(stripLeadingAttachmentPaths(String(firstMessage ?? '')))
     // Markdown marks are formatting, not words. A message that opens with a
     // heading or bold text would otherwise be named "## Source Extractor" —
     // which looks like the app is showing you its own plumbing.

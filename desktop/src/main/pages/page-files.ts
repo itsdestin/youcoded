@@ -245,7 +245,7 @@ export class PageFiles {
         // Write-only lines too: a page that only saves can save to its remembered files again.
         for (const line of access.lines.filter((l) => l.level === 'remember')) {
           for (const f of access.remembered[line.id] ?? []) {
-            const st = await fs.promises.stat(f.path).catch(() => null);
+            const st = await fs.promises.stat(f.path).catch(() => null); // benign: a remembered file that is gone is shown as missing
             if (!st?.isFile()) continue;
             files.push(this.holdKnown(caller, pageId, line.id, f.path, f.name, st, f.id));
           }
@@ -419,7 +419,7 @@ export class PageFiles {
       if (buf.length > limit) no('TOO_BIG', `That file is larger than ${Math.round(limit / MB)} MB, which is more than a page may open.`);
       return { data: encoding === 'text' ? buf.toString('utf8') : buf.toString('base64'), encoding };
     } finally {
-      await opened.fh.close().catch(() => {});
+      await opened.fh.close().catch(() => {}); // benign: close after the read; the result is already in hand
     }
   }
 
@@ -446,20 +446,20 @@ export class PageFiles {
       const o = opened as Opened;
       if (o.created) {
         try { await o.fh.write(data, 0, data.length, 0); await o.fh.close(); }
-        catch { await o.fh.close().catch(() => {}); await fs.promises.unlink(o.real).catch(() => {}); no('FAILED', 'The file could not be saved.'); }
+        catch { await o.fh.close().catch(() => {}); await fs.promises.unlink(o.real).catch(() => {}); no('FAILED', 'The file could not be saved.'); } // benign: cleanup after a failed save; the failure itself is returned on this line
         return;
       }
       // The file was proven to be the regular file inside `root` (openForWrite); its copy goes
       // beside it, made with `wx` so nothing already at that name is followed or reused.
-      const mode0 = (await o.fh.stat().catch(() => null))?.mode;
-      await o.fh.close().catch(() => {});
+      const mode0 = (await o.fh.stat().catch(() => null))?.mode; // benign: no mode read means the default mode is used
+      await o.fh.close().catch(() => {}); // benign: closing the checked handle; the save continues on the temporary file
       const tmp = path.join(path.dirname(o.real), `.${path.basename(o.real)}.youcoded-${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
       try {
         const t = await fs.promises.open(tmp, 'wx', mode0 !== undefined ? mode0 & 0o777 : 0o644);
-        try { await t.write(data, 0, data.length, 0); await t.sync().catch(() => {}); } finally { await t.close().catch(() => {}); }
+        try { await t.write(data, 0, data.length, 0); await t.sync().catch(() => {}); } finally { await t.close().catch(() => {}); } // benign: sync and close are best-effort; a failed write throws on this line
         await fs.promises.rename(tmp, o.real);
       } catch {
-        await fs.promises.unlink(tmp).catch(() => {});
+        await fs.promises.unlink(tmp).catch(() => {}); // benign: the temporary file may already be renamed or gone
         no('FAILED', 'The file could not be saved.');
       }
     });

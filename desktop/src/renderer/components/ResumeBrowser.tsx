@@ -10,7 +10,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { useChunkedReveal } from '../hooks/use-chunked-reveal';
-import { isAndroid } from '../platform';
+import { onePaneLayout } from '../device';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { ResumeFilterPopover } from './ResumeFilterPopover';
@@ -33,6 +33,8 @@ import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './Resum
 import './ResumeBrowser.css';
 import { resolveNativeBinding } from '../state/welcome-back';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
+import { prefersTouchInput } from '../utils/touch-input';
+import { Tooltip } from './ui';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -334,7 +336,7 @@ const RowMemo = React.memo(
 // it on screen is a paint, and hidden text is out of tab order and
 // find-in-page. Addressed by primitives so a keystroke in the search box
 // re-renders no layer — and so re-reads nothing.
-const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, projectSlug, visible, onSettled, onGone }: {
+const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, projectSlug, visible, onSettled, onGone, topInset, onTopReserved }: {
   id: string;
   provider: ChatsearchProvider;
   title: string;
@@ -342,14 +344,18 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
   visible: boolean;
   onSettled: (id: string) => void;
   onGone: (id: string) => void;
+  /** The floating card's measured height (card #190, see SessionPreviewPane). */
+  topInset: number;
+  onTopReserved: (id: string, reserved: boolean) => void;
 }) {
   useEffect(() => () => onGone(id), [id, onGone]);
+  const onReserved = useCallback((reserved: boolean) => onTopReserved(id, reserved), [id, onTopReserved]);
   return (
     // data-preview-id: lets the header card's scroll handler tell the layer on
     // screen from the hidden ones (see onPreviewScroll).
     <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
       {visible && <ScreenMark name="chat/resume/preview" />}
-      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} />
+      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} topInset={topInset} onTopReserved={onReserved} active={visible} />
     </div>
   );
 });
@@ -524,6 +530,10 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   const onPreviewScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.target;
     if (!(el instanceof HTMLElement)) return;
+    // Card #190: a conversation too short to scroll has room reserved under the
+    // card instead (SessionPreviewPane fitTopInset), so the card stays put —
+    // sliding it away would only leave that room empty.
+    if (el.hasAttribute('data-top-reserved')) return;
     // Only the conversation on screen counts. A hidden layer jumps itself to
     // its newest message when its read lands, and that is not the reader moving.
     if (el.closest('[data-preview-id]')?.getAttribute('data-preview-id') !== shownIdRef.current) return;
@@ -544,6 +554,28 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
     if (cloneOrganizeId) return;
     setHeaderTucked(moved < 0);
   };
+  // ── The card's real height, for the room a short conversation reserves ──
+  // (card #190). Measured, never hard-coded: the card grows with tags, a note,
+  // a long title. A callback ref: read when the card mounts (during commit, so
+  // before paint) and again whenever it resizes; 0 while there is no card.
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerRo = useRef<ResizeObserver | null>(null);
+  const headerStripRef = useCallback((el: HTMLDivElement | null) => {
+    headerRo.current?.disconnect();
+    headerRo.current = null;
+    setHeaderHeight(el ? el.offsetHeight : 0);
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    headerRo.current = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
+    headerRo.current.observe(el);
+  }, []);
+  // A layer that has just reserved room is the one on screen: bring its card
+  // back if it was tucked (a resize can turn a scrolled-up conversation into
+  // one that fits, and a tucked card over reserved room would leave a gap).
+  const onTopReserved = useCallback((id: string, reserved: boolean) => {
+    if (!reserved || id !== shownIdRef.current) return;
+    setHeaderTucked(false);
+    tuckMark.current.el = null;
+  }, []);
   // Closing the browser unmounts every layer. Keep only the one that was on
   // screen, so reopening re-reads one conversation rather than four. The card
   // comes back with it rather than reopening tucked away.
@@ -598,7 +630,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   //    to pass it. The list is fully usable without the panel, which is what
   //    makes hiding it legitimate rather than a narrow "fix" that removes the
   //    only route to something.
-  const previewOn = !narrowViewport && !isAndroid();
+  const previewOn = !onePaneLayout(narrowViewport);   // device.ts
   // Model, Skip permissions, new window and the in-flight resume — shared with
   // the Projects page's preview (ResumeOptions.tsx).
   const resumeOptions = useResumeOptions(defaultModel, defaultSkipPermissions);
@@ -710,6 +742,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       setSelectedTagIds(new Set());
       setSortDir('desc');
       loadSessions();
+      // WHY: no autofocus on touch — the on-screen keyboard covered half the list; tapping the box still opens it (2026-11-01 phone test).
+      if (prefersTouchInput()) return;
       const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }
@@ -1436,7 +1470,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       {/* Pinned: the pin sits with the card's corner icons, as it sits by the status
           pill in the sessions menu (pick-menus-4#PM4-3) — no longer an amber tag. */}
       {s.flags?.priority && (
-        <span className="px-1 py-2 flex items-center" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+        <Tooltip text="Pinned to top">
+          <span className="px-1 py-2 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+        </Tooltip>
       )}
       {/* Tags and note. Always visible rather than hover-revealed — a
           hover-only affordance is invisible on touch and undiscoverable on
@@ -1571,7 +1607,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                       className={MENU_ROW}
                     >
                       <CheckboxMark checked={checked} />
-                      <span className="flex-1 truncate" title={p.path}>{p.label}</span>
+                      <Tooltip text={p.path}>
+                        <span className="flex-1 truncate">{p.label}</span>
+                      </Tooltip>
                       <span className="text-2xs text-fg-muted shrink-0 tabular-nums">{p.count}</span>
                     </button>
                   );
@@ -1714,13 +1752,15 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
+          // WHY max-sm (2026-11-01): 70vh left a phone's Resume list ~30% shorter than the screen
+          // allows; on phones it may use the screen minus a scrim margin, then scrolls.
           // Preview mode swaps max-h for a DEFINITE height. The
           // note on the list below explains why: with only a max-height, a
           // flex-1 child does not grow in Chromium, and the transcript column
           // needs a real height to scroll inside.
           className={`w-full pointer-events-auto flex flex-col ${previewOn
             ? 'max-w-[1000px] h-[76vh]'
-            : 'max-w-md max-h-[70vh]'}`}
+            : 'max-w-md max-h-[70vh] max-sm:max-h-[calc(100dvh-3rem)]'}`}
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1969,6 +2009,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                         conversation is simply there, not sliding in under the
                         arrival. The open tags/note sheet holds it on screen. */}
                     <div
+                      ref={headerStripRef}
                       className="preview-header-slide absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none"
                       data-tucked={headerTucked && !cloneOrganizeId ? '' : undefined}
                       data-still={arrival === 'staged' ? '' : undefined}
@@ -1998,6 +2039,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                         visible={id === shownId}
                         onSettled={onPreviewSettled}
                         onGone={onPreviewGone}
+                        topInset={headerHeight}
+                        onTopReserved={onTopReserved}
                       />
                     ) : null;
                   })}

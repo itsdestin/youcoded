@@ -28,6 +28,7 @@ import { Button, CloseButton, FieldError, Textarea } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useAccount } from '../../state/account-context';
 import { REPORT_REASON_MAX } from '../../state/marketplace-constants';
+import { Tooltip } from '../ui';
 
 // ── Flag icon SVG ─────────────────────────────────────────────────────────────
 
@@ -306,16 +307,17 @@ export default function ReportReviewButton({
 
   return (
     <div className="relative">
-      <button
-        onClick={handleButtonClick}
-        title={signedIn ? 'Report review' : 'Sign in to report reviews'}
-        aria-label={ariaLabel}
-        // Subtle flag icon: normally dim, shifts toward destructive color on hover
-        // Uses --destructive token so theme drives the warning hue, not a hardcoded hex
-        className="p-1 rounded text-fg-faint hover:text-[color:var(--destructive,theme(colors.red.400))] transition-colors"
-      >
-        <FlagIcon size={12} />
-      </button>
+      <Tooltip text={signedIn ? 'Report review' : 'Sign in to report reviews'}>
+        <button
+          onClick={handleButtonClick}
+          aria-label={ariaLabel}
+          // Subtle flag icon: normally dim, shifts toward destructive color on hover
+          // Uses --destructive token so theme drives the warning hue, not a hardcoded hex
+          className="p-1 rounded text-fg-faint hover:text-[color:var(--destructive,theme(colors.red.400))] transition-colors"
+        >
+          <FlagIcon size={12} />
+        </button>
+      </Tooltip>
 
       {/* Inline toast — shown briefly when clicking while signed out */}
       {toastMessage && (

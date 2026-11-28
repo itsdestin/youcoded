@@ -53,6 +53,17 @@ describe('ProviderRegistry', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
+  it('OpenRouter remembers how it was connected, shows it on the list, and keeps it across a row edit', async () => {
+    const via = async () => (await reg.list()).find((p) => p.id === 'openrouter')?.connectedVia;
+    expect(await via()).toBeUndefined(); // older connections: unknown
+    await reg.setKey('openrouter', 'sk-or-typed');
+    expect(await via()).toBe('key'); // the key window
+    await reg.setKey('openrouter', 'sk-or-browser', 'browser');
+    expect(await via()).toBe('browser'); // Sign in with OpenRouter
+    await reg.upsert({ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true });
+    expect(await via()).toBe('browser'); // an edit must not forget it
+  });
+
   it('endpointKey answers the saved key, and undefined for a provider without one or an unknown id', async () => {
     const id = await reg.upsert({ type: 'openai-compatible', label: 'Mine', baseUrl: 'https://x.example.com/v1', enabled: true });
     expect(await reg.endpointKey(id)).toBeUndefined();
@@ -355,6 +366,18 @@ describe('ProviderRegistry', () => {
       expect(body.parallel_tool_calls).toBe(false);
       // The hook is additive — it must not drop the rest of the request body.
       expect(body.model).toBe('m');
+    });
+
+    // Each chat keeps its own engine slot so chats stop re-reading each other's
+    // openings (engine/slot-pins.ts): the chat's key goes to the engine, and
+    // the slot it answers rides the request as llama.cpp's id_slot.
+    it('languageModel(local): a chat\'s request names the engine slot kept for that chat', async () => {
+      const slotFor = vi.fn((_m: string, key?: string) => (key === 'chat-a' ? 1 : 3));
+      const reg = new ProviderRegistry(new NativeHome(root), secrets, makeHook({ slotFor }));
+      await reg.init();
+      const model = await reg.languageModel({ providerId: 'local', modelId: 'm' }, { cacheKey: 'chat-a' });
+      expect((model as any).config.transformRequestBody({ model: 'm' })).toEqual({ model: 'm', id_slot: 1 });
+      expect(slotFor).toHaveBeenCalledWith('m', 'chat-a', undefined)   // third argument: not a helper agent (slot-pins.ts);
     });
 
     // T19: the fetch handed to the SDK for a local send must report the finished

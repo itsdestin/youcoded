@@ -241,3 +241,14 @@ describe('review schedule', () => {
     expect(isReviewDue(rec({ replies: 0, reviewed: 0 }))).toBe(false);
   });
 });
+
+describe('attachment paths do not become the title', () => {
+  it('names the conversation from the words after the attached files', () => {
+    const msg = '/data/user/0/com.youcoded.app/files/tmp/attachments/1793591907575/yc-attach-test.txt What is the secret word in the attached file?';
+    expect(basicNameFrom(msg)).toBe('What is the secret word in the…');
+  });
+  it('skips several attachments, and keeps an attachment-only message nameable', () => {
+    expect(basicNameFrom('/tmp/a/one.png /tmp/b/two.png Describe these')).toBe('Describe these');
+    expect(basicNameFrom('/tmp/a/one.png')).toBe('One.png');
+  });
+});

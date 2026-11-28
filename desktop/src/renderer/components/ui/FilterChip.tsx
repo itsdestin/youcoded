@@ -1,4 +1,5 @@
 import React from 'react';
+import { Tooltip } from './Tooltip';
 
 /**
  * FilterChip — a pick-ANY filter pill: tap to add a filter, tap again to
@@ -47,19 +48,20 @@ export type FilterChipProps = {
 export function FilterChip({ active, onClick, children, className = '', title, kind = 'filter', 'aria-label': ariaLabel }: FilterChipProps) {
   const isToggle = kind === 'toggle';
   return (
-    <button
-      type="button"
-      // role=checkbox + aria-checked: a filter chip is an on/off state, not a
-      // pressed button — screen readers announce "checked"/"not checked".
-      role={isToggle ? undefined : 'checkbox'}
-      aria-checked={isToggle ? undefined : active}
-      aria-pressed={isToggle ? active : undefined}
-      aria-label={ariaLabel}
-      title={title}
-      onClick={onClick}
-      className={`${FILTER_CHIP_BASE} ${active ? FILTER_CHIP_ACTIVE : FILTER_CHIP_INACTIVE} ${className}`.trim()}
-    >
-      {children}
-    </button>
+    <Tooltip text={title ?? ''}>
+      <button
+        type="button"
+        // role=checkbox + aria-checked: a filter chip is an on/off state, not a
+        // pressed button — screen readers announce "checked"/"not checked".
+        role={isToggle ? undefined : 'checkbox'}
+        aria-checked={isToggle ? undefined : active}
+        aria-pressed={isToggle ? active : undefined}
+        aria-label={ariaLabel}
+        onClick={onClick}
+        className={`${FILTER_CHIP_BASE} ${active ? FILTER_CHIP_ACTIVE : FILTER_CHIP_INACTIVE} ${className}`.trim()}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }

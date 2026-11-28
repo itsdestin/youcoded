@@ -19,6 +19,7 @@ import { findBestMatch, buildArtifactifyArgs } from '../components/filepath-matc
 import { describeReadError } from '../components/artifact-views/read-error-copy';
 import { getCapabilities } from '../platform';
 import { plainMessage } from '../utils/ipc-error';
+import { whenEditsSaved } from '../components/artifact-views/dirty-editor-guard';
 
 export interface OpenFilepathCtx {
   state: ArtifactState;
@@ -201,7 +202,8 @@ export async function openFilepath(
     const show = (artifact: ArtifactRecord) => {
       if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
       dispatch({ type: 'SESSION_ARTIFACT_UPSERTED', sessionId, artifact });
-      dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
+      // An Office edit open in the panel saves first (dirty-editor-guard.ts whenEditsSaved).
+      whenEditsSaved(() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id }));
     };
 
     // 1. Already in this session's live list? Select it. findBestMatch prefers
@@ -215,7 +217,7 @@ export async function openFilepath(
     const sessMatch = findBestMatch(state.sessionArtifacts[sessionId] ?? [], path, cwd);
     if (sessMatch) {
       if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
-      dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: sessMatch.id });
+      whenEditsSaved(() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: sessMatch.id }));
       return;
     }
 
@@ -253,7 +255,7 @@ export async function openFilepath(
           // state, the exact half-open window this option exists to avoid.
           if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
           dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: refreshed.artifacts });
-          dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: added.id });
+          whenEditsSaved(() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: added.id }));
           selected = added.id;
         } else if (drawerOpensImmediately) {
           dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: refreshed.artifacts });

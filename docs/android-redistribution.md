@@ -87,7 +87,7 @@ There is no renderer/UI change in this work; no new About link is claimed.
 From the app repo on an isolated CI runner with Docker:
 
 ```sh
-YOUCODED_COLLECT_SOURCES=1 ./gradlew assembleReleaseTest
+YOUCODED_COLLECT_SOURCES=1 ./gradlew assembleDebug
 ```
 
 Normal Gradle prerequisites apply. CI stamps the version before Gradle. The output

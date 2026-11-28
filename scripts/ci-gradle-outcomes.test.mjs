@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseGradleOutcomes, producerViolations } from './ci-gradle-outcomes.mjs';
 
-const producers = scope => ['bundleWebUi', 'buildBackend', `buildRuntime${scope === 'debug' ? 'Debug' : 'ReleaseTest'}`, `materialize${scope === 'debug' ? 'Debug' : 'ReleaseTest'}SpeedPayload`];
-const log = scope => producers(scope).map(name => `> Task :app:${name}`).join('\n') + '\nBUILD SUCCESSFUL in 1m\n';
+const producers = () => ['bundleWebUi', 'buildBackend', 'buildRuntimeDebug', 'materializeDebugSpeedPayload'];
+const log = scope => producers().map(name => `> Task :app:${name}`).join('\n') + '\nBUILD SUCCESSFUL in 1m\n';
 
 test('records every reported outcome without counting repeated or interleaved headers as execution', () => {
   const parsed = parseGradleOutcomes('> Task :app:compile\r\n> Task :app:other\n> Task :app:compile FROM-CACHE\n> Task :app:compile\n> Task :app:other UP-TO-DATE\n> Task :app:skip SKIPPED\n> Task :app:empty NO-SOURCE\n> Task :app:run\nBUILD SUCCESSFUL in 4s\n');
@@ -21,10 +21,10 @@ test('rejects absent, malformed, unknown and conflicting outcomes', () => {
   for (const text of ['', '> Task :app:x', 'BUILD SUCCESSFUL nonsense', '> Task app:x\nBUILD SUCCESSFUL in 1s', '> Task :app:x UNKNOWN\nBUILD SUCCESSFUL in 1s', '> Task :app:x FROM-CACHE\n> Task :app:x FAILED\nBUILD FAILED in 1s', 'BUILD FAILED in 1s\nBUILD SUCCESSFUL in 1s']) assert.throws(() => parseGradleOutcomes(text));
 });
 test('checks every selected public producer and fails closed for unknown or missing facts', () => {
-  for (const scope of ['debug', 'releaseTest']) {
+  for (const scope of ['debug']) {
     const facts = parseGradleOutcomes(log(scope));
     assert.deepEqual(producerViolations(scope, facts), []);
-    for (const name of producers(scope)) {
+    for (const name of producers()) {
       const path = `:app:${name}`;
       for (const status of ['FROM-CACHE', 'SKIPPED', 'NO-SOURCE', 'FAILED', 'unknown']) assert.ok(producerViolations(scope, { ...facts, tasks: { ...facts.tasks, [path]: status } }).length);
       const tasks = { ...facts.tasks }; delete tasks[path];
@@ -44,8 +44,8 @@ test('CLI emits small scoped SHA facts on success and failure, never acceptance 
     const result = JSON.parse(readFileSync(join(dir, 'android-gradle-outcomes-debug.json'), 'utf8'));
     assert.equal(result.sha, 'a'.repeat(40)); assert.equal(result.scope, 'debug'); assert.equal(result.diagnosticOnly, true);
     assert.equal(result.build, 'SUCCESSFUL'); assert.equal(Object.keys(result.tasks).length, 4);
-    assert.equal(run('releaseTest', '> Task :app:compile FAILED\nBUILD FAILED in 1s').status, 1);
-    assert.equal(JSON.parse(readFileSync(join(dir, 'android-gradle-outcomes-releaseTest.json'), 'utf8')).build, 'FAILED');
+    assert.equal(run('debug', '> Task :app:compile FAILED\nBUILD FAILED in 1s').status, 1);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'android-gradle-outcomes-debug.json'), 'utf8')).build, 'FAILED');
     assert.equal(run('release', log('debug')).status, 1);
     assert.equal(run('debug', 'not a Gradle outcome').status, 1);
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }

@@ -31,6 +31,35 @@ const fakeStartDeviceFlow: GithubConnectDeps['startDeviceFlow'] = async () => ({
 });
 
 describe('createGithubConnect', () => {
+  // WHY (Destin, final review Q-12): after GitHub approves, the phone brings YouCoded back, but only on success
+  // (a denial or expiry happens with nobody watching), and only once.
+  test('tells the app to come back once on success, and not on denied or expired', async () => {
+    const ok = vi.fn();
+    const { emit, done } = deferredDone();
+    const gc = createGithubConnect(emit, {
+      startDeviceFlow: fakeStartDeviceFlow,
+      pollForToken: async () => ({ token: SECRET }),
+      completeLogin: async () => {}, storeToken: async () => {}, fetchLogin: async () => 'octocat',
+      onConnected: ok,
+    });
+    await gc.start();
+    await done;
+    expect(ok).toHaveBeenCalledTimes(1);
+
+    for (const reason of ['denied', 'expired']) {
+      const no = vi.fn();
+      const d = deferredDone();
+      const g = createGithubConnect(d.emit, {
+        startDeviceFlow: fakeStartDeviceFlow,
+        pollForToken: async () => { throw new Error(reason); },
+        onConnected: no,
+      });
+      await g.start();
+      await d.done;
+      expect(no).not.toHaveBeenCalled();
+    }
+  });
+
   test('start() returns the device-flow public render fields', async () => {
     const { emit } = deferredDone();
     // Poll never settles here so we only test the synchronous start() return.

@@ -56,6 +56,14 @@ export interface OfficeBridge {
   create(kind: OfficeKind, projectRoot: string | null): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }>;
   /** The system's file picker, Office files only. null when cancelled. */
   pick(): Promise<OfficeFile | null>;
+  /** Office Home's row actions (design stage, card #143). NOT BUILT in main yet: the workbench
+   *  fakes them (dev/workbench/mock-only.ts), so Home hides nothing when they are absent — it
+   *  reports the general failure. Rename keeps the extension the caller passes. */
+  rename?(path: string, newName: string): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }>;
+  /** "Make a copy": "<name> (copy).<ext>" beside the file, never over an existing one. */
+  duplicate?(path: string): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }>;
+  /** Remove a file from Recent; the file itself is untouched. */
+  forgetRecent?(path: string): Promise<void>;
   /** Start editing a file. Opening a file this window already has open returns the same token. */
   open(path: string): Promise<OfficeOpen>;
   /** One editor request (its bridge's command name and arguments), relayed for the frame. */

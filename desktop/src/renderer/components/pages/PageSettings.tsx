@@ -247,7 +247,8 @@ function ReachRow({ page, c, onConnect }: { page: PageSummary; c: NonNullable<Pa
           : <div className="flex flex-col py-0.5" data-remembered-files>
               {(c.remembered ?? []).map((f) => (
                 <div key={f.id} className="flex items-center gap-2 py-0.5 text-xs text-fg">
-                  <span className="min-w-0 flex-1 truncate" title={f.name}>{f.name}</span>
+                  {/* WHY Tooltip, not title: the app draws its own hover hints (no-native-title-hints guard). */}
+                  <Tooltip text={f.name} placement="bottom"><span className="min-w-0 flex-1 truncate">{f.name}</span></Tooltip>
                   <Tooltip text="Forget this file" placement="bottom">
                     <Button size="icon-sm" variant="ghost" aria-label={`Forget ${f.name}`} className="hover:text-destructive-fg" onClick={() => { void forgetFile(f.id); }}>
                       <TrashIcon size={14} />

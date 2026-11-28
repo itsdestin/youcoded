@@ -1,3 +1,5 @@
+import { setBrowserAskListener } from './ipc/browser';
+import { checkNamingModel } from './naming-model-check';
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
 import { startAutomations, noteAutomationProposal } from './automations/start-automations';
 import fs from 'fs';
@@ -25,6 +27,7 @@ import { RemoteConfig } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
 import { readTranscriptPage } from './transcript-page';
+import { mergeWithLastKnown } from './last-known';
 import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 // Native runtime (platform roadmap Phase 1 Plan A) — the first-party harness
 // stack: provider CRUD + key management, model catalog, and the live-session
@@ -51,7 +54,7 @@ import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { ProviderRegistry } from './providers/provider-registry';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
-import { ClaudeAccount } from './providers/claude-account';
+import { ClaudeAccount, noteAuthFailureFromEvent } from './providers/claude-account';
 // Welcome back (design 2026-09-24 §1-3): the per-install "open at last
 // shutdown" store, constructed in main.ts and passed in (T1 built the store
 // itself; this file only calls its API).
@@ -106,7 +109,6 @@ import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 // createGithubConnect is the stateful orchestrator that owns the in-flight flow.
 import { createGithubConnect, setGithubConnect } from './github-connect';
 import { getGithubClient } from './github-client';
-import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { log } from './logger';
 import { attachStartupDialogLog } from './startup-dialog-log';
@@ -432,10 +434,14 @@ export function registerIpcHandlers(
   const liveFacts = new SessionLiveFacts({
     publish,
     records: runtime.records,
+    currentMode: (id) => sessionManager.getSession(id)?.permissionMode,
+    onModeRead: (id, mode) => { const info = sessionManager.getSession(id); if (info) info.permissionMode = mode; }, // WHY: see session-live.ts onModeRead
     // A Claude Code session: not native (its host says these things itself) and not a plain shell.
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
 
+  // The Browser's open card becomes a session fact every screen gets, so a phone can draw it (card #205).
+  setBrowserAskListener((id, prompt) => liveFacts.browserAsk(id, prompt));
   const stopClaudeControlReceipts = subscribeClaudeControlReceipts(sessionManager, runtime.records, liveFacts);
   // One host terminal reader drives cards, attention and positive queue input ownership; windows/phones consume its published verdicts.
   let onMainAttention: ((sessionId: string, state: 'ok' | 'stuck') => void) | null = null; // set once the status relay below exists
@@ -633,7 +639,7 @@ export function registerIpcHandlers(
     // Snapshot BEFORE spawn (a fallback page can otherwise include new turns); then a resume naming no model reopens on the conversation's own, for every screen and both doors (resume-model.ts).
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
-    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); checkWindow();
+    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); await sessionManager.primeStartMode?.(opts.cwd); checkWindow(); // primeStartMode: the folder's own default permission mode, read before the start
     // The page's assistant (pages-finish step 3): a chat for a page gets its note and folder (page-assistant-session.ts).
     const prepared = await preparePageChat(opts); opts = prepared.opts; checkWindow();
     const info = sessionManager.createSession(opts);
@@ -842,11 +848,7 @@ export function registerIpcHandlers(
       }
       nativeStarting.delete(info.id);
       nativeExited.delete(info.id);
-      // Eager-load the bound model the moment the session opens (like LM Studio),
-      // so the loading bar + GB progress appear immediately rather than only after
-      // the first message. Fire-and-forget; the model poll drives the UI.
-      const eagerModelId = nativeHost.modelForSession(info.id);
-      if (eagerModelId) { void engineManager.loadModel(eagerModelId).catch(() => { /* engine not installed / boot failed — the first send surfaces it */ }); }
+      warmLocalModel(info.id);   // load a local model now and read the chat's opening (see the function)
     } else if (info.provider === 'claude') {
       // Contract R23: EVERY chat carries the line saying what the assistant
       // started with — a Claude Code chat is still a chat. The native runtime
@@ -1205,41 +1207,26 @@ export function registerIpcHandlers(
     // browsers via broadcastStatusData (no reshape). Empty when the hub is down.
     const lastSyncByDevice = getLastSyncByDevice();
 
-    // Read per-session context remaining % (written by statusline.sh)
-    const contextMap: Record<string, number> = {};
-    for (const { desktopId, context: raw } of perSession) {
-      if (raw != null) {
-        const num = parseInt(raw, 10);
-        if (!isNaN(num)) {
-          contextMap[desktopId] = num;
-          lastContextByDesktopId[desktopId] = num;
-        }
-      } else if (desktopId in lastContextByDesktopId) {
-        contextMap[desktopId] = lastContextByDesktopId[desktopId];
-      }
-    }
-
-    // Read per-session git branch (written by statusline.sh, same pattern as context %)
-    const gitBranchMap: Record<string, string> = {};
-    for (const { desktopId, branch: raw } of perSession) {
-      if (raw) {
-        gitBranchMap[desktopId] = raw;
-        lastGitBranchByDesktopId[desktopId] = raw;
-      } else if (desktopId in lastGitBranchByDesktopId) {
-        gitBranchMap[desktopId] = lastGitBranchByDesktopId[desktopId];
-      }
-    }
-
-    // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
-    const sessionStatsMap: Record<string, any> = {};
-    for (const { desktopId, stats } of perSession) {
-      if (stats) {
-        sessionStatsMap[desktopId] = stats;
-        lastSessionStatsByDesktopId[desktopId] = stats;
-      } else if (desktopId in lastSessionStatsByDesktopId) {
-        sessionStatsMap[desktopId] = lastSessionStatsByDesktopId[desktopId];
-      }
-    }
+    // Read per-session context remaining % (written by statusline.sh), git branch and stats
+    // (same writer). WHY one helper: the three loops were identical apart from parsing; see
+    // last-known.ts. Context % uses `!= null` (an empty read still counts) and drops
+    // non-numeric text without falling back, exactly as the inline loop did.
+    const contextMap: Record<string, number> = mergeWithLastKnown(
+      perSession.map((p) => ({ desktopId: p.desktopId, raw: p.context })),
+      lastContextByDesktopId,
+      {
+        present: (raw) => raw != null,
+        parse: (raw) => { const n = parseInt(raw as string, 10); return isNaN(n) ? undefined : n; },
+      },
+    );
+    const gitBranchMap: Record<string, string> = mergeWithLastKnown(
+      perSession.map((p) => ({ desktopId: p.desktopId, raw: p.branch })),
+      lastGitBranchByDesktopId,
+    );
+    const sessionStatsMap: Record<string, any> = mergeWithLastKnown(
+      perSession.map((p) => ({ desktopId: p.desktopId, raw: p.stats })),
+      lastSessionStatsByDesktopId,
+    );
 
     // Per-session attention state populated by the `remote:attention-changed`
     // IPC listener. Remote browsers diff this on receipt to update StatusDot
@@ -1541,6 +1528,9 @@ export function registerIpcHandlers(
     noteAutomationProposal(event);
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
+    // WHY (card #236): this listener is the LIVE tail only (history is paged by transcript-page.ts), so an
+    // old "login expired" line in a reopened chat never marks today's login refused.
+    noteAuthFailureFromEvent(claudeAccount, event);
     // Conversation Store (Phase 2a): feed live activity into the record store.
     // event.sessionId is the DESKTOP id; the store keys by CLAUDE id, so resolve
     // via sessionIdMap and skip if we haven't seen the mapping yet (a hook event
@@ -1766,7 +1756,7 @@ export function registerIpcHandlers(
   // WHY: seedMode/setPermissionMode publish to every window and phone, not just
   // the caller; early reads may precede seeding and otherwise leave stale chips.
   // One-core R5-4a: the messages waiting behind a running turn, as the host holds them, so EVERY screen draws (and can cancel) the same strip.
-  nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number }[] }) => {
+  nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number; attachments?: string[] }[] }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'queue', queue: e.queue });
   });
   // Startup readiness is a retained host fact, so every window/phone gates the same unsent draft.
@@ -1778,7 +1768,20 @@ export function registerIpcHandlers(
   // A native session's model changed (the picker, from any screen): the label on every screen.
   nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });
+    warmLocalModel(e.sessionId, e.model);   // a switch to a local model gets the same head start as opening on one; a cloud model clears the strip
   });
+  // Load a local chat's model as it opens (like LM Studio), so the loading bar appears at once rather than
+  // after the first message, then read the chat's opening in the background (prewarmLocal) so the first
+  // reply starts in seconds. Fire-and-forget; the model poll drives the UI.
+  // WHY local only: a cloud model id sent here booted the local engine and logged a bogus load error.
+  function warmLocalModel(sessionId: string, switchedTo?: string): void {
+    void nativeHost.localModelForSession(sessionId)
+      .then((id) => (id ? engineManager.loadModel(id).then(() => {
+        pushCurrentModelState(sessionId, id, true);
+        return nativeHost.prewarmLocal(sessionId);
+      }) : switchedTo ? pushCurrentModelState(sessionId, switchedTo) : undefined))
+      .catch(() => { /* engine not installed / boot failed — the first send surfaces it */ });
+  }
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
     publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
   });
@@ -1804,24 +1807,31 @@ export function registerIpcHandlers(
   // releaseModel, not unloadModel: a model the user asked to KEEP LOADED must
   // survive the last chat on it closing, or the setting is a lie (design §C2).
   nativeHost.setModelReleasedHandler((modelId) => { void engineManager.releaseModel(modelId); });
-  // Join per-model residency (engine) with session→model (host): push each live
-  // native session its bound model's state so ChatView can show the unloaded /
-  // loading banner (#4/#5). Only push on change per session.
-  // Signature includes loadedBytes so LOAD PROGRESS updates (state stays
-  // 'loading' while bytes climb) are pushed, not just state transitions.
+  // Join per-model residency (engine) with session→model (host): push each live native session its bound
+  // model's state, only on change. The signature has loadedBytes (load progress) and the model id (after a
+  // switch the chat kept the old model's name and size).
   const lastSessionModelState = new Map<string, string>();
+  const pushModelState = (sessionId: string, m: Pick<EngineModelType, 'id' | 'state' | 'sizeBytes' | 'loadedBytes' | 'loadExpectedMs'>) => {
+    const sig = `${m.id}:${m.state}:${m.loadedBytes ?? ''}:${m.loadExpectedMs ?? ''}`;
+    if (lastSessionModelState.get(sessionId) === sig) return;
+    lastSessionModelState.set(sessionId, sig);
+    const full = { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null, ...(m.loadExpectedMs ? { loadExpectedMs: m.loadExpectedMs } : {}) };
+    publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
+  };
   engineManager.on('models-changed', (models: EngineModelType[]) => {
-    for (const m of models) {
-      const payload = { modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null };
-      const sig = `${m.state}:${m.loadedBytes ?? ''}`;
-      for (const sessionId of nativeHost.sessionsForModel(m.id)) {
-        if (lastSessionModelState.get(sessionId) === sig) continue;
-        lastSessionModelState.set(sessionId, sig);
-        const full = { sessionId, ...payload };
-        publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
-      }
-    }
+    for (const m of models) for (const sessionId of nativeHost.sessionsForModel(m.id)) pushModelState(sessionId, m);
   });
+  // WHY: a chat opening on (or switching to) a model whose state is not changing got no push, so when
+  // it later slept the strip said "Loading…" forever. A model the engine doesn't list (cloud) clears it.
+  // WHY `local` (final review F4): a LOCAL model the engine has not listed yet (engine just started,
+  // first poll not in) is NOT loaded. Saying so hid the loading strip and marked the chat as "has been
+  // loaded", so the real first load then looked like a model that had gone to sleep. Its true state
+  // arrives with the next models-changed, a moment later.
+  function pushCurrentModelState(sessionId: string, modelId: string, local = false): void {
+    const m = engineManager.latestModels()?.find((x) => x.id === modelId);
+    if (!m && local) return;
+    pushModelState(sessionId, m ?? { id: modelId, state: 'loaded', sizeBytes: null, loadedBytes: undefined });
+  }
   // Download progress fans out to every window + remotes on one push channel,
   // mirroring the engine install-progress emitter above.
   modelManager.on('download-progress', (p) => {
@@ -2077,7 +2087,7 @@ export function registerIpcHandlers(
       writerGenerations.set(desktopId, (writerGenerations.get(desktopId) ?? 0) + 1);
       sessionIdMap.set(desktopId, claudeId);
       // A page's chat (pages-finish step 3) learns which saved conversation it is, so the page can reopen it.
-      void getPagesService()?.assistantChats.conversationKnown(desktopId, claudeId).catch(() => {});
+      void getPagesService()?.assistantChats.conversationKnown(desktopId, claudeId).catch(() => {}); // benign: only the page's chat list misses this update; the chat itself is unaffected
       // Welcome back (design §2): keep a tracked session's remembered
       // conversation id in sync with a rotation (/clear, in-session /resume).
       // A no-op if `desktopId` isn't tracked yet — this fires for every
@@ -2140,7 +2150,7 @@ export function registerIpcHandlers(
   // Stop watching when a session is destroyed
   sessionManager.on('session-exit', (sessionId: string) => {
     // A page's chat ended: the page reopens it by resuming its saved conversation next time.
-    void getPagesService()?.assistantChats.ended(sessionId).catch(() => {});
+    void getPagesService()?.assistantChats.ended(sessionId).catch(() => {}); // benign: only the page's chat list misses this update; the chat itself is unaffected
     if (nativeStarting.has(sessionId)) nativeExited.add(sessionId);
     teardownSessionWatchers(sessionId);
     // WHY: exit also occurs without SESSION_DESTROY. Coordinate the native
@@ -2278,10 +2288,9 @@ export function registerIpcHandlers(
         }
         // Same confirm-against-the-catalog rule as the specialist defaults: a
         // model we cannot see is refused, never quietly swapped for another.
-        const catalog = await modelCatalog.get(await providerRegistry.list()).catch(() => null);
-        if (catalog && !catalog.some((m) => m.id === choice.modelId && m.providerId === choice.providerId)) {
-          return { ok: false, error: `"${choice.modelId}" isn’t in the model list right now — pick it from the list.` };
-        }
+        // WHY a list that fails to load now REFUSES (R-1 batch 1; main/naming-model-check.ts): it used to skip the check.
+        const problem = await checkNamingModel(async () => modelCatalog.get(await providerRegistry.list()), { providerId: choice.providerId, modelId: choice.modelId });
+        if (problem) return { ok: false, error: problem };
         model = { providerId: choice.providerId, modelId: choice.modelId };
       }
       await namingSettings.update({ mode: v.mode, model });
@@ -2393,7 +2402,7 @@ export function registerIpcHandlers(
       try {
         const wc = byId(id);
         if (wc && !wc.isDestroyed()) wc.send(ARTIFACT_IPC.CHANGED, evt);
-      } catch { /* a window closing mid-send must not cost the others their event */ }
+      } catch { /* benign: a window closing mid-send must not cost the others their event */ }
     }
     // A phone subscribed over remote access (remote-server.ts watch-project)
     // is not a webContents; without this line the phone's file list never

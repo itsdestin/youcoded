@@ -4,6 +4,7 @@
  */
 
 // Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
+import { rememberAttachmentPreview } from './utils/remote-attachment-previews';
 import type { VoiceReadiness } from '../shared/voice-types';
 import { isAndroidAppPage } from './android-page';
 import { isConnectionAllowed, TAILSCALE_ONLY_MESSAGE } from '../shared/cleartext-hosts';
@@ -20,7 +21,8 @@ import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frame
 import { markPage, startConnection, markConnection, markWake, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
 import { markScreensReady } from './state/screens-ready';
-import { setConnectionMode } from './platform';
+import { setConnectionMode, platformAfterHandshake } from './platform';
+import { markTerminalLayout } from './device';
 markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
@@ -29,6 +31,8 @@ import { localBridgeUrl, invokeAndroidHost, hasAndroidHost, setAndroidHostEventS
 import { rememberLastComputer, forgetLastComputer } from './last-computer';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
+import { withStartSize } from './components/terminal-hidden-size';
+import { computerAnswers, PHONE_COMPUTER_TOO_OLD, PHONE_COMPUTER_UNREACHABLE } from './computer-answers';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -1561,18 +1565,20 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
             ? `${msg.deviceId}:${msg.secret}`
             : (localStorage.getItem('youcoded-remote-token') ?? msg.deviceId ?? '');
           if (token) localStorage.setItem('youcoded-remote-token', token);
-          // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
-          // the desktop server responds with platform:"electron" but we're still on a phone
-          if (!preservePlatform) {
-            // WHY the device decides first: the host tells EVERY client `platform: 'desktop'`
-            // (a fact about the computer), and adopting it made a phone browser a non-touch
-            // device — its terminal took typing through xterm's hidden box, so the soft
-            // keyboard and scrolling misbehaved. A touch-first screen is 'browser' (the
-            // Platform value isTouchDevice() means). A mouse-first browser keeps the host's
-            // answer, as before. `(pointer: coarse)` is the PRIMARY pointer only, so a
-            // touchscreen laptop (primary pointer "fine") reads as mouse-first: unchanged too.
-            const platform = isTouchFirstDevice() ? 'browser' : (msg.platform || 'browser');
-            (window as any).__PLATFORM__ = platform;
+          // Keep __PLATFORM__ when the Android app connects to a computer: it answers "electron" but this is a phone.
+          // WHY via platformAfterHandshake: the Android app's own page must stay 'android' even when it talks to its
+          // own on-phone backend (preservePlatform is false then) — otherwise the phone got the desktop's settings.
+          // A phone's plain web browser still becomes 'browser' (touch-first) so its terminal/keyboard behave; a
+          // mouse-first browser keeps the host's answer. `(pointer: coarse)` is the PRIMARY pointer only.
+          {
+            const platform = platformAfterHandshake({
+              current: (window as any).__PLATFORM__,
+              inAndroidApp: isAndroidAppPage(),   // WHY not a file: test: the phone app's page is https since the 2026-10-30 security work
+              preserve: preservePlatform,
+              touchFirst: isTouchFirstDevice(),
+              hostPlatform: msg.platform,
+            });
+            if (platform) { (window as any).__PLATFORM__ = platform; markTerminalLayout(); }   // device.ts: styles learn the terminal layout
           }
           // Naming capability, straight off the handshake — no extra round
           // trip, and settled before the first paint that could show a naming
@@ -1619,8 +1625,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // completed the TCP/HTTP-upgrade handshake — on Android that's usually
         // the cleartext-traffic policy or a wrong host/port/firewall.
         let message: string;
+        if (!didOpen && isAndroidAppPage() && !localBridge) {
+          // WHY a check first (Destin, 2026-11-18, wording deck W-1): an out-of-date computer refuses the phone app's
+          // page and looks unreachable to the socket; one that answers a web request is there, just too old.
+          void computerAnswers(url).then((a) => reject(signInError(a ? PHONE_COMPUTER_TOO_OLD : PHONE_COMPUTER_UNREACHABLE, { kind: 'unreachable' }))); return;
+        }
         if (!didOpen) {
-          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).${isAndroidAppPage() && !localBridge ? ' If YouCoded on your computer is not up to date, update it to connect.' : ''}`; // WHY the added sentence: a computer on an older YouCoded refuses the phone app's page address and the phone cannot tell that from "unreachable"
+          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
         } else if (code === 4029) {
           message = 'Too many failed attempts. Wait a minute and try again.';
         } else if (code === 4000) {
@@ -2135,23 +2146,62 @@ async function pickAndUploadFiles(): Promise<string[]> {
 
   // Read each file as base64 and upload to the desktop
   for (const file of Array.from(files)) {
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      const base64 = btoa(binary);
-      const result = await invoke('file:upload', {
-        name: file.name,
-        data: base64,
-        size: file.size,
-      });
-      // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
-      if (result?.path) paths.push(result.path); else if (typeof result?.error === 'string') announce(result.error, 5000);
-    } catch (err) {
-      console.error('Failed to upload file:', file.name, err);
-    }
+    const uploaded = await uploadFileToDesktop(file);
+    if (uploaded) paths.push(uploaded);
   }
   return paths;
+}
+
+/**
+ * Uploads one browser File to the remote desktop (base64 over the 'file:upload' route) and returns the
+ * desktop-side path, or null if it did not arrive (a refusal sentence is announced here).
+ * WHY extracted (card #134): the Attach button and a pasted picture must share one upload route, so both
+ * honour the same size-cap refusal and remember the same preview copy.
+ */
+async function uploadFileToDesktop(file: File): Promise<string | null> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const base64 = btoa(binary);
+    const result = await invoke('file:upload', {
+      name: file.name,
+      data: base64,
+      size: file.size,
+    });
+    // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
+    if (result?.path) { rememberAttachmentPreview(result.path, file); /* card #194: the browser's own copy, for the card's picture */ return result.path; }
+    if (typeof result?.error === 'string') announce(result.error, 5000);
+  } catch (err) {
+    console.error('Failed to upload file:', file.name, err);
+  }
+  return null;
+}
+
+/**
+ * Card #134: a picture pasted on a phone. The desktop's own clipboard is unreachable from a phone, so the picture
+ * comes from the paste itself (`pasted`) or, for the right-click Paste route, the browser's clipboard if it allows
+ * reading one. Returns the desktop path, or undefined for every "nothing to attach" case (nothing there, reading
+ * not allowed, or an upload that already announced its own refusal) so the composer stays silent.
+ */
+async function uploadPastedImage(pasted?: File): Promise<string | undefined> {
+  let file: File | undefined = pasted;
+  if (!file) {
+    try {
+      const items = await navigator.clipboard?.read?.();
+      for (const item of items ?? []) {
+        const type = item.types.find((t) => t.startsWith('image/'));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        file = new File([blob], `pasted-image.${type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'}`, { type });
+        break;
+      }
+    } catch { /* permission refused or unsupported: same as nothing to paste */ }
+  }
+  if (!file) return undefined;
+  // A pasted File from some browsers has an empty or generic name; give it one so the desktop copy is recognisable as a picture.
+  const named = file.name && /\.[a-z0-9]+$/i.test(file.name) ? file : new File([file], `pasted-image.${(file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '')}`, { type: file.type });
+  return (await uploadFileToDesktop(named)) ?? undefined;
 }
 
 /** Install the window.claude shim. Call once on app startup in browser mode. */
@@ -2234,7 +2284,7 @@ export function installShim(): void {
         cancel: (id: string) => invoke('handoff:cancel', { id }),
         setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => invoke('handoff:create-params', { id, create }),
       },
-      create: (opts: any) => invoke('session:create', opts),
+      create: (opts: any) => invoke('session:create', withStartSize(opts)),   // the size it will keep: terminal-hidden-size.ts
       // The ONE way a conversation is filled (one-core R5-2; the host half is main/session-open.ts). Sends where this page got to (`have`,
       // and how far the terminal drew) and answers with a page or just the events it missed; the caller applies the answer and then
       // calls `play` for the pushes in it. The phone's own backend is the same desktop backend, so it fills the same way (2026-10-14).
@@ -2466,9 +2516,6 @@ export function installShim(): void {
     // Phase 3: unified marketplace (packages map + per-entry config)
     marketplace: {
       getPackages: () => invoke('marketplace:get-packages'),
-      getConfig: (id: string) => invoke('marketplace:get-config', { id }),
-      setConfig: (id: string, values: Record<string, any>) =>
-        invoke('marketplace:set-config', { id, values }),
       invalidateCache: () => invoke('marketplace:invalidate-cache'),
       readComponent: (args: { pluginId: string; kind: 'skill' | 'command' | 'agent'; name: string }) =>
         invoke('marketplace:read-component', args),
@@ -2593,13 +2640,19 @@ export function installShim(): void {
     dialog: {
       openFile: () => targetUrl
         ? pickAndUploadFiles()                   // Remote — pick on device, upload to desktop
+        // WHY: on the phone the backend has no screen, so its dialog always answers "cancelled"; the Android app
+        // owns the system picker and hands back readable copies of the chosen files (HostJsBridge android:pick-files).
+        : hasAndroidHost() ? invokeAndroidHost('android:pick-files').then((r: any) => r?.paths ?? []).catch(() => [] as string[])
         : invoke('dialog:open-file')             // Local Android — native file picker
             .then((r: any) => r?.paths ?? r ?? [])
             .catch(() => [] as string[]),
       openFolder: () => invoke('dialog:open-folder').catch(() => null),
       openSound: () => invoke('dialog:open-sound').catch(() => null),
       readTranscriptMeta: (p: string) => invoke('transcript:read-meta', { path: p }),
-      saveClipboardImage: async () => null,
+      // Card #134: over remote, upload the picture from the paste event (or the browser clipboard) to the desktop.
+      // Local Android has no paste-upload route in its host, so it stays silent (undefined) as before.
+      // WHY `|| !isAndroidAppPage()`: a phone browser opened straight on the computer's address has no saved target yet is still remote.
+      saveClipboardImage: async (file?: File): Promise<string | null | undefined> => (targetUrl || !isAndroidAppPage()) ? uploadPastedImage(file) : undefined,
     },
     shell: {
       // Matches the URL hardcoded in desktop's ipc-handlers.ts OPEN_CHANGELOG
@@ -2628,6 +2681,8 @@ export function installShim(): void {
       // No-op on remote/Android — a browser can't reveal a file in the host's
       // file manager. The artifact panel hides the button on touch anyway.
       showItemInFolder: async () => {},
+      // A phone's browser cannot read the computer's clipboard or pick a save place on it; the picture menu does its own copy there.
+      pictureAction: async () => ({ ok: false, reason: 'not-on-this-device' }),
       // No-op on remote/Android — a browser can't launch the host's default app
       // for a local path. The "Open externally" button is desktop-gated, so this
       // only exists to keep the window.claude shape symmetric.
@@ -2743,6 +2798,7 @@ export function installShim(): void {
     settings: {
       get: (field: string) => invoke('settings:get', { field }),
       set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
+      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // open to a phone since card #11 a (deck C-1); an older computer refuses it, which reads as no notice
     },
     modes: {
       get: () => invoke('modes:get'),
@@ -3031,6 +3087,10 @@ export function installShim(): void {
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
       onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
       saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
+      // Office Home's row actions (card #143): refused like the rest.
+      rename: (filePath: string, newName: string) => invoke('office:rename', { path: filePath, newName }),
+      duplicate: (filePath: string) => invoke('office:duplicate', { path: filePath }),
+      forgetRecent: (filePath: string) => invoke('office:forget-recent', { path: filePath }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel
@@ -3212,6 +3272,10 @@ export function installShim(): void {
       removePairedDevice: (host: string, port: number) =>
         hasAndroidHost() ? invokeAndroidHost('android:remove-paired-device', { host, port }) : Promise.resolve(),
       scanQr: () => hasAndroidHost() ? invokeAndroidHost('android:scan-qr') : Promise.resolve(null),
+      // WHY the app is asked, not the backend (Destin, 2026-11-10): remote.detectTailscale looks for a computer's Tailscale
+      // program, which the phone does not have, so the Connect to Desktop warning was always on. `on: null` = unknown.
+      tailscaleStatus: (): Promise<{ on: boolean | null }> => hasAndroidHost() ? invokeAndroidHost('android:tailscale-status') : Promise.resolve({ on: null }),
+      openTailscale: (): Promise<{ opened: boolean }> => hasAndroidHost() ? invokeAndroidHost('android:open-tailscale') : Promise.resolve({ opened: false }),
     },
     off: (channel: string, handler: Callback) => removeListener(channel, handler),
     removeAllListeners: (channel: string) => removeAllListeners(channel),
@@ -3378,8 +3442,9 @@ export function installShim(): void {
         return response?.text ?? '';
       },
     },
-    // The Browser — mirrors preload.ts. Every channel is desktopOnly on the host, which answers { unsupported:true },
-    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here).
+    // The Browser — mirrors preload.ts. Every channel but `answer` is desktopOnly on the host, which answers { unsupported:true },
+    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here). `answer` works: a phone answers the
+    // Browser's card the computer publishes (PhoneBrowserAskCard, card #205).
     // No pushes reach a phone, so the listeners never fire.
     browser: {
       state: (sessionId: string) => invoke('browser:state', { sessionId }),
@@ -3520,6 +3585,15 @@ export function installShim(): void {
       // for a phone too. A failure or refusal answers {ok:false}, which REJECT_ON_NOT_OK turns
       // into an error the Settings card shows.
       install: () => invoke('claude-code:install'),
+      // Card #236: refused over remote access (a visiting phone answers false; the card tells
+      // people to sign in from the host computer). Invokes exist for parity.
+      signIn: () => invoke('claude-code:sign-in'),
+      cancelSignIn: () => invoke('claude-code:cancel-sign-in'),
+    },
+    // Card #236: the computer's own connection check. Refused to a visiting phone (main/ipc/network.ts
+    // says why); the Android app's own screen, the backend's owner, gets the real answer.
+    network: {
+      check: () => invoke('network:check'),
     },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).
@@ -3548,6 +3622,8 @@ export function installShim(): void {
       // Head-to-head records. `game` is optional; the far side reads
       // payload.game and treats an absent one as "every game".
       records: (game?: string) => invoke('arcade:records', { game }),
+      // A one-time pass to join a two-player room (2026-11-09 final review F-3).
+      roomTicket: (game: string, room: string) => invoke('arcade:room-ticket', { game, room }),
     },
     permissions: {
       list: () => invoke('permissions:list'),
@@ -3627,7 +3703,7 @@ export function installShim(): void {
       detectEndpoints: () => invoke('endpoints:detect'),
       setBackend: (backend: string) => invoke('engine:set-backend', { backend }),
       memoryCheck: (modelId: string) => invoke('models:memory-check', { modelId }),
-      load: (modelId: string) => invoke('models:load', { modelId }),
+      load: (modelId: string, sessionId?: string) => invoke('models:load', { modelId, sessionId }),
       onDownloadProgress: (cb: (p: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('models:download-progress', handler);

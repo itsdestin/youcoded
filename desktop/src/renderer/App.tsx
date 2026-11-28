@@ -1,10 +1,13 @@
 // Registers window.__terminalRegistry so main-process executeJavaScript
 // can call getScreenText for the attention classifier's ~1s buffer reads.
 // Must run before any TerminalView mounts (which call registerTerminal).
+import { withoutSession, pendingModelAfterClose } from './state/closed-session-state';
+import { useModelModes } from './hooks/useModelModes';
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { PageSummary } from '../shared/pages-types';
+import { applyCloseChoices } from './state/close-prompt-writes';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
@@ -21,8 +24,11 @@ import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
+import { useOpenSessionFromHost } from './hooks/use-open-session-from-host';
 import { useAppScreens } from './shoot-app-screens';
 import { ScreenMark } from './shoot-mode';
+import { OPEN_LIBRARY_EVENT } from './utils/plugin-off-notice';
+import StartupNotices from './components/StartupNotices';
 import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -41,15 +47,16 @@ import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink
 import { attachTranscriptFeed, attachSessionLiveFeed } from './state/screen-feed';
 import { useDropEndedSessionsOnReconnect, withAnnouncedName } from './state/session-list-sync';
 import {
-  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
-  choosePlaceOnHydrate, chooseAfterDestroyed,
-} from './state/remote-place';
+  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace, choosePlaceOnHydrate, chooseAfterDestroyed,
+} from './state/remote-place'; // (two lines joined to stay inside this file's line budget)
+import { chooseDesktopPlaceFromList, useSessionListLoaded } from './state/desktop-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
 import { useSendReconcile } from './hooks/useSendReconcile';
+import { useStaleSends } from './hooks/useStaleSends';
 import { REMOTE_REFRESH_EVENT } from './remote-events';
 import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
@@ -69,6 +76,8 @@ import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
+import { markBootReady } from './boot-ready';
+import { decideFirstRun } from './state/first-run-launch';
 import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePresence } from './hooks/usePresence';
 import { usePartyGame } from './hooks/usePartyGame';
@@ -90,13 +99,13 @@ import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './h
 import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
-import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
-import { promptShowMeansStarted, composerDisabled, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
+import { useExpiredSignIns } from './hooks/useExpiredSignIns';
+import { promptShowMeansStarted, composerDisabled, usePendingPromptActive, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import { readBuddyStyle } from './components/BuddyStyleRow';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
-import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back';
+import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back'; import { isSyncAlarm } from './state/sync-display-state';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
@@ -121,6 +130,7 @@ import { createRefillRetry } from './state/refill-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { phoneTerminalLayout } from './device';
 import { deferredScreen } from './components/deferred-screen';
 import { markScreensReady, useScreensReady } from './state/screens-ready';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
@@ -347,7 +357,7 @@ function AppInner() {
   const [initializedSessions, setInitializedSessions] = useState<Set<string>>(new Set());
   // Has the list of open sessions arrived from this computer at least once? The welcome screen
   // must not call anyone a first-time user before it has — see first-run-screen.ts.
-  const [sessionListLoaded, setSessionListLoaded] = useState(false);
+  const [sessionListLoaded, setSessionListLoaded] = useSessionListLoaded(sessionId, isRemoteMode()); // WHY (#146): also saves this window's chat; see desktop-place.ts
   // Past conversations to resume: true / false / null = unknown (not asked, or the question
   // failed — which over remote access happens on every dropped connection).
   const [hasResumable, setHasResumable] = useState<boolean | null>(null);
@@ -527,18 +537,8 @@ function AppInner() {
   // an empty task list via useChatState's singleton EMPTY_SESSION_STATE.
   const openTasks = useSessionTasks(sessionId ?? '');
   // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/youcoded-model-modes.json.
-  const [fastMode, setFastMode] = useState(false);
-  const [effortLevel, setEffortLevel] = useState<string>('auto');
-  // Load persisted modes on mount, and re-load when popup closes (picks up
-  // edits made in the popup). Simple poll on popup close keeps the chips in sync.
-  useEffect(() => {
-    const api = (window.claude as any).modes;
-    if (!api) return;
-    api.get().then((m: { fast?: boolean; effort?: string }) => {
-      setFastMode(!!m?.fast);
-      if (m?.effort) setEffortLevel(m.effort);
-    }).catch(() => {});
-  }, [modelPickerOpen]);
+  // WHY (card #134 round 4, Destin Q-1): the chips stay hidden until the saved values are really read (see the hook).
+  const { fast: fastMode, effort: effortLevel, read: modesRead } = useModelModes(modelPickerOpen);
   // App-scoped marketplace destinations (NOT per-session). The full-screen
   // marketplace + library replaced the legacy three-tab modal entirely.
   const [activeView, setActiveView] = useState<'chat' | 'terminal' | 'marketplace' | 'library'>('chat');
@@ -640,6 +640,8 @@ function AppInner() {
   const [sessionModels, setSessionModels] = useState<Map<string, ModelAlias | 'unknown'>>(new Map());
   const currentModel: ModelAlias | 'unknown' = sessionId ? (sessionModels.get(sessionId) ?? 'unknown') : 'sonnet';
   const [pendingModel, setPendingModel] = useState<ModelAlias | null>(null);
+  // WHY (R-4): the session:destroyed handler is a mount-time closure, so it reads the open chat through a ref.
+  const openSessionIdRef = useRef<string | null>(null); openSessionIdRef.current = sessionId;
   const consecutiveFailures = useRef(0);
   // Fix: track whether a new user turn has started after the model switch.
   // Events from the in-flight turn (before the switch takes effect) use the
@@ -664,30 +666,31 @@ function AppInner() {
   useEffect(() => {
     const onNotice = (e: Event) => {
       const d = (e as CustomEvent<AppNoticeDetail>).detail;
-      if (d?.message) setToast(d.durationMs ? { message: d.message, durationMs: d.durationMs } : d.message);
+      if (!d?.message) return;
+      // The action's own click also puts the toast away, like "Send anyway" does.
+      const action = d.action ? { label: d.action.label, onClick: () => { setToast(null); d.action!.onClick(); } } : undefined;
+      setToast(d.durationMs || action ? { message: d.message, durationMs: d.durationMs, action } : d.message);
     };
     window.addEventListener(APP_NOTICE_EVENT, onNotice);
     return () => window.removeEventListener(APP_NOTICE_EVENT, onNotice);
   }, []);
+  // Plugin off-switch: the toast's "Show" button asks for Your library.
+  useEffect(() => {
+    const open = () => setActiveView('library');
+    window.addEventListener(OPEN_LIBRARY_EVENT, open);
+    return () => window.removeEventListener(OPEN_LIBRARY_EVENT, open);
+  }, []);
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
-  // Check first-run state with a 3-second safety timeout — never hang the app
+  // Setup screen or app? WHY decideFirstRun (2026-11-25): the old 3-second guess opened a slow phone's app with no
+  // account — setup skipped, first message failed. It now waits longer, re-asks, and lets a late "setup needed" win.
   useEffect(() => {
-    let resolved = false;
-    const resolve = (value: boolean) => {
-      if (!resolved) { resolved = true; setIsFirstRun(value); }
-    };
-    const timeout = setTimeout(() => resolve(false), 3000);
-
-    (window as any).claude?.firstRun?.getState?.()
-      .then((state: any) => {
-        clearTimeout(timeout);
-        resolve(!!(state && state.currentStep !== 'COMPLETE'));
-      })
-      .catch(() => { clearTimeout(timeout); resolve(false); });
-
-    return () => clearTimeout(timeout);
+    const fr = (window as any).claude?.firstRun;
+    return decideFirstRun(fr?.getState ? () => fr.getState() : undefined, (needsSetup) => {
+      setIsFirstRun(needsSetup);
+      markBootReady(); // the Android app's loading screen gives way (boot-ready.ts); a second call is harmless
+    });
   }, []);
 
   // The saved new-session defaults. Re-read around Settings, after a remote reconnect, and
@@ -811,7 +814,7 @@ function AppInner() {
   // input and its trailing \r would press Enter on the highlighted option,
   // silently answering the prompt (stray-Enter fix, youcoded#110). Same rule
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
-  // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
+  // writes (ToolCard plan keys, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
   const guardedPtySend = useCallback((sid: string, text: string, notice?: 'model-switch'): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
@@ -938,7 +941,7 @@ function AppInner() {
   // multiple peer windows are open. When detach isn't available (remote
   // shim / Android), myWindowId stays null so isLeader is false — fall
   // back to true-by-default so the lobby still connects.
-  const lobbyLeader = (window as any).claude?.detach?.openDetached ? isLeader : true;
+  const lobbyLeader = getCapabilities().nativeWindows ? isLeader : true; // WHY nativeWindows (2026-11-01 phone: Games stuck "Connecting…"): the shim's no-op openDetached made the phone a non-leader that disconnected
   // Presence socket lives in the platform layer now (spec §3); usePresence
   // expresses desired state and maps relayed events onto the same reducer
   // actions the retired PartyKit lobby hook used. Same public API shape.
@@ -1169,6 +1172,9 @@ function AppInner() {
     return off;
   }, []);
 
+  // A tapped "needs you" alert (Android) opens its conversation, switching exactly as the buddy's focus request above does.
+  useOpenSessionFromHost(sessions, useCallback((sid: string) => { if (recoveryBatchRef.current || pendingRef.current?.active) { selectCreatedSession(sid); return; } noteSwitchIntent('other'); setSessionId(sid); (window as any).claude?.session?.switch?.(sid); }, []));
+
   // Push stack-state changes to the host. On Android, MainActivity uses this
   // to flip OnBackPressedCallback.isEnabled so hardware back is intercepted
   // when an overlay is open and falls through to Android default (background)
@@ -1220,6 +1226,7 @@ function AppInner() {
         modelId: s.modelId,
         sizeBytes: typeof s.sizeBytes === 'number' ? s.sizeBytes : null,
         loadedBytes: typeof s.loadedBytes === 'number' ? s.loadedBytes : null,
+        loadExpectedMs: typeof s.loadExpectedMs === 'number' ? s.loadExpectedMs : null,
       });
     });
     return () => { off?.(); };
@@ -1365,6 +1372,9 @@ function AppInner() {
         next.delete(id);
         return next;
       });
+      // WHY (R-4): a closed chat's "viewed" mark and a still-pending model switch used to outlive it.
+      setViewedSessions((prev) => withoutSession(prev, id));
+      setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
       // WHY: free a closed session's file-pane entries. A resumed native chat reuses
       // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
@@ -1817,6 +1827,7 @@ function AppInner() {
   }, [firstPages, reportFillRound, remoteWatch, refillRetry]);
   useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
+  useStaleSends(); // a sent bubble is never pinned at the bottom forever waiting for its echo (stale-sends.ts, 2026-11-18)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
   // WHY the watch check and the retry (branch review F3): refilling opens (watches) a conversation, so one the phone has left since is
   // not refilled. And the push stands in for the hang-up that used to force a full round, so a refill that fails here gets the round's
@@ -1909,7 +1920,7 @@ function AppInner() {
         // not sent to this phone until it opens them (one-core R5-3); their dots come from the computer's summary.
         void Promise.all(choice ? [remoteWatchRef.current.watch(choice)] : []).then(reportFillRound);
       } else {
-        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        setSessionId((prev) => prev ?? chooseDesktopPlaceFromList(list, mayAutoSelect())); // WHY (#146): reopen the chat this window was on after a reload; see desktop-place.ts
       }
       // Existing sessions that have STARTED skip the "Initializing" cover; one
       // still on its startup dialogs does not (SessionInfo.awaitingStart).
@@ -2078,7 +2089,12 @@ function AppInner() {
 
       // Reload session list from the new server
       window.claude.session.list().then((list: any[]) => {
-        if (!list || list.length === 0) return;
+        if (!list || list.length === 0) {
+          // WHY: an empty list is still the computer's answer. Returning without deciding left placeDecidedRef false (reset above),
+          // so a phone reconnecting to a computer with no chats open never auto-focused a chat created afterwards.
+          if (isRemoteMode()) decideRemotePlace([]);
+          return;
+        }
         setSessions(list);
         for (const s of list) {
           dispatch({ type: 'SESSION_INIT', sessionId: s.id });
@@ -2205,9 +2221,10 @@ function AppInner() {
 
   // Red dot on the gear icon so the user can't miss a sync failure — from
   // either sync system.
+  const signInExpired = useExpiredSignIns(); // card #236: an expired sign-in lights it too (round 2 Q-dot)
   const settingsDangerBadge = useMemo(
-    () => spacesFailing || (statusData.syncWarnings ?? []).some((w) => w?.level === 'danger'),
-    [spacesFailing, statusData.syncWarnings],
+    () => spacesFailing || signInExpired || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
+    [spacesFailing, signInExpired, statusData.syncWarnings],
   );
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {
@@ -2599,7 +2616,7 @@ function AppInner() {
     });
     setSessionId((id) => id === tabId ? info.id : id);
     setViewModes((prev) => new Map(prev).set(info.id, 'chat'));
-    setPermissionModes((prev) => new Map(prev).set(info.id, matchPermissionMode(info.permissionMode)));
+    setPermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, matchPermissionMode(info.permissionMode))); // WHY keep (2026-11-01): the footer's real mode may land first; overwriting it with the seeded 'normal' showed NORMAL until the first reply
     setSessionModels((prev) => new Map(prev).set(info.id, matchModelAlias(info.model)));
     if (info.provider === 'native') setInitializedSessions((prev) => new Set(prev).add(info.id));
     dispatch({ type: 'SESSION_INIT', sessionId: info.id });
@@ -2687,6 +2704,8 @@ function AppInner() {
     setNativePermissionModes((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setSessionModels((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
+    setViewedSessions((prev) => withoutSession(prev, id)); // WHY (R-4): same two tidy-ups as the session:destroyed handler
+    setPendingModel((prev) => pendingModelAfterClose(prev, id, openSessionIdRef.current));
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
     // WHY: drop the gone session's file-pane entries too (they were never freed).
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
@@ -3062,6 +3081,9 @@ function AppInner() {
   // as 'unknown', not 'normal' — 'normal' would claim a specific, possibly wrong
   // permission posture instead of admitting YouCoded hasn't determined it yet.
   const currentPermissionMode: PermissionMode | 'unknown' = sessionId ? (permissionModes.get(sessionId) ?? 'unknown') : 'normal';
+  // WHY no "unconfirmed" grace any more (2026-11-09 final review F-7): the host now TELLS Claude Code which mode to
+  // start in (main/claude-start-mode.ts), so the seeded mode is a fact and the badge shows from the first moment.
+  // It used to be a guess ('normal'), hidden for six seconds until the terminal confirmed or corrected it.
   // Native mode defaults to 'ask' only for the brief window before the async
   // getPermissionMode() call above resolves (mirrors NativeSessionHost's real
   // starting mode) — once it resolves, the map always holds either the real
@@ -3155,8 +3177,6 @@ function AppInner() {
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
   }, []);
-
-  const trustGateActive = useTrustGateActive(sessionId);
 
   // No "trust gate = initialized" shortcut (removed 2026-09-24): it switched the
   // startup safety net off for every dialog after trust. The cover steps aside
@@ -3380,7 +3400,7 @@ function AppInner() {
   }, []);
 
   // Terminal mode on touch/remote platforms — show minimal input with special keys
-  const isTerminalTouch = currentViewMode === 'terminal' && getPlatform() !== 'electron';
+  const isTerminalTouch = currentViewMode === 'terminal' && phoneTerminalLayout();   // device.ts: the one rule
 
   // Chrome geometry observers (--bottom/top-chrome-* CSS vars + Android layout
   // report). Extracted to useChromeMeasurements in tranche 1 — logic unchanged.
@@ -3401,10 +3421,10 @@ function AppInner() {
   const handleOpenSync = useCallback(() => { setSyncAutoOpen(true); setSettingsOpen(true); }, []);
   // Send first, guarded — a refused send must not leave a stale pending "/sync"
   // bubble in the timeline. Hidden for native sessions — no PTY to send to.
-  const handleRunSync = useMemo(() => (!trustGateActive && sessionId && !isNativeSession) ? () => {
+  const handleRunSync = useMemo(() => (!pendingPromptActive && sessionId && !isNativeSession) ? () => {
     if (!guardedPtySend(sessionId, '/sync\r')) return;
     dispatch({ type: 'USER_PROMPT', sessionId, content: '/sync', timestamp: Date.now() });
-  } : undefined, [trustGateActive, sessionId, isNativeSession, guardedPtySend, dispatch]);
+  } : undefined, [pendingPromptActive, sessionId, isNativeSession, guardedPtySend, dispatch]);
   const openModelPicker = useCallback(() => setModelPickerOpen(true), []);
   const openOpenTasksPopup = useCallback(() => setOpenTasksPopupOpen(true), []);
   const openTasksCounts = useMemo(() => sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined, [sessionId, openTasks.counts.running, openTasks.counts.pending]);
@@ -3640,7 +3660,7 @@ function AppInner() {
                       onEditQueued={handleEditQueued}
                       onSendQueuedNow={handleSendQueuedNow}
                       filling={remoteWatch.isFilling(s.id)}
-                      modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
+                      modelLoadingDemo={s.id === sessionId /* the workbench's ?modelLoading= demo applies to the visible chat only */}
                     />
                   </ErrorBoundary>}
                   {!String(s.id).startsWith('pending-handoff:') && <ErrorBoundary name="Terminal">
@@ -3657,9 +3677,9 @@ function AppInner() {
                  showed nothing. Render a single framed-shell clone here, only
                  in terminal view, so the same panel overlays the terminal's
                  right side. ChatView gates its own copy on `visible`, so
-                 exactly one instance mounts. Electron-only for now (Android's
-                 terminal overlay sizing is native — separate follow-up). */}
-              {getPlatform() === 'electron' && currentViewMode === 'terminal' && sessionId
+                 exactly one instance mounts. Every platform: Electron-only, the phone's Files/games
+                 panel in terminal view was a black screen (Destin, 2026-11-04). */}
+              {currentViewMode === 'terminal' && sessionId
                 && (activeDrawerOpen || sidePaneOpen) && (
                 <TerminalRightSlot
                   sessionId={sessionId}
@@ -3680,10 +3700,9 @@ function AppInner() {
               {backToChatHint && currentViewMode === 'terminal' && (
                 <ViewToggleHint onDismiss={() => setBackToChatHint(false)} />
               )}
-              {trustGateActive && sessionId && <TrustGate sessionId={sessionId} />}
               {/* Plan 2b Moved Gate — covers the content area for a taken-over
                  session (the ChatView/TerminalView below are dead). z-10 like
-                 TrustGate so the header strip stays reachable to switch away. */}
+                 the other covers so the header strip stays reachable to switch away. */}
               {movedGate && sessionId && (
                 <MovedGate
                   device={movedGate.device}
@@ -3731,7 +3750,7 @@ function AppInner() {
             {/* Always mounted so draft text survives chat↔terminal switches.
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
-              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
+              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-float bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && !phoneTerminalLayout() ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
                 {/* A shell session draws NONE of the bottom chrome: no composer
                     (there is nothing to send a message to), and so no Stop
                     button, no model chip and no way into the model picker — all
@@ -3741,7 +3760,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
@@ -3762,6 +3781,7 @@ function AppInner() {
                   permissionPending={!!sessionId && modePending.has(`mode:${sessionId}`)}
                   fast={fastMode}
                   effort={effortLevel}
+                  modesUnread={!modesRead}
                   onOpenModelPicker={openModelPicker}
                   sessionId={sessionId}
                   sessionName={currentSession?.name}
@@ -3801,9 +3821,9 @@ function AppInner() {
               />
             </div>
           <div
-            // invisible under Welcome back: that screen takes this one's place
+            // WHY scrolls, centred only while it fits (justify-center-safe; Destin's phone test: the new-session form was cut off with the phone sideways and could not be reached); a short screen also drops the mascot, keeping the heading (.welcome-hero, globals.css). invisible under Welcome back: that screen takes this one's place
             // until you choose (Q-where), rather than sitting on top of it.
-            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
+            className={`scroll-mask flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center-safe gap-3${firstTimeWelcome ? ' max-sm:justify-start max-sm:pt-2' : ''}${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -3845,17 +3865,17 @@ function AppInner() {
               // the buddy here.
               // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
               // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1); then a bigger buddy, slightly smaller text (GB-2).
-              <div className="flex items-center gap-2 mb-5 select-none">
-                {/* WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
+              <div className="welcome-head flex items-center gap-2 mb-5 select-none max-sm:flex-col max-sm:text-center max-sm:px-4 max-sm:mb-2 max-sm:gap-0">
+                {/* WHY max-sm:flex-col (2026-11-01 phone test): side-by-side mascot + heading is wider than a phone, so the heading and form labels were cut off. On a phone the mascot stacks above centred text. WHY max-sm:justify-start + w-20 mascot on the container/mascot (2026-11-01 owner, Flip7): centring parked the form at 30-83% of a phone, so dropdowns were cut off and the tour bubble covered Start session; now it sits at the top. WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
                     and text"): the rig box centres the BODY, but the feet hang below it, so the
                     whole figure sat ~13px lower than the text block. Destin then set the text lower than
                     centre, twice (GB4-1 "a smidge", GB5-1 "lower"), and gap-2 closer. */}
-                <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-3">
-                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim" scene />
+                <div data-guide-anchor="welcome-mascot" className="welcome-hero flex shrink-0 -translate-y-3">
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim max-sm:w-20 max-sm:h-20 max-sm:my-0" scene />
                 </div>
-                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1">
-                  <p className="brand-heading text-2xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
-                  <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1 max-sm:translate-y-0">
+                  <p className="brand-heading text-2xl text-fg leading-tight sm:whitespace-nowrap max-sm:text-xl">Start your first session</p>
+                  <p className="welcome-hero text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
                 </div>
               </div>
             ) : (
@@ -3866,12 +3886,12 @@ function AppInner() {
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
             {!firstTimeWelcome && (
-              <div data-guide-anchor="welcome-mascot" className="flex">
+              <div data-guide-anchor="welcome-mascot" className="welcome-hero flex">
                 <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
               </div>
             )}
             {/* Welcome screen: New session (expandable) + Resume session */}
-            <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome ? 'w-96' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
+            <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome ? 'w-96 max-w-full max-sm:px-4' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles.
                    data-guide-anchor: the tour's "sessions" stop rings the form. */
@@ -4035,12 +4055,12 @@ function AppInner() {
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
                       as a className override so wallpaper themes still re-tier it.
-                      Hidden on the first-time screen: it would list nothing. */}
+                      Hidden on the first-time screen: it would list nothing. WHY welcome-resume (Destin's phone test: unreadable on Meadow Mist, its dark label over the wallpaper's dark trees; a solid fill was rejected as "inconsistent" with the other themes): globals.css tints it on wallpaper themes only. */}
                   {!firstTimeWelcome && (
                     <Button
                       variant="secondary"
                       size="lg"
-                      className="panel-glass w-full px-6"
+                      className="panel-glass welcome-resume w-full px-6"
                       onClick={() => setResumeRequested(true)}
                     >
                       <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -4229,31 +4249,30 @@ function AppInner() {
         sessionName={sessions.find((s) => s.id === closePromptFor)?.name ?? closePromptName /* WHY live first: the prompt renames now (close-session-1); a peer window's session keeps its captured name */}
         sessionId={closePromptFor}
         onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
-        onConfirm={(result) => {
+        onCloseAnyway={() => {
+          // WHY (W-2): after a failed save, the person may close without the choices that would not land.
           const id = closePromptFor;
-          if (!id) return;
+          if (id) closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
+          setClosePromptFor(null);
+          setClosePromptName(undefined);
+        }}
+        onConfirm={async (result) => {
+          const id = closePromptFor;
+          if (!id) return [];
           // Every field is a DELTA vs. what the prompt loaded on open — reserved
           // flags whose value moved, tags toggled on/off, the note if it changed.
-          // Each write is fire-and-forget; main resolves the desktop id to the
-          // Claude id. The .catch() swallows an IPC rejection (remote timeout) so
-          // it can't become an unhandled rejection.
-          //
           // `flags` carries a VALUE per entry, not just a list to set true — a
           // Priority the user un-toggled has to be cleared, the same way an
           // un-toggled tag is (see CloseSessionPrompt's onConfirm doc comment).
-          for (const [flag, value] of Object.entries(result.flags)) {
-            try { Promise.resolve((window as any).claude.session.setFlag(id, flag, value)).catch(() => {}); } catch {}
-          }
-          for (const tagId of result.addTagIds) {
-            try { Promise.resolve((window as any).claude.session.setTag(id, tagId, true)).catch(() => {}); } catch {}
-          }
-          for (const tagId of result.removeTagIds) {
-            try { Promise.resolve((window as any).claude.session.setTag(id, tagId, false)).catch(() => {}); } catch {}
-          }
-          if (result.noteChanged) { try { Promise.resolve((window as any).claude.session.setNote(id, result.note)).catch(() => {}); } catch {} }
+          // WHY awaited, and the chat stays open when a write fails (R-1, code review 2026-11-18): these were
+          // fire-and-forget with the failure swallowed, so a tag, pin or note the person chose vanished
+          // when the chat closed. The prompt shows which parts failed and offers Try again.
+          const failed = await applyCloseChoices(id, result);
+          if (failed.length > 0) return failed;
           closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
           setClosePromptFor(null);
           setClosePromptName(undefined);
+          return [];
         }}
       />
       <PreferencesPopup
@@ -4377,6 +4396,7 @@ function AppInner() {
           <Toast>. The primitive owns auto-dismiss, which is why 14 setTimeout
           calls came out of this file — every one of them was a chance to leak a
           timer past unmount. */}
+      <StartupNotices />
       {toast && (
         <Toast
           message={typeof toast === 'string' ? toast : toast.message}

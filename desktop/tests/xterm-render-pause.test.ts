@@ -166,4 +166,29 @@ describe('attachRenderPause (real @xterm/xterm)', () => {
     await frames();
     expect(renderRows).toHaveBeenCalled();
   });
+  it('a terminal resized while hidden gets a scrollbar sized for its new height once shown', async () => {
+    const { terminal, observer } = openTerminal();
+    // jsdom cannot measure text; give xterm a real character size so its drawing area has a height.
+    const chars = (terminal as any)._core._charSizeService;
+    chars._measureStrategy = { measure: () => ({ width: 7, height: 14 }) };
+    chars.measure();
+    const pause = attachRenderPause(terminal)!;
+    observer([{ isIntersecting: true }]);
+    await frames();
+    pause.setHidden(true);
+    // A paused terminal postpones resizing its drawing area to an idle moment; on a busy phone that moment comes after
+    // xterm's next frame (where the scrollbar measures itself). Hold it until the terminal is shown, as the phone did.
+    const rs = (terminal as any)._core._renderService;
+    let postponed: (() => void) | undefined;
+    rs._pausedResizeTask = { set: (fn: () => void) => { postponed = fn; }, flush: () => { postponed?.(); postponed = undefined; }, dispose() {} };
+    terminal.resize(48, 41);            // the phone's real size, decided while the new session was still hidden
+    await frames();
+    pause.setHidden(false);
+    await frames();
+    const core = (terminal as any)._core;
+    const area = core._renderService.dimensions.css.canvas.height;
+    expect(area).toBe(41 * 14);
+    // The scrollbar's idea of the visible height must match the drawing area, or it offers room that is not there.
+    expect(core._viewport._scrollableElement.getScrollDimensions().height).toBe(area);
+  });
 });
