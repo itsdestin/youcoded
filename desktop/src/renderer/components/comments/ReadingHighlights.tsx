@@ -351,10 +351,13 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           // WHY an anchor (2026-11-27): without one ContextMenu closes on ANY
           // scroll on the page, so the chat beside the file auto-scrolling
           // while a reply streamed closed this menu before it could be used
-          // (the right-click path got the same fix in 20cd0c18a). With the
-          // viewer as anchor, only a scroll that moves the file's words (its
-          // own scroller, or the page) closes it.
-          anchor={containerRef.current ?? undefined}
+          // (the right-click path got the same fix in 20cd0c18a). The anchor is
+          // the selected words themselves, not the whole viewer (review): a
+          // sideways-scrolling table or code block INSIDE the file contains
+          // the words but not the viewer, and scrolling it must still close
+          // the menu. Any scroller holding the words (that one, the file's
+          // own, the page) closes it; the chat never does.
+          anchor={selectionMenu.range.startContainer}
           onClose={() => setSelectionMenu(null)}
         />
       )}

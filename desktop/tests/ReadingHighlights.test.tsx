@@ -176,11 +176,14 @@ describe('the menu that opens on a released selection', () => {
     const containerRef = createRef<HTMLDivElement>();
     const utils = render(
       <div ref={containerRef} data-artifact-viewer="">
-        <p>First line of the document, long enough to select.</p>
+        <div data-testid="inner-scroller" style={{ overflowX: 'auto' }}><p>First line of the document, long enough to select.</p></div>
         <p>Second line of the document, also long enough.</p>
         <ReadingHighlights containerRef={containerRef} path="test-fixtures/selection-menu.md" onOpenComments={() => {}} />
       </div>,
     );
+    // Stands in for the chat panel: a scroller beside the file, not around it.
+    const beside = document.createElement('div');
+    utils.container.appendChild(beside);
     const [first, second] = Array.from(utils.container.querySelectorAll('p'));
     const range = document.createRange();
     range.selectNodeContents(first.firstChild!);
@@ -191,7 +194,7 @@ describe('the menu that opens on a released selection', () => {
       first.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
     });
     await vi.waitFor(() => expect(document.querySelector('[role=menu]')).not.toBeNull());
-    return { second };
+    return { second, beside, inner: utils.getByTestId('inner-scroller') };
   }
 
   it('stays open when the selection-changed event arrives late for the same selection', async () => {
@@ -218,6 +221,18 @@ describe('the menu that opens on a released selection', () => {
       getSelection()!.removeAllRanges();
       document.dispatchEvent(new Event('selectionchange'));
     });
+    expect(document.querySelector('[role=menu]')).toBeNull();
+  });
+
+  it('stays open when a scroller beside the file (the chat) scrolls', async () => {
+    const { beside } = await openMenuOnSelection();
+    await act(async () => { beside.dispatchEvent(new Event('scroll')); });
+    expect(document.querySelector('[role=menu]')).not.toBeNull();
+  });
+
+  it('closes when a scroller inside the file that holds the words scrolls (a wide table)', async () => {
+    const { inner } = await openMenuOnSelection();
+    await act(async () => { inner.dispatchEvent(new Event('scroll')); });
     expect(document.querySelector('[role=menu]')).toBeNull();
   });
 });

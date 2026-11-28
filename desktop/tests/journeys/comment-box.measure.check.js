@@ -49,14 +49,18 @@
   // If the re-wrap pushes the words past the visible part of the panel, the box rightly stops at the panel's edge
   // (where it may already have been), so only "still inside the panel" can be judged then. Both journeys keep their
   // words in view on a normal run, and both failed this check on the code that never followed (2026-11-27).
-  viewer.style.maxWidth = '260px';
-  await wait(100);
-  await frames();
-  const rewrapped = where();
-  const hlNow = segs.map((s) => s.getBoundingClientRect());
-  const pr = scroller.getBoundingClientRect();
-  const wordsVisible = Math.min(...hlNow.map((x) => x.top)) >= pr.top && Math.max(...hlNow.map((x) => x.bottom)) <= pr.bottom - 100;
-  viewer.style.maxWidth = '';
+  let rewrapped, wordsVisible;
+  try {
+    viewer.style.maxWidth = '260px';
+    await wait(100);
+    await frames();
+    rewrapped = where();
+    const hlNow = segs.map((s) => s.getBoundingClientRect());
+    const pr = scroller.getBoundingClientRect();
+    wordsVisible = Math.min(...hlNow.map((x) => x.top)) >= pr.top && Math.max(...hlNow.map((x) => x.bottom)) <= pr.bottom - 100;
+  } finally {
+    viewer.style.maxWidth = ''; // always put the column back, or the journey's next comment runs in a squeezed file
+  }
   await frames();
   if (rewrapped && (wordsVisible ? !rewrapped.includes('not lined up') : rewrapped.includes('leaves the visible panel'))) {
     return { ok: false, why: `after the text re-wrapped: ${rewrapped}` };

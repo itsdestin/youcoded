@@ -104,8 +104,14 @@ export function NewCommentPopover({ comment, getAnchor, boundsEl, onTextChange, 
     // Same one-placement-per-frame guard as scrolling.
     const ro = boundsEl && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => onMove(new Event('reflow'))) : null;
     if (ro && boundsEl) ro.observe(boundsEl);
+    // A font finishing loading can also move words between lines with the
+    // content's size unchanged (review), which the size watch above misses.
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    const onFonts = () => onMove(new Event('reflow'));
+    fonts?.addEventListener?.('loadingdone', onFonts);
     return () => {
       ro?.disconnect();
+      fonts?.removeEventListener?.('loadingdone', onFonts);
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener('scroll', onMove, { capture: true });
       window.removeEventListener('resize', onMove);

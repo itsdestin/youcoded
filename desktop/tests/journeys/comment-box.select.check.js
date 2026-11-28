@@ -47,11 +47,13 @@
   // text re-wrapping when the app's font finishes loading — and that used to close this menu (it had no anchor, so ANY
   // scroll on the page closed it). On a busy machine the font swap landed after the menu opened and the next step
   // found no "Add comment". Doing it on purpose makes that case run every time instead of by luck.
+  // The scroll must really happen, or this step proves nothing: up if there is room above, else down.
   const chat = document.querySelector('.chat-scroll');
-  if (chat) {
-    chat.scrollTop = Math.max(0, chat.scrollTop - 40);
-    await wait(150);
-    if (!document.querySelector('[role=menu]')) return { ok: false, why: 'the chat beside the file scrolled and the menu closed' };
-  }
+  if (!chat) return { ok: false, why: 'no chat beside the file to scroll (this journey needs the chat/files screen)' };
+  const before = chat.scrollTop;
+  chat.scrollTop = before >= 40 ? before - 40 : before + 40;
+  if (Math.abs(chat.scrollTop - before) < 1) return { ok: false, why: `the chat beside the file could not be scrolled (scrollTop ${before}, height ${chat.scrollHeight}/${chat.clientHeight})` };
+  await wait(150);
+  if (!document.querySelector('[role=menu]')) return { ok: false, why: 'the chat beside the file scrolled and the menu closed' };
   return { ok: true };
 })()
