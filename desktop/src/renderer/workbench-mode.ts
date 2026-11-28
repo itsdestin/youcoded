@@ -248,14 +248,5 @@ export const workbenchNarrowPills = (): NarrowPills => narrowSwitch<NarrowPills>
  *  phone-menu.json): Destin wants to compare the approved layout with one where ☰ and the name are
  *  one button that opens a FULL-SCREEN menu (New session, Active sessions, Previous sessions,
  *  places, Settings at the bottom), and Session files and Browser sit at top right. Neither is
- *  chosen. `narrowTop=menu` turns it on; `phoneMenu` picks where the places (Projects, Pages,
- *  Games) sit in the menu, one drawn version each:
- *  - `rows`  — a short list of rows just above the Settings button (default)
- *  - `tiles` — one row of icon tiles just above the Settings button
- *  - `top`   — a row of small buttons right under New session, so only Settings is at the bottom */
-export type PhoneMenuLayout = 'rows' | 'tiles' | 'top';
-export function workbenchPhoneMenu(): PhoneMenuLayout {
-  if (!isWorkbenchMode()) return 'rows';
-  const raw = new URLSearchParams(location.search).get('phoneMenu') ?? 'rows';
-  return raw === 'tiles' || raw === 'top' ? raw : 'rows';
-}
+ *  chosen. `narrowTop=menu` turns it on. (Destin picked the tiles version of the places on
+ *  2026-11-28, so the `phoneMenu` switch between three drawn versions is gone.) */

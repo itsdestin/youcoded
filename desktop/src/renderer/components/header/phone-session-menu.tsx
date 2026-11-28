@@ -148,9 +148,9 @@ export function PhoneMenuTop({ shape, onClose, onNew }: { shape: MenuShape; onCl
  *  closes the drawer. */
 export function PhoneDrawerFooter({ shape, onClose, children }: { shape: MenuShape; onClose: () => void; children?: React.ReactNode }) {
   if ((shape !== 'drawer' && shape !== 'hub' && shape !== 'screen') || !children) return null;
-  // The full-screen menu's places and Settings take their own places in the panel (flex
-  // `order`: places above the list in layout `top`), so no wrapper box of their own.
-  if (shape === 'screen') return <div className="contents" onClickCapture={onClose}>{children}</div>;
+  // The full-screen menu's place tiles take their own place in the panel (flex `order`).
+  // No close-on-tap here: a place's tile closes the menu itself, after its fade (leaveMenuTo).
+  if (shape === 'screen') return <>{children}</>;
   return (
     // mt-auto: in the hub the places sit at the panel's bottom edge, in thumb reach.
     <div className="mt-auto border-t border-edge py-1 shrink-0" onClickCapture={onClose}>
@@ -210,9 +210,13 @@ const LIGHT_BG: Record<SessionStatusColor, string> = {
  *  name". One tiny light per OTHER open session, in strip order, coloured by
  *  its status — so "another chat needs you" shows without opening the list.
  *  Grey (idle) sessions are drawn faint so the coloured ones stand out. */
-export function SessionLights({ ids, activeId, statuses }: { ids: string[]; activeId: string | null; statuses?: Map<string, SessionStatusColor> }) {
+export function SessionLights({ ids, activeId, statuses, ringActive = false }: { ids: string[]; activeId: string | null; statuses?: Map<string, SessionStatusColor>; ringActive?: boolean }) {
   const others = ids.filter((id) => id !== activeId);
-  if (others.length === 0) return null;
+  // ringActive (phone menu alternative, D-1): this chat's own light joins the row, in strip
+  // order, inside a ring like the selected pill's outline in the wide session switcher. It
+  // replaces the dot that sat before the name, so a lone chat still shows its one ringed light.
+  const shown = ringActive ? ids : others;
+  if (shown.length === 0) return null;
   const counts = new Map<SessionStatusColor, number>();
   for (const id of others) { const c = statuses?.get(id) ?? 'gray'; counts.set(c, (counts.get(c) ?? 0) + 1); }
   const label = [...counts].map(([c, n]) => `${n} ${STATUS_LABEL[c].toLowerCase()}`).join(', ');
@@ -221,9 +225,12 @@ export function SessionLights({ ids, activeId, statuses }: { ids: string[]; acti
       {/* Not its own button: the name stack around it (HeaderBar) takes every click (round 4).
           `session-lights` fades while the list is open — globals.css. */}
       <span className="session-lights flex items-center justify-center gap-[3px] h-1.5 transition-opacity" aria-label={`Other sessions: ${label}`}>
-        {others.slice(0, 12).map((id) => {
+        {shown.slice(0, 12).map((id) => {
           const c = statuses?.get(id) ?? 'gray';
-          return <span key={id} data-status={c} className={`w-1 h-1 rounded-full ${LIGHT_BG[c]} ${c === 'gray' ? 'opacity-40' : ''}`} />;
+          const dot = <span data-status={c} className={`w-1 h-1 rounded-full ${LIGHT_BG[c]} ${c === 'gray' && id !== activeId ? 'opacity-40' : ''}`} />;
+          return id === activeId
+            ? <span key={id} data-current className="w-2 h-2 -mx-px rounded-full border border-fg-2 flex items-center justify-center">{dot}</span>
+            : <React.Fragment key={id}>{dot}</React.Fragment>;
         })}
       </span>
     </Tooltip>

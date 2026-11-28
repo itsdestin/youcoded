@@ -6,8 +6,8 @@
 //
 // WHY its own file: SessionStrip.tsx is held to a line budget, so the strip only PLACES
 // these pieces (the top, the past chats and the search filter); everything else is here.
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Button, CloseButton, SectionLabel } from '../ui';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Button, CloseButton, SectionLabel, TextInput } from '../ui';
 import { formatRelativeTime } from '../../utils/format-time';
 
 // ── The search box's text ──────────────────────────────────────────────────
@@ -26,27 +26,82 @@ export function matchesScreenQuery(name: string, q: string): boolean {
   return !q || name.toLowerCase().includes(q.trim().toLowerCase());
 }
 
-/** The menu's head: a search box beside the close button, then the big New session
- *  button (where the Claude and ChatGPT apps put theirs). `order` keeps it first even
- *  when the places are lifted above the list (layout `top`). */
+// ── Leaving the menu for a place ───────────────────────────────────────────
+// D-2 (Destin: "a premium/polished scrolling effect where text/title of menu and the correct page
+// fade in for selected page"). Tapping a place: its name fades in as the menu's title, the place
+// opens UNDER the menu, and the menu fades away over it (220ms) — so the title changes first and
+// the page appears through the fading menu instead of the menu blinking shut.
+let title = 'Chats';
+const titleListeners = new Set<() => void>();
+function setTitle(t: string) { title = t; titleListeners.forEach((l) => l()); }
+function subscribeTitle(l: () => void) { titleListeners.add(l); return () => { titleListeners.delete(l); }; }
+let closeMenu: (() => void) | null = null;
+let menuBox: HTMLElement | null = null;
+const LEAVE_MS = 220;
+/** Called by a place's tile: retitle, open the place beneath, fade the menu out, then close it. */
+function leaveMenuTo(label: string, open: () => void) {
+  setTitle(label);
+  // A tap during the fade must not open a second place.
+  if (menuBox) menuBox.style.pointerEvents = 'none';
+  // One frame for the new title to start fading in before the place's screen mounts beneath.
+  requestAnimationFrame(() => {
+    open();
+    if (menuBox) { menuBox.style.transition = `opacity ${LEAVE_MS}ms var(--ease-out)`; menuBox.style.opacity = '0'; }
+    window.setTimeout(() => closeMenu?.(), LEAVE_MS);
+  });
+}
+
+/** The menu's head, laid out like the phone Settings page's (title at left, close at right — the
+ *  Title heading level), then search and the big New session button (where the Claude and
+ *  ChatGPT apps put theirs). D-2: "the header styling … need to be fixed to look like other
+ *  screens". `order` keeps it first in the panel. */
 export function ScreenMenuTop({ onClose, onNew }: { onClose: () => void; onNew?: () => void }) {
   const q = useScreenMenuQuery();
-  // A fresh search each time the menu opens.
-  useEffect(() => () => setQuery(''), []);
+  const t = useSyncExternalStore(subscribeTitle, () => title, () => 'Chats');
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    closeMenu = onClose;
+    menuBox = ref.current?.closest('.session-menu') as HTMLElement | null;
+    // A fresh search and title each time the menu opens.
+    return () => { setQuery(''); setTitle('Chats'); closeMenu = null; menuBox = null; };
+  }, [onClose]);
   return (
-    <div className="shrink-0 px-3 pt-3 pb-1 flex flex-col gap-2" style={{ order: -2 }}>
-      <div className="flex items-center gap-2">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search chats"
-          aria-label="Search chats"
-          className="flex-1 min-w-0 h-9 px-3 rounded-lg bg-inset border border-edge text-sm text-fg placeholder:text-fg-muted outline-none focus:border-accent"
-        />
+    <div ref={ref} className="shrink-0 px-4 pt-3 pb-2 flex flex-col gap-3" style={{ order: -2 }}>
+      <div className="flex items-center justify-between gap-2 min-h-9">
+        {/* key: a new title remounts and fades in (row-fade-in, globals.css) instead of snapping. */}
+        <h2 key={t} className="text-base font-semibold text-fg truncate" style={{ animation: 'row-fade-in 180ms var(--ease-out) both' }}>{t}</h2>
         <CloseButton onClick={onClose} label="Close menu" />
       </div>
+      <TextInput type="search" value={q} onChange={(e) => setQuery(e.target.value)} placeholder="Search chats" aria-label="Search chats" />
       <Button variant="primary" size="md" className="w-full" onClick={onNew}>+ New session</Button>
+    </div>
+  );
+}
+
+export interface PlaceTile { key: string; label: string; icon: React.ReactNode; dot?: string | null; onOpen: () => void }
+
+/** D-2 (Destin: "settings appear as a normal icon next to projects/pages/etc. and keep pinnable
+ *  pages in the list as their own icons"): one row of boxed tiles at the foot of the menu —
+ *  Settings, Projects, Pages, Games, then each pinned page. It scrolls sideways under the app's
+ *  edge fade when it does not fit (design guide: a row never wraps at phone width), and no line
+ *  divides it from the chats above (Spacing: "no dividing lines"); 16px of space does. */
+export function ScreenMenuPlaces({ tiles }: { tiles: PlaceTile[] }) {
+  return (
+    <div className="shrink-0 pt-2 pb-3" style={{ order: 1 }}>
+      <div role="group" aria-label="Places" className="scroll-mask-x scroll-mask--chips flex gap-2 overflow-x-auto px-4 scrollbar-none">
+        {tiles.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => leaveMenuTo(t.label, t.onOpen)}
+            className="coarse-roomy relative shrink-0 w-[4.5rem] flex flex-col items-center gap-1 px-1 py-2.5 rounded-lg bg-inset text-fg-2 hover:text-fg hover:bg-well transition-colors"
+          >
+            <span className="shrink-0 [&_svg]:w-5 [&_svg]:h-5">{t.icon}</span>
+            <span className="max-w-full truncate text-2xs">{t.label}</span>
+            {t.dot && <span className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full ${t.dot}`} />}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

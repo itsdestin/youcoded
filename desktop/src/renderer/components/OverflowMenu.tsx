@@ -18,7 +18,10 @@
 
 import { browserSupported, toggleBrowserPane, useBrowserButton } from '../state/browser-store';
 import { guardDirtyEditor } from './artifact-views/dirty-editor-guard';
-import { PagesIcon } from './pages/page-icons';
+import { PageGlyph, PagesIcon } from './pages/page-icons';
+import { usePages } from './pages/use-pages';
+import { MAX_PINNED_PAGES } from '../../shared/pages-types';
+import { ScreenMenuPlaces, type PlaceTile } from './header/phone-screen-menu';
 import { createPortal } from 'react-dom';
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { GamepadIcon, GlobeIcon } from './Icons';
@@ -163,30 +166,30 @@ function RowTiles({ rows }: { rows: Row[] }) {
   );
 }
 
-/** The full-screen phone menu ALTERNATIVE (2026-11-28, header/phone-screen-menu.tsx): the
- *  places Destin named (Projects, Pages, Games) and Settings as its own button at the bottom.
- *  Session files and Browser are NOT here: in this version they sit at top right (his note on
- *  U-8: "browser can stay next to session files"). `layout` is the drawn version: rows or tiles
- *  just above Settings, or (`top`) lifted under New session with flex `order`. */
-export function ScreenMenuFooter({ layout, ...props }: Props & { layout: 'rows' | 'tiles' | 'top' }) {
+/** The full-screen phone menu ALTERNATIVE (2026-11-28, header/phone-screen-menu.tsx): one row
+ *  of place tiles at the menu's foot. D-2, Destin picked tiles and asked for "settings [to]
+ *  appear as a normal icon next to projects/pages/etc. and keep pinnable pages in the list as
+ *  their own icons". Session files and Browser are NOT here: in this version they sit at top
+ *  right (his note on U-8). Settings' warning dot rides on its own tile (D-1: "the backup/other
+ *  error status dot should go on the specific settings … button"). */
+export function ScreenMenuFooter(props: Props) {
   const { rows } = useOverflowRows(props, (fn) => fn);
-  const places = rows.filter((r) => r.key === 'projects' || r.key === 'pages' || r.key === 'games');
-  const settings = rows.find((r) => r.key === 'settings')!;
-  return (
-    <>
-      <div className={`shrink-0 ${layout === 'top' ? 'px-2 pb-1' : 'border-t border-edge py-1'}`} style={{ order: layout === 'top' ? -1 : 1 }}>
-        {layout === 'rows' ? <RowButtons rows={places} /> : <RowTiles rows={places} />}
-      </div>
-      <div className="shrink-0 px-3 pt-1 pb-3" style={{ order: 2 }}>
-        {/* Through the Button primitive (control-primitives rule). */}
-        <Button variant="secondary" size="md" className="w-full gap-2" onClick={settings.onClick}>
-          {settings.icon}
-          <span>Settings</span>
-          {settings.dot && <span className={`w-1.5 h-1.5 rounded-full ${settings.dot}`} />}
-        </Button>
-      </div>
-    </>
-  );
+  const dispatch = useArtifactDispatch();
+  const { pages } = usePages();
+  const pick = (k: string) => rows.find((r) => r.key === k)!;
+  const tiles: PlaceTile[] = [
+    ...['settings', 'projects', 'pages', 'games'].map((k) => {
+      const r = pick(k);
+      // "Games — challenge!" keeps its word on the dot; the tile shows one word.
+      return { key: r.key, label: r.label.split(' — ')[0], icon: r.icon, dot: r.dot, onOpen: r.onClick };
+    }),
+    // Pinned pages open focused, as their wide-header buttons do (PinnedPageButtons).
+    ...pages.filter((p) => p.pinned).slice(0, MAX_PINNED_PAGES).map((p) => ({
+      key: `page:${p.id}`, label: p.name, icon: <PageGlyph icon={p.icon} customIcon={p.customIcon} />,
+      onOpen: () => dispatch({ type: 'PAGE_OPENED', pageId: p.id, focus: true }),
+    })),
+  ];
+  return <ScreenMenuPlaces tiles={tiles} />;
 }
 
 /** The phone side drawer's ☰ (2026-11-05 round): opens the session drawer, and
@@ -196,6 +199,14 @@ export function ScreenMenuFooter({ layout, ...props }: Props & { layout: 'rows' 
 export function DrawerMenuButton({ onOpen, ...props }: Props & { onOpen: () => void }) {
   const { badgeColor } = useOverflowRows(props, (fn) => fn);
   return <MenuButton open={false} onClick={onOpen} badgeColor={badgeColor} />;
+}
+
+/** The ☰ inside the phone menu alternative's name button (D-1, Destin: "remove the separate
+ *  status dot from the 3-line menu, the backup/other error status dot should go on the specific
+ *  settings … button"). No badge here: Settings' dot sits on its tile in the menu, the games
+ *  challenge on the Games tile, the Browser's on its own top-right button. */
+export function ScreenMenuButton({ onOpen }: { onOpen: () => void }) {
+  return <MenuButton open={false} onClick={onOpen} badgeColor={null} />;
 }
 
 function useOverflowRows({

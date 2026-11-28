@@ -2100,7 +2100,7 @@ export default function SessionStrip({
                   ${plainTitle /* a plain title, one hover area with the arrow */ ? 'border-transparent' : pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
             <>
-                <SessionDot color={color} isActive={isActive} />
+                {narrowTop !== 'menu' /* phone menu alternative (D-1): this dot moves into the lights, ringed */ && <SessionDot color={color} isActive={isActive} />}
                 <span
                   className={`session-pill__label text-xs font-medium text-fg-2 ${isActive ? 'min-w-0' : ''}`}
                   style={pillLabelStyle({

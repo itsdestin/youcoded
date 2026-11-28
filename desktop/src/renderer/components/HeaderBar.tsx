@@ -9,8 +9,8 @@ import { getCapabilities, isAndroid, isRemoteMode } from '../platform';
 import { fingerSized } from '../device';   // device.ts: touch screen or narrow window
 // Artifact drawer trigger — reads session artifact count for the badge.
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
-import OverflowMenu, { DrawerMenuButton, OverflowRowList, ScreenMenuFooter } from './OverflowMenu';
-import { workbenchNarrowTop, workbenchNarrowPills, workbenchPhoneMenu } from '../workbench-mode';
+import OverflowMenu, { DrawerMenuButton, OverflowRowList, ScreenMenuButton, ScreenMenuFooter } from './OverflowMenu';
+import { workbenchNarrowTop, workbenchNarrowPills } from '../workbench-mode';
 import { SessionLights } from './header/phone-session-menu';
 import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
@@ -455,7 +455,7 @@ export default React.memo(function HeaderBar({
       windowDirectory={windowDirectory}
       myWindowId={myWindowId}
       menuApiRef={stripApi}
-      drawerFooter={menuBar ? <ScreenMenuFooter {...overflowProps} layout={workbenchPhoneMenu()} /> : narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
+      drawerFooter={menuBar ? <ScreenMenuFooter {...overflowProps} /> : narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
     />
   );
 
@@ -669,10 +669,15 @@ export default React.memo(function HeaderBar({
       // clicks still bubble here through React, so its close button would reopen it otherwise.
       <div onClick={(e) => { if (e.currentTarget.contains(e.target as Node)) stripApi.current?.openList(); }} className="session-name-stack group isolate relative cursor-pointer flex items-center gap-0.5 min-w-0 max-w-full pr-1 py-2">
       <span aria-hidden className="absolute inset-x-0 inset-y-1 -z-10 rounded-lg pointer-events-none transition-colors group-hover:bg-inset" />
-      <DrawerMenuButton {...overflowProps} onOpen={() => stripApi.current?.openList()} />
-      <div className="relative flex flex-col items-start min-w-0">
+      <ScreenMenuButton onOpen={() => stripApi.current?.openList()} />
+      {/* D-1 (Destin: "reduce space between text and status dots by a lotttt and better
+          center/balance the combined text/dots against the 3-line menu"): name and lights are one
+          block in normal flow, centred on the ☰ as a pair; the lights sit 1px under the name
+          (they used to hang in the bar's bottom padding, about 6px lower). pl-3 lines the first light
+          up with the name's first letter (the strip and its pill each pad the name by 6px). */}
+      <div className="flex flex-col items-start justify-center min-w-0 gap-px">
       {sessionStrip}
-      <span className="absolute -bottom-1.5 left-1.5"><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>
+      <span className="pl-3 -mt-1 h-2 flex items-center"><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} ringActive /></span>
       </div>
       </div>
       ) : narrowTop === 'lights' ? (

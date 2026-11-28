@@ -67,10 +67,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/sessions#phone-lights', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-hub', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'hub', platform: 'android' }, newIn: 'after' as const },
   // Phone menu ALTERNATIVE (2026-11-28, youcoded-dev …/2026-11-04-narrow-screens/phone-menu.json): ☰ and the
-  // name as one button, the full-screen menu in its three drawn versions (where Projects, Pages and Games sit).
-  { ...chat('chat/sessions#menu-rows', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', platform: 'android' }, newIn: 'after' as const },
-  { ...chat('chat/sessions#menu-tiles', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', phoneMenu: 'tiles', platform: 'android' }, newIn: 'after' as const },
-  { ...chat('chat/sessions#menu-top', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', phoneMenu: 'top', platform: 'android' }, newIn: 'after' as const },
+  // name as one button, the full-screen menu (Destin picked its tiles version on 2026-11-28).
+  { ...chat('chat/sessions#menu-tiles', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', platform: 'android' }, newIn: 'after' as const },
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
