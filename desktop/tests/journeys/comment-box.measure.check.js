@@ -29,11 +29,7 @@
     if (b.top < panel.top - 1 || b.bottom > panel.bottom + 1) return `the box leaves the visible panel (${said})`;
     return null;
   };
-  // WHY up to 2 s, not one look: a Word file redraws its text once more after the highlight is added and the box
-  // follows a frame or two later; on a loaded machine one early look caught it 12 px off (1 run in 8, 2026-11-27).
-  // The bug this guards (the box stuck in the bottom-left corner) never comes right, so waiting cannot hide it.
-  let first = where();
-  for (let j = 0; first && j < 40; j++) { await wait(50); first = where(); }
+  const first = where();
   if (first) return { ok: false, why: first };
   scroller.scrollTop += 40;
   await frames();

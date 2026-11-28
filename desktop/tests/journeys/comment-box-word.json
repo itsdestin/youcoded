@@ -14,12 +14,28 @@
       "file": "comment-box.select.check.js"
     },
     {
+      "do": "click",
+      "target": {
+        "role": "menuitem",
+        "label": "Add comment",
+        "nth": 1
+      }
+    },
+    {
       "do": "check",
       "file": "comment-box.measure.check.js"
     },
     {
       "do": "check",
       "file": "comment-box.select.check.js"
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "menuitem",
+        "label": "Add comment",
+        "nth": 1
+      }
     },
     {
       "do": "check",
