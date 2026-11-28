@@ -1,11 +1,12 @@
 // The stall profiler keeps rolling CPU profiles in memory and writes them only when a 2 s+ stall is reported
 // (2026-10-22 freeze hunt). Pins: nothing written without a stall, the file carries the stall's timestamp,
 // the file cap, and the off switch.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import inspector from 'node:inspector';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StallProfiler, startStallProfiler, stallProfilerDisabled } from '../src/main/stall-profiler';
+import { StallProfiler, startStallProfiler, stallProfilerDisabled, sliceProfile } from '../src/main/stall-profiler';
 
 const spin = (ms: number) => { const t = Date.now(); while (Date.now() - t < ms) { /* busy */ } };
 let dirs: string[] = [];
@@ -104,5 +105,36 @@ describe('StallProfiler', () => {
     const merged = lists.map((n) => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')).stalls).find((s: any[]) => s.length === 2);
     expect(merged.map((x: any) => x.ms)).toEqual([2100, 2600]);
     for (const n of lists) expect(fs.existsSync(path.join(dir, n.replace('.stalls.json', '')))).toBe(true);
+  });
+
+  // Restarting V8's profiler blocks the main thread (Profiler.start re-logs all compiled code: 50-170 ms measured),
+  // so the recorder must not cause the stalls it records: no restart inside ten minutes when nothing stalls.
+  it('does not restart the profiler more than once in ten minutes while nothing stalls', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const post = vi.spyOn(inspector.Session.prototype, 'post');
+    try {
+      const p = new StallProfiler({ dir: tmp() });
+      p.start();
+      const startsAfterBoot = post.mock.calls.filter((c) => c[0] === 'Profiler.start').length;
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(post.mock.calls.filter((c) => c[0] === 'Profiler.start').length).toBe(startsAfterBoot);
+      vi.advanceTimersByTime(60_000);
+      expect(post.mock.calls.filter((c) => c[0] === 'Profiler.start').length).toBe(startsAfterBoot + 1);
+      await p.stop();
+    } finally { post.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('a saved profile keeps only the samples around the stall, with recounted hits', () => {
+    // 600 samples one second apart (profile clock in microseconds), window closed at wall time 1,000,000 ms.
+    const samples = Array.from({ length: 600 }, (_, i) => (i % 2) + 1);
+    const profile = { nodes: [{ id: 1, hitCount: 300 }, { id: 2, hitCount: 300 }], startTime: 0, endTime: 600e6, samples, timeDeltas: samples.map(() => 1e6) };
+    const end = 1_000_000;
+    const cut = sliceProfile(profile, end, end - 40_000, end - 10_000);   // the 30 s ending 10 s before the window closed
+    expect(cut.samples.length).toBe(31);
+    expect(cut.timeDeltas[0]).toBe(0);
+    expect(cut.endTime - cut.startTime).toBe(30e6);
+    expect(cut.nodes.reduce((n, x) => n + (x.hitCount ?? 0), 0)).toBe(31);
+    // A range that matches nothing keeps the whole window rather than losing it.
+    expect(sliceProfile(profile, end, 0, 1).samples.length).toBe(600);
   });
 });

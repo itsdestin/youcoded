@@ -2,7 +2,7 @@
 //
 // WHY (2026-10-22 freeze hunt): the owner's app froze for 3-50 s with the CPU idle-looking, and nobody can
 // attach a profiler to his live app after the fact. So the app profiles ITSELF: node:inspector's Profiler
-// runs in short rolling windows (a profile is only readable once it is stopped, so it is stopped and
+// runs in long rolling windows (a profile is only readable once it is stopped, so it is stopped and
 // restarted every WINDOW_MS), the last two windows are kept in memory, and when the main-stall detector
 // (hitch-recorder.ts) reports a stall of 2 s or more, the window(s) that cover it are written as
 // .cpuprofile files — loadable in Chrome DevTools or VS Code — named with the stall's timestamp so they line
@@ -16,7 +16,14 @@ import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 
 export const STALL_PROFILE_MIN_MS = 2000;
-const WINDOW_MS = 25_000;
+// WHY 10 minutes, not 25 s (hitch audit 2026-11-27): restarting V8's profiler is itself a main-thread block —
+// Profiler.start re-logs every compiled function; measured 50-170 ms in a small Node script, and the saved stall
+// profiles show ~100 ms inside inspector.post per rotation in the app. At one restart per 25 s the recorder caused up
+// to ~144 stalls of 100 ms+ an hour on every user's machine. A long window costs one restart per 10 minutes; the
+// saved file is cut down to the half-minute before the stall (SAVE_SPAN_MS), so what is written stays small.
+const WINDOW_MS = 10 * 60_000;
+/** How much profile before the first stall a saved file keeps. */
+const SAVE_SPAN_MS = 30_000;
 const SAMPLE_INTERVAL_US = 20_000;
 const MAX_FILES = 10;
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -28,6 +35,42 @@ export function stallProfilerDisabled(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 interface Window { startedAt: number; endedAt: number; profile: object; saved?: boolean }
+
+/** The V8 .cpuprofile shape this file reads (times in microseconds on V8's own clock). */
+export interface CpuProfile {
+  nodes: Array<{ id: number; hitCount?: number; [k: string]: unknown }>;
+  startTime: number; endTime: number; samples: number[]; timeDeltas: number[];
+}
+
+/** Keep only the samples between wall-clock fromMs and toMs. The profile's clock is mapped to wall time through its
+ *  end (the window closed at endedAtMs, which is the profile's endTime). Nodes are kept whole (hit counts recounted),
+ *  so DevTools and summarise-profile.mjs load the result like any other profile. */
+export function sliceProfile(profile: CpuProfile, endedAtMs: number, fromMs: number, toMs: number): CpuProfile {
+  const toProfile = (ms: number) => profile.endTime - (endedAtMs - ms) * 1000;
+  const from = toProfile(fromMs);
+  const to = toProfile(toMs);
+  const samples: number[] = [];
+  const timeDeltas: number[] = [];
+  const hits = new Map<number, number>();
+  let t = profile.startTime;
+  let last = -1;
+  let first = -1;
+  for (let i = 0; i < profile.samples.length; i++) {
+    t += profile.timeDeltas[i] ?? 0;
+    if (t < from || t > to) continue;
+    if (first < 0) first = t;
+    timeDeltas.push(last < 0 ? 0 : t - last);
+    samples.push(profile.samples[i]);
+    hits.set(profile.samples[i], (hits.get(profile.samples[i]) ?? 0) + 1);
+    last = t;
+  }
+  if (samples.length === 0) return profile; // nothing matched (clock mapping off): keep the whole window, never lose it
+  return {
+    ...profile,
+    nodes: profile.nodes.map((n) => ({ ...n, hitCount: hits.get(n.id) ?? 0 })),
+    startTime: first, endTime: last, samples, timeDeltas,
+  };
+}
 
 export interface StallProfilerOptions {
   dir: string;
@@ -131,7 +174,8 @@ export class StallProfiler {
     covering.forEach((w, i) => {
       w.saved = true;
       const name = `stall-${stamp}-${Math.round(first.ms)}ms${covering.length > 1 ? `-part${i + 1}` : ''}.cpuprofile`;
-      this.writing = this.writing.then(() => this.save(name, w.profile, stalls)).catch(() => {});
+      const sliced = sliceProfile(w.profile as CpuProfile, w.endedAt, p.startedAt - SAVE_SPAN_MS, p.stalls[p.stalls.length - 1].endedAt + 1000);
+      this.writing = this.writing.then(() => this.save(name, sliced, stalls)).catch(() => {});
     });
     return this.writing;
   }
