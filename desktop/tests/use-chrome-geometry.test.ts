@@ -93,4 +93,18 @@ describe('useChromeGeometry', () => {
     unmount();
     expect(obs.observed.size).toBe(0);
   });
+
+  // A fresh array per observer tick re-rendered ThemeEffects and repainted the full-window particle canvas while
+  // typing, even when nothing moved. An unchanged measurement must keep the same array, so the clip-path built from
+  // it is unchanged and the canvas is not repainted. (React may still run the component once before bailing out —
+  // that render produces the identical clip-path string, so the DOM is untouched.)
+  it('keeps the same array when an observer tick finds nothing moved', () => {
+    makeChrome('header-bar', { left: 0, top: 0, width: 1280, height: 40 });
+    const { result } = renderHook(() => useChromeGeometry());
+    const before = result.current;
+    act(() => { StubResizeObserver.instances[0].trigger(); });
+    act(() => { StubResizeObserver.instances[0].trigger(); });
+    expect(result.current).toBe(before);
+  });
 });
+
