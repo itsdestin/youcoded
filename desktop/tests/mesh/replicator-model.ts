@@ -81,7 +81,10 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   let noisy = false; let counter = 0; let forked = false;
   const trace: string[] = [];
   const note = (k: string): void => { ops[k] = (ops[k] ?? 0) + 1; trace.push(k); if (process.env.MESH_REPLICATOR_FUZZ_TRACE) fs.appendFileSync(process.env.MESH_REPLICATOR_FUZZ_TRACE, `seed ${seed} step ${trace.length}: ${k} t=${Date.now() % 1_000_000}\n`); };
-  const fail = (msg: string): never => { throw new Error(`replicator fuzz seed ${seed}: ${msg} [ops: ${trace.join(',')}]`); };
+  const history: string[] = []; // (debug) a compact state line per step, written out only when the seed fails: MESH_REPLICATOR_FAILTRACE=<dir>
+  let finalSnapshot = '';
+  const failTrace = (msg: string): void => { if (process.env.MESH_REPLICATOR_FAILTRACE) { fs.mkdirSync(process.env.MESH_REPLICATOR_FAILTRACE, { recursive: true }); fs.writeFileSync(nodePath.join(process.env.MESH_REPLICATOR_FAILTRACE, `seed-${seed}.txt`), `${msg}\n${history.join('\n')}\n${finalSnapshot}\n`); } };
+  const fail = (msg: string): never => { failTrace(msg); throw new Error(`replicator fuzz seed ${seed}: ${msg} [ops: ${trace.join(',')}]`); };
   try {
     try {
     for (const [i, wr] of ['A', 'B'].entries()) {
@@ -98,6 +101,11 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       for (const n of NAMES) world.devs[n].carrier.passFilter = on ? () => { const r = rand(); return r < 0.15 ? 'drop' : r < 0.25 ? 'dup' : r < 0.5 ? Math.floor(rand() * 20) : 'deliver'; } : null;
     };
     for (let s = 0; s < steps; s++) {
+      if (process.env.MESH_REPLICATOR_FAILTRACE) {
+        const parts: string[] = [];
+        for (const n of NAMES) for (const wv of world.devs[n].rep.versions()) { const lc = await world.localOf(n, wv); const hh = lc ? await world.devs[n].store.head(lc).catch(() => null) : null; const dd = world.devs[n].rep.describe(wv); parts.push(`${n}:${wv.toString('hex').slice(0, 4)}${dd?.parent ? '<' + dd.parent.toString('hex').slice(0, 4) : ''}=${hh?.lines ?? '-'}${(await world.devs[n].rep.status(wv)).state.slice(0, 4)}`); }
+        history.push(`step ${s} after ${trace[trace.length - 1] ?? '-'} online=${[...online].join('')}: ${parts.join(' ')}`); if (history.length > 60) history.shift();
+      }
       if (process.env.MESH_REPLICATOR_STEPSTATE) {
         // (debug only) every device's copy of chat 0 and its second versions, after the previous step
         const root0 = vs[0]; const fam = (wv: Buffer): boolean => { let cur: Buffer | undefined = wv; for (let k = 0; k < 8 && cur; k++) { if (cur.equals(root0)) return true; cur = world.devs.A.rep.describe(cur)?.parent ?? world.devs.B.rep.describe(cur)?.parent ?? world.devs.C.rep.describe(cur)?.parent ?? undefined; } return false; };
@@ -381,6 +389,11 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     }
     await world.settle();
     watchAcks();
+    if (process.env.MESH_REPLICATOR_FAILTRACE) {
+      const parts: string[] = [];
+      for (const n of NAMES) for (const wv of world.devs[n].rep.versions()) { const lc = await world.localOf(n, wv); const hh = lc ? await world.devs[n].store.head(lc).catch(() => null) : null; const st = await world.devs[n].rep.status(wv); parts.push(`${n}:${wv.toString('hex').slice(0, 4)}=${hh?.lines ?? '-'} ${st.state}${st.reason ? '(' + String(st.reason).slice(0, 60) + ')' : ''}`); }
+      finalSnapshot = `FINAL online=${[...online].join('')}: ${parts.join(' | ')}\n` + NAMES.map((n) => `${n} counters ${JSON.stringify(world.devs[n].rep.counters())}`).join('\n');
+    }
     if (process.env.MESH_REPLICATOR_DUMP) for (const n of NAMES) { const hd = nodePath.join(world.dirs[n], 'replicator', 'heads'); if (fs.existsSync(hd)) for (const f of fs.readdirSync(hd)) { const raw = fs.readFileSync(nodePath.join(hd, f)); const pts: number[] = []; for (let o = 0; o + 112 <= raw.length; o += 112) pts.push(Number(raw.readBigUInt64BE(o))); fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} POINTS ${n} ${f.slice(0, 6)} bytes ${raw.length} points ${JSON.stringify(pts)}\n`); } }
     if (process.env.MESH_REPLICATOR_DUMP) for (const [i, cv] of vs.entries()) for (const n of NAMES) { const lc = await world.localOf(n, cv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ROOT#${i} ${n} lines ${JSON.stringify(Array.isArray(tx) ? tx.map((l: Buffer) => (l.length > 4096 ? `big${l.length}` : (l.toString().match(/(\w+-\d+) (\d+)/) ?? ['?'])[0])) : tx)} status ${(await world.devs[n].rep.status(cv)).state}\n`); }
     if (process.env.MESH_REPLICATOR_DUMP) for (const n of NAMES) { const all = await world.devs[n].store.listVersions(); const rows: string[] = []; for (const x of all) { const hd = await world.devs[n].store.head(x.version).catch(() => null); rows.push(`${x.version.toString('hex').slice(0, 6)}:parent=${x.parent ? x.parent.toString('hex').slice(0, 6) : '-'}:lines=${hd?.lines ?? '?'}`); } fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} STORE ${n} ${rows.join(' ')}\n`); }

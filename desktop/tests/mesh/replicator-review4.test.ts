@@ -502,6 +502,13 @@ describe('two peers, each holding a different side of the writer\'s chat (seed 1
     await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.C.deviceId, body: linesBody({ version: V, from: 0, lines: rbLines, head: { lines: 3, hash: chain, sig: signWith(world.ids.A, headMessage(V, 3, chain)) } }) });
     await world.elapse(120_000, 5_000, true);
     expect(await st(world, 'C', V), 'C does not stay diverged after a replay of the writer\'s other side').toMatch(/^in-sync/);
+    // the same replay again and again (a peer that keeps offering the other side): the answer to the same situation is not worked out again each time
+    const before = world.devs.C.rep.counters()['self-fork-old-history-kept'] ?? 0;
+    for (let i = 0; i < 20; i++) {
+      await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.C.deviceId, body: linesBody({ version: V, from: 0, lines: rbLines, head: { lines: 3, hash: chain, sig: signWith(world.ids.A, headMessage(V, 3, chain)) } }) });
+      await world.elapse(5_000, 1_000, true);
+    }
+    expect((world.devs.C.rep.counters()['self-fork-old-history-kept'] ?? 0) - before, 'the same resolution is not repeated for an unchanged situation').toBeLessThanOrEqual(2);
   }, 900_000);
 });
 

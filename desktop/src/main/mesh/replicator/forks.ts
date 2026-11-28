@@ -19,6 +19,13 @@ import type { VersionDescriptor } from './directory';
 const verifiedFolders = new WeakMap<object, Set<string>>();
 const listings = new WeakMap<object, Promise<Map<string, { version: Buffer; chatId: string | null; parent: Buffer | null }>>>();
 
+/** The whole-store listing, taken once per store per process and shared (see `folderIsThisVersion`); the orphan look at start uses the same one instead of listing again. */
+export function storeListingOnce(store: RepCtx['store']): Promise<Map<string, { version: Buffer; chatId: string | null; parent: Buffer | null }>> {
+  let snap = listings.get(store);
+  if (!snap) { snap = store.listVersions().then((all) => new Map(all.map((x) => [x.version.toString('hex'), x]))); listings.set(store, snap); snap.catch(() => listings.delete(store)); }
+  return snap;
+}
+
 /** A folder found already registered under the derived id must be THIS version's: same chat, same parent (review 1, F3). Anything else is a squatter or a mistake: not used, named. */
 async function folderIsThisVersion(ctx: RepCtx, local: Buffer, desc: VersionDescriptor): Promise<boolean> {
   let seen = verifiedFolders.get(ctx.store); if (!seen) { seen = new Set(); verifiedFolders.set(ctx.store, seen); }

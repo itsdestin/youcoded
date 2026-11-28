@@ -42,7 +42,7 @@ import { ByteBudget, CLAIM_ABSOLUTE_MS, CLAIM_UNBACKED_MS, GATE_HEADS_WAIT_MS, I
 import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
-import { setupVersion } from './forks';
+import { setupVersion, storeListingOnce } from './forks';
 import { IdMap, incarnationId, MAX_INCARNATIONS, type Probe } from './idmap';
 import { askIntro, dropReassembly, receiveLines, restartPoint, sendNak } from './receive';
 import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
@@ -401,7 +401,7 @@ export class Replicator {
    *  for store copies that are a fork of a version the sync knows but are not themselves known, counts them (`orphan-store-versions`) and says so. Nothing is changed or deleted: without the writer's announcement
    *  (its token) the copy cannot be given its wire id again, so it can only be named, never silently adopted. */
   private async scanOrphans(): Promise<void> {
-    const listed = await this.#o.store.listVersions();
+    const listed = [...(await storeListingOnce(this.#o.store)).values()];
     if (listed.length === 0) return;
     const known = new Set<string>();
     for (const w of this.#directory.list()) for (let n = 0; n <= MAX_INCARNATIONS; n++) known.add(incarnationId(w, n).toString('hex'));
