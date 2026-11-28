@@ -10,14 +10,15 @@ import path from 'path';
 import { nativeImage, type NativeImage } from 'electron';
 
 // The share of the canvas Apple's grid gives the icon's body. Same number build-icons.mjs uses
-// for icon-mac.svg (translate 4.69, scale 0.8047 on a 48 box), so a scaled theme icon lands
-// exactly where the shipped Mac icon sits.
+// for icon-mac.png (its onMacGrid step), so a scaled theme icon lands exactly where the shipped
+// Mac icon sits. WHY this changed: the old mascot drawing (icon-mac.svg) was deleted 2026-11-27;
+// every icon now comes from scripts/icons/brand-icons.html.
 export const MAC_ICON_SCALE = 0.8047;
 
 /** The bundled default icon file for each platform. Mirrors electron-builder.yml. */
 export function defaultAppIconFile(platform: NodeJS.Platform): string {
   // WHY .ico on Windows: it carries 16–256px each drawn from the vector, so the taskbar's
-  // small sizes keep the mascot's eyes sharp. A 1024px PNG shrunk to 16px blurs them.
+  // small sizes keep the icon's eyes sharp. A 1024px PNG shrunk to 16px blurs them.
   if (platform === 'win32') return 'icon.ico';
   if (platform === 'darwin') return 'icon-mac.png';
   return 'icon.png';
