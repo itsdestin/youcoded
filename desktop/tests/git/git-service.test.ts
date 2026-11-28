@@ -62,6 +62,23 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
     expect(r.counts).toEqual({ added: 2, removed: 1 });
   });
 
+  // One answer is three git processes, and starting a process blocks the main thread; a burst of change events
+  // must not queue a full run each. Requests made during a run share ONE follow-up run that still sees their change.
+  it('fileStatus: requests made during a run share one follow-up run that sees the change made before them', async () => {
+    const first = gitFileStatus(root, 'a.txt');
+    await fs.promises.writeFile(path.join(root, 'a.txt'), 'one\nTWO\nthree\n');
+    const second = gitFileStatus(root, 'a.txt');
+    const third = gitFileStatus(root, 'a.txt');
+    expect(third).toBe(second);
+    expect(second).not.toBe(first);
+    expect((await second).counts).toEqual({ added: 2, removed: 1 });
+    await first;
+    // Once everything has settled, a new request starts a fresh run.
+    const later = gitFileStatus(root, 'a.txt');
+    expect(later).not.toBe(second);
+    expect((await later).counts).toEqual({ added: 2, removed: 1 });
+  });
+
   it('fileStatus: non-repo dir -> isRepo false, ok true', async () => {
     const bare = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-norepo-')));
     try {

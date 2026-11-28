@@ -23,7 +23,7 @@ import { useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
-import { useSessionMeta } from '../hooks/useSessionMeta';
+import { useSessionMetaView } from '../state/session-meta-view';
 import { PinIcon } from './tags/PinIcon';
 import { NotePageGlyph } from './tags/glyphs';
 import { TagChip, TagStack } from './tags/TagChip';
@@ -274,16 +274,17 @@ function FolderMark({ className = '' }: { className?: string }) {
 /** The pin beside a pinned session's status pill (pick-menus-4#PM4-3: "by the status,
  *  but use the pinned icon from the pinned pill"). Pinned = the stored `priority` flag. */
 function PinMark({ sessionId }: { sessionId: string }) {
-  const meta = useSessionMeta(sessionId);
+  // Display-only: the shared copy, not an editing hook per row (see state/session-meta-view.ts).
+  const meta = useSessionMetaView(sessionId);
   if (!meta.flags.priority) return null;
   return <Tooltip text="Pinned to top"><span className="shrink-0 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span></Tooltip>;
 }
 
 function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<string, TagRecord> }) {
-  // One getMeta per open row. The menu holds the live sessions of ONE window,
-  // so this is a handful of cheap reads while it is open, and nothing at all
-  // when it is shut. A bulk read would need a new channel on all five surfaces.
-  const meta = useSessionMeta(sessionId);
+  // WHY the shared view (hitch audit 2026-11-27): an editing hook per row re-asked the backend on EVERY open, twice per
+  // row (with PinMark), and each late answer re-rendered its row mid-animation. The shared copy is fetched once per
+  // session and kept, so a reopen draws the chips on its first frame.
+  const meta = useSessionMetaView(sessionId);
   const applied = [...meta.tags].map((id) => byId.get(id)).filter((t): t is TagRecord => !!t);
   // Pinned is not a tag any more (pick-menus-2#PM2-3): PinMark shows it by the status.
   if (applied.length === 0 && !meta.note) return null;

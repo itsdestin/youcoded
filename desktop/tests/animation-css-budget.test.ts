@@ -1,6 +1,7 @@
-import { join } from 'path';
+import { join, relative } from 'path';
+import { readdirSync } from 'fs';
 import { describe, it, expect } from 'vitest';
-import { RENDERER, readSource } from './helpers/guard-scope';
+import { RENDERER, readSource, assertPatternMatches } from './helpers/guard-scope';
 
 // WHY this reader (t6a review fix, 2026-09-16): these pins were written against a
 // read that normalised line endings and DELETED block comments only (not
@@ -133,3 +134,42 @@ describe('perpetual animations are frame-budgeted', () => {
     expect(mascotCss).toMatch(/data-doc-hidden[^{]*\{[^}]*animation-play-state:\s*paused/);
   });
 });
+
+// WHY (hitch audit 2026-11-27): the session menu's entrance animated margin-top — a layout property — so every frame of
+// it re-laid-out the panel and, on wallpaper themes, re-blurred its backdrop, at the moment its rows mounted: a hitch on
+// every open, shared by the model and folder pickers. An animation must move things with transform/opacity (the
+// compositor), never a property that makes the browser lay the page out again. No exceptions exist today; keep it so.
+describe('no @keyframes animates a layout property', () => {
+  const LAYOUT = /(?<![-\w])(?:margin(?:-[a-z]+)?|padding(?:-[a-z]+)?|top|left|right|bottom|width|height|(?:min|max)-(?:width|height)|inset(?:-[a-z]+)?|flex-basis|font-size|line-height|grid-template-[a-z]+)\s*:/;
+  const cssFiles = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? cssFiles(join(dir, e.name)) : e.name.endsWith('.css') ? [join(dir, e.name)] : []);
+
+  /** Each @keyframes block's name and body (nested braces balanced). */
+  function keyframes(css: string): Array<{ name: string; body: string }> {
+    const out: Array<{ name: string; body: string }> = [];
+    for (const m of css.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)) {
+      let i = m.index! + m[0].length; let depth = 1;
+      while (depth > 0 && i < css.length) { if (css[i] === '{') depth++; else if (css[i] === '}') depth--; i++; }
+      out.push({ name: m[1], body: css.slice(m.index! + m[0].length, i) });
+    }
+    return out;
+  }
+
+  it('checks every renderer stylesheet, and its pattern catches a known layout keyframe', () => {
+    assertPatternMatches(LAYOUT, 'from { opacity: 0; margin-top: -4px; }', 'a margin-top keyframe');
+    expect(LAYOUT.test('to { transform: none; border-top-color: red; }')).toBe(false);
+    expect(cssFiles(RENDERER).length).toBeGreaterThan(5);
+  });
+
+  it('finds none', () => {
+    const offenders: string[] = [];
+    for (const file of cssFiles(RENDERER)) {
+      for (const k of keyframes(readCss(relative(RENDERER, file)))) {
+        const hit = k.body.match(LAYOUT);
+        if (hit) offenders.push(`${relative(RENDERER, file)} @keyframes ${k.name}: ${hit[0]}`);
+      }
+    }
+    expect(offenders, 'Animate transform/opacity instead (see the WHY above this test).').toEqual([]);
+  });
+});
+

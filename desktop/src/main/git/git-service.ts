@@ -92,7 +92,31 @@ async function worktreeAddCounts(abs: string): Promise<GitFileCounts> {
   } catch { return { added: 0, removed: 0 }; }
 }
 
-export async function gitFileStatus(projectRoot: string, relPath: string): Promise<GitFileStatusResult> {
+// WHY one run at a time per file (hitch audit 2026-11-27): one answer costs three git processes, and starting a
+// process from the large main process blocked it for 0.4-0.6 s in the owner's stall profiles. The footer asks again on
+// every artifacts:changed / git:changed, so a burst of edits from busy sessions queued a full run per event. Now a
+// request that arrives while a run for the same file is going joins ONE follow-up run, which starts after the current
+// one ends — so it still sees every change made before it asked, and a burst costs at most two runs.
+const fileStatusRuns = new Map<string, { running: Promise<GitFileStatusResult>; next?: Promise<GitFileStatusResult> }>();
+
+export function gitFileStatus(projectRoot: string, relPath: string): Promise<GitFileStatusResult> {
+  const key = `${projectRoot}\0${relPath}`;
+  const slot = fileStatusRuns.get(key);
+  if (!slot) return startFileStatusRun(key, projectRoot, relPath);
+  // benign: the current run's error already reaches ITS caller through `running`; here it only gates when the follow-up starts.
+  slot.next ??= slot.running.catch(() => undefined).then(() => startFileStatusRun(key, projectRoot, relPath));
+  return slot.next;
+}
+
+function startFileStatusRun(key: string, projectRoot: string, relPath: string): Promise<GitFileStatusResult> {
+  const running = computeGitFileStatus(projectRoot, relPath);
+  fileStatusRuns.set(key, { running });
+  const settle = () => { if (fileStatusRuns.get(key)?.running === running && !fileStatusRuns.get(key)?.next) fileStatusRuns.delete(key); };
+  running.then(settle, settle);
+  return running;
+}
+
+async function computeGitFileStatus(projectRoot: string, relPath: string): Promise<GitFileStatusResult> {
   const loc = await locate(projectRoot, relPath);
   if (loc === 'outside') return { ok: false, error: 'path-outside-project', ...NOT_REPO };
   if (!loc) return { ok: true, ...NOT_REPO };

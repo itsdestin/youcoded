@@ -1921,18 +1921,21 @@ pre.yc-code code {
   50% { opacity: 1; }
 }
 
-/* Session strip dropdown — enter.
-   Uses opacity + margin-top only (no transform) so that
-   backdrop-filter on .glass-overlay isn't broken by a
-   persistent compositing layer from fill-mode: both. */
+/* Session strip dropdown (and FolderSwitcher, ModelPicker) — enter.
+   WHY transform, not margin-top (hitch audit 2026-11-27): margin-top is a layout property, so every frame of the
+   120 ms entrance re-laid-out the panel and re-blurred its backdrop on wallpaper themes — at the same moment the
+   menu's rows were mounting. translateY moves the same 4 px on the compositor. `to` is `transform: none` (not
+   translateY(0)), the same trick row-fade-in uses, so fill-mode: both leaves no persistent transform behind and the
+   panel's backdrop-filter is unaffected once the entrance ends. None of the three panels position themselves with a
+   transform, so nothing is overridden during the entrance. */
 @keyframes dropdown-in {
   from {
     opacity: 0;
-    margin-top: -4px;
+    transform: translateY(-4px);
   }
   to {
     opacity: 1;
-    margin-top: 0;
+    transform: none;
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChromeRect } from '../components/theme-effects-mask';
 
 // CSS classes of the always-on glassmorphism chrome panels. These are the
@@ -9,8 +9,16 @@ import type { ChromeRect } from '../components/theme-effects-mask';
 // known, accepted trade-off documented in the plan.
 const CHROME_SELECTORS = ['.header-bar', '.status-bar', '.input-bar-container'];
 
+function sameRects(a: ChromeRect[], b: ChromeRect[]): boolean {
+  return a.length === b.length && a.every((r, i) =>
+    r.left === b[i].left && r.top === b[i].top && r.width === b[i].width && r.height === b[i].height);
+}
+
 export function useChromeGeometry(): ChromeRect[] {
   const [rects, setRects] = useState<ChromeRect[]>([]);
+  // ThemeEffects reads the window size inline when it renders, and this state change is what renders it — so a
+  // window resize that leaves every chrome rect where it was must still hand back a fresh array (review 2026-11-27).
+  const viewport = useRef('');
 
   useEffect(() => {
     const elements = CHROME_SELECTORS
@@ -27,7 +35,13 @@ export function useChromeGeometry(): ChromeRect[] {
         const r = el.getBoundingClientRect();
         return { left: r.left, top: r.top, width: r.width, height: r.height };
       });
-      setRects(next);
+      // WHY keep the old array when nothing moved (hitch audit 2026-11-27): a fresh array re-rendered ThemeEffects and
+      // rebuilt its clip-path string, which repaints the full-window particle canvas — on every ResizeObserver tick of
+      // the input bar while typing, even when no rectangle changed. Same rects → same state → no render.
+      const size = `${window.innerWidth}x${window.innerHeight}`;
+      const resized = size !== viewport.current;
+      viewport.current = size;
+      setRects((prev) => (!resized && sameRects(prev, next) ? prev : next));
     };
 
     // Synchronous initial measurement avoids a frame where the canvas is
