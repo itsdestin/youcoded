@@ -13,7 +13,8 @@
 // boot, whose `safeStorage` stand-in (headless/electron-headless.ts) is keyed by a secret the Kotlin app keeps in
 // the Android Keystore. For the mesh to start on a phone that stand-in must answer, truthfully:
 //    isEncryptionAvailable() -> true only when the Keystore key really exists
-//    getSelectedStorageBackend() -> 'android_keystore' ONLY when the Keystore was really used, anything else
+//    getSelectedStorageBackend() -> 'android_keystore' ONLY when the Keystore was really used ('ios_keychain' is the
+//                                   iPhone host's equal: the key is in the iOS Keychain), anything else
 //                                   (for example the plain-preferences fallback in PairedDeviceStore.kt:50-52) must
 //                                   be reported as 'basic_text' so the mesh refuses to start.
 // If the host cannot say, it must say 'unknown'; this module treats 'unknown' as refusal.

@@ -228,12 +228,17 @@ describe('the key-store rule can refuse on the phone path', () => {
     expect(h).not.toBeNull();
     await h!.stop();
   });
-  it('the headless shim reports "unknown" until the host says otherwise, and only the exact word android_keystore counts', async () => {
+  it('the headless shim reports "unknown" until the host says otherwise, and only the exact words android_keystore and ios_keychain count', async () => {
     const shim = await import('../../src/main/headless/electron-headless');
     expect(shim.hostSecretStoreBackend()).toBe('unknown');
     shim.holdSecretStoreBackend('android_keystore');
     expect(shim.hostSecretStoreBackend()).toBe('android_keystore');
     shim.holdSecretStoreBackend('Android_Keystore');
+    expect(shim.hostSecretStoreBackend()).toBe('unknown');
+    // The iPhone host's word counts too (its key is in the iOS Keychain); a near-miss spelling does not.
+    shim.holdSecretStoreBackend('ios_keychain');
+    expect(shim.hostSecretStoreBackend()).toBe('ios_keychain');
+    shim.holdSecretStoreBackend('ios_keychain ');
     expect(shim.hostSecretStoreBackend()).toBe('unknown');
     shim.holdSecretStoreBackend(undefined);
     expect(shim.hostSecretStoreBackend()).toBe('unknown');
