@@ -47,8 +47,8 @@
   // ~100 px off). Narrowing the text column does the same on purpose. Only "next to it" is judged: in a column this
   // narrow the box is pushed in from the edge, so its left side cannot line up.
   // If the re-wrap pushes the words past the visible part of the panel, the box rightly stops at the panel's edge
-  // instead; then it must still have MOVED (a box that never follows stays exactly where it was).
-  const topBefore = box.getBoundingClientRect().top;
+  // (where it may already have been), so only "still inside the panel" can be judged then. Both journeys keep their
+  // words in view on a normal run, and both failed this check on the code that never followed (2026-11-27).
   viewer.style.maxWidth = '260px';
   await wait(100);
   await frames();
@@ -56,11 +56,10 @@
   const hlNow = segs.map((s) => s.getBoundingClientRect());
   const pr = scroller.getBoundingClientRect();
   const wordsVisible = Math.min(...hlNow.map((x) => x.top)) >= pr.top && Math.max(...hlNow.map((x) => x.bottom)) <= pr.bottom - 100;
-  const moved = Math.abs(box.getBoundingClientRect().top - topBefore) > 4;
   viewer.style.maxWidth = '';
   await frames();
-  if (wordsVisible ? rewrapped && !rewrapped.includes('not lined up') : !moved) {
-    return { ok: false, why: `after the text re-wrapped: ${rewrapped ?? 'the box did not move with its words'}` };
+  if (rewrapped && (wordsVisible ? !rewrapped.includes('not lined up') : rewrapped.includes('leaves the visible panel'))) {
+    return { ok: false, why: `after the text re-wrapped: ${rewrapped}` };
   }
   // Close it the way a user does (a click elsewhere drops an empty draft), ready for the next run.
   viewer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));

@@ -38,7 +38,10 @@
   window.__cbText = node.data;
   node.parentElement.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
   node.parentElement.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
-  for (let j = 0; j < 40 && !document.querySelector('[role=menu]'); j++) await wait(25);
+  // WHY up to 3 s: on a heavily loaded machine the menu took up to ~1 s just to draw (2026-11-27). The selection and
+  // release are sent in the same instant on purpose: the browser's "selection changed" notice for it then lands
+  // after the menu is up, which used to close it (ReadingHighlights.tsx, onSelChange).
+  for (let j = 0; j < 120 && !document.querySelector('[role=menu]'); j++) await wait(25);
   if (!document.querySelector('[role=menu]')) return { ok: false, why: 'the menu never opened on the selection' };
   // WHY scroll the chat here (2026-11-27): the chat beside the file scrolls by itself — a streaming reply, or its
   // text re-wrapping when the app's font finishes loading — and that used to close this menu (it had no anchor, so ANY

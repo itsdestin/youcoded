@@ -40,7 +40,9 @@ const HOVER_CLOSE_MS = 250;
 // A selection under this length isn't worth popping a menu over (item 1).
 const MIN_SELECTION_CHARS = 2;
 
-type SelectionMenu = { x: number; y: number; entries: MenuEntry[] };
+/** `range`: the selection the menu was opened for, kept so a selectionchange
+ *  that did not actually change it can be told apart (see onSelChange). */
+type SelectionMenu = { x: number; y: number; entries: MenuEntry[]; range: Range };
 
 /** The selection's END, for anchoring — the last of its (possibly
  *  multi-line) client rects, not the bounding box of the whole selection. */
@@ -245,8 +247,9 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
       if (sel.toString().trim().length < MIN_SELECTION_CHARS) return; // trivially small
       const entries = buildContextMenu(root);
       if (!entries) return;
-      const rect = lastRectOf(sel.getRangeAt(0));
-      setSelectionMenu({ x: rect.right, y: rect.bottom + 4, entries });
+      const range = sel.getRangeAt(0);
+      const rect = lastRectOf(range);
+      setSelectionMenu({ x: rect.right, y: rect.bottom + 4, entries, range: range.cloneRange() });
     };
     // Touch: wait for the long-press selection (and any handle drags) to
     // settle, then open the same menu.
@@ -306,7 +309,20 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     if (!selectionMenu) return;
     // On touch the selection keeps changing while handles are dragged; the
     // settle timer above reopens the menu for the final selection.
-    const onSelChange = () => setSelectionMenu(null);
+    // WHY compare (2026-11-27): the browser announces a selection change a
+    // moment AFTER it happens, as a separate event. When the words are picked
+    // and released in quick succession on a busy machine, the announcement
+    // for that very selection arrived after the menu had opened and closed
+    // it (measured: menu open, then closed 100-400 ms later, selection
+    // unchanged). Only a selection that is gone or different closes it.
+    const opened = selectionMenu.range;
+    const onSelChange = () => {
+      const sel = window.getSelection();
+      const now = sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0) : null;
+      if (now && now.startContainer === opened.startContainer && now.startOffset === opened.startOffset
+        && now.endContainer === opened.endContainer && now.endOffset === opened.endOffset) return;
+      setSelectionMenu(null);
+    };
     document.addEventListener('selectionchange', onSelChange);
     return () => document.removeEventListener('selectionchange', onSelChange);
   }, [selectionMenu]);
