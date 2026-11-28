@@ -138,7 +138,10 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
               let ok = true;
               // WHY by content, not by count (seed 202277): a peer that holds as many lines as the writer but ANOTHER history (the writer's lines were written alone after a restore) does not hold the writer's lines, and a second restore then destroys the only copy
               const holds = async (n: string, v: Buffer, upTo: number, hash: string | null): Promise<boolean> => { try { return await holdsRaw(n, v, upTo, hash); } catch { /* benign (test): a copy retired between the lookup and the read counts as not held */ return false; } };
-              const holdsRaw = async (n: string, v: Buffer, upTo: number, hash: string | null): Promise<boolean> => { const l = await world.localOf(n, v); if (!l) return upTo === 0; const hd = await world.devs[n].store.head(l); if (hd.lines < upTo) return false; return upTo === 0 || (await world.devs[n].store.hashAt(l, 0, upTo)) === hash; };
+              const holdsRaw = async (n: string, v: Buffer, upTo: number, hash: string | null): Promise<boolean> => { const l = await world.localOf(n, v); if (!l) return upTo === 0; const hd = await world.devs[n].store.head(l); if (hd.lines < upTo) return false; if (upTo === 0) return true; if ((await world.devs[n].store.hashAt(l, 0, upTo)) !== hash) return false;
+                // WHY the lines are READ, not only counted and hashed (seed 2438): a byte flipped inside a stored line leaves the head and the chain value unchanged until something reads it; a peer whose copy is silently
+                // rotted does not hold the lines, and the restore that then destroyed the writer's copy was two faults on two copies (inventory limit 1), which this oracle cannot express
+                const rd = await world.devs[n].store.read(l, 0, 0, upTo); return Array.isArray(rd); };
               // WHY every version the device holds, not only those it writes (seed 202277): a whole-profile restore also destroys the copies it holds of OTHER writers' chats and of second versions; when an earlier
               // restore of another device had already left this one as the only holder, the second restore destroyed the last copy (store limit 4), which this oracle cannot express
               for (const m of world.devs[wr].rep.versions().map((wv) => ({ v: wv }))) {
