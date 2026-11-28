@@ -367,6 +367,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           // holding them, not the text node or a highlight <mark>: a
           // highlight redraw replaces those, but never the paragraph or cell.
           anchor={anchorElementOf(selectionMenu.range.startContainer)}
+          closeIfAnchorGone
           onClose={() => setSelectionMenu(null)}
         />
       )}

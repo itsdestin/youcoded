@@ -20,6 +20,7 @@ export function ContextMenu({
   onClose,
   screen,
   anchor,
+  closeIfAnchorGone = false,
 }: {
   x: number;
   y: number;
@@ -27,6 +28,11 @@ export function ContextMenu({
   onClose: () => void;
   /** What was right-clicked. Only a scroll that moves it closes the menu. */
   anchor?: Node;
+  /** Once `anchor` has left the page, close on ANY scroll. Opt-in: the
+   *  selection menu's anchor can be redrawn away under it (ReadingHighlights);
+   *  the right-click menu keeps its own behaviour (a streaming reply may
+   *  redraw what was right-clicked, and the chat's scroll must not close it). */
+  closeIfAnchorGone?: boolean;
   /** Set when `shoot` opened this menu (photo-only build): names its mark. */
   screen?: string;
 }) {
@@ -81,11 +87,11 @@ export function ContextMenu({
     // menu opened on a spreadsheet beside it (the comment-popup-reading
     // journey failed this way under load). A page scroll (target = document)
     // still contains everything and still closes it.
-    // An anchor that has left the page (redrawn while the menu was open) can no
-    // longer say which scrolls move it, so then any scroll closes the menu, as
-    // before anchors existed — never a menu left behind by its words.
+    // closeIfAnchorGone: an anchor that has left the page (redrawn while the
+    // menu was open) can no longer say which scrolls move it, so any scroll
+    // closes the menu — never a menu left behind by its words.
     const onScroll = (e: Event) => {
-      if (!anchor || !anchor.isConnected || !(e.target instanceof Node) || e.target.contains(anchor)) onClose();
+      if (!anchor || (closeIfAnchorGone && !anchor.isConnected) || !(e.target instanceof Node) || e.target.contains(anchor)) onClose();
     };
     // Over a text box the box keeps the keyboard, so typing (or Enter sending
     // the message) means the person moved on: close rather than leave a menu
@@ -103,7 +109,7 @@ export function ContextMenu({
       window.removeEventListener('resize', onClose);
       window.removeEventListener('blur', onClose);
     };
-  }, [onClose, anchor, fieldOwnsFocus]);
+  }, [onClose, anchor, fieldOwnsFocus, closeIfAnchorGone]);
 
   const run = (entry: MenuEntry) => {
     if (entry.type !== 'item' || entry.disabled) return;
