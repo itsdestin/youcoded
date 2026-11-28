@@ -131,7 +131,7 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   for (const l of lines) c = chainStep(c, l);
   if (!c.equals(b.head.hash)) {
     ctx.bump('chain-mismatch');
-    if (baseIsMine && b.from > 0 && !run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); run.diverged = 'chain-mismatch'; await ctx.want(wire, peer, { haveLines: 0 }); }
+    if (baseIsMine && b.from > 0 && !run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); run.diverged = 'chain-mismatch'; await ctx.want(wire, peer, { haveLines: await restartPoint(ctx, wire) }); }
     throw new FrameReject('chain-mismatch');
   }
   if (staleFault) {
@@ -153,7 +153,12 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
       const backed = !!old && old.lines <= head.lines && (await ctx.store.hashAt(v.local, 0, old.lines).catch(() => null /* benign: no chain value at that count: not backed */)) === hex(old.hash);
       if (old && !backed) { await ctx.heads.dropAbove(wire, Math.min(head.lines, b.head.lines - 1)); ctx.bump('unbacked-signed-point-dropped'); kept = await ctx.heads.add(wire, { lines: b.head.lines, hash: b.head.hash, sig: b.head.sig, spanBytes: span > 0xfffffffe ? UNKNOWN_SPAN : span }); }
     }
-    if (kept === 'conflict') { run.diverged = 'writer-signed-two-histories'; ctx.bump('writer-equivocation'); throw new FrameReject('writer-equivocation'); }
+    if (kept === 'conflict') {
+      run.diverged = 'writer-signed-two-histories'; ctx.bump('writer-equivocation');
+      // WHY a look now: this copy has just become `diverged`; a second version the writer announced earlier may already say where the other history lives, and nothing else will look at it again (it no longer changes)
+      await ctx.reconsider(wire);
+      throw new FrameReject('writer-equivocation');
+    }
   }
   // 6. append, and every outcome of it
   let res: AppendResult;
@@ -274,4 +279,19 @@ async function storeFailed(ctx: RepCtx, peer: PeerInfo, wire: Buffer, e: unknown
   if (code === 'closed') return;
   run.stuck = code; // limit, bad-argument, version-conflict, unknown-version, ...
   reportFailure({ what: 'apply copied chat lines', cause: e, where: 'mesh.replicator' });
+}
+
+/** Where a "start over" ask begins for `wire` (review 4 gap round, seed 17103). A version that is a fork of another begins, by construction, with the parent's first `forkLine` lines, and the announcement names
+ *  their chain value; when MY copy has exactly that value at `forkLine`, those lines are not in question and the ask begins THERE. Asking from line 0 instead failed whenever the prefix held a line over the
+ *  frame budget: a device that made its copy of the prefix locally (fork-local) holds no saved signed point inside it, so it could only answer `unavailable` to a request that spans the prefix, and the
+ *  writer, which needs exactly such an answer to see that it signed two histories, waited for good. Anything unproven (no fork, no such line, another value) falls back to 0. */
+export async function restartPoint(ctx: RepCtx, wire: Buffer): Promise<number> {
+  const d = ctx.directory.describe(wire);
+  if (!d || !d.parent || d.forkLine === null || !d.forkHash || d.forkLine <= 0) return 0;
+  const v = await ctx.localOf(wire);
+  if (!v) return 0;
+  const h = await ctx.store.head(v.local).catch(() => null /* benign: no readable head; ask from the start as before */);
+  if (!h || h.lines < d.forkLine) return 0;
+  const at = await ctx.store.hashAt(v.local, 0, d.forkLine).catch(() => null /* benign: cannot be read; ask from the start as before */);
+  return at === d.forkHash.toString('hex') ? d.forkLine : 0;
 }

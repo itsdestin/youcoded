@@ -11,9 +11,9 @@ const LONG = N > 0;
 const SEEDS = LONG ? N : 10;
 
 // Seeds that once failed, kept as regression tests (each takes about a second): 605068 two live incarnations after an out-of-band retire raced a step; 616864 and 505206 an in-sync claim with
-// lines missing; 601614 a serve session still open at the end; 815612 two devices asking each other for a parent at full speed; 712137 in-sync before any copy was set up; 300584 a second history after the only peer heard was repairing; 300026 a recopy that finished by forking.
+// lines missing; 601614 a serve session still open at the end; 815612 two devices asking each other for a parent at full speed; 712137 in-sync before any copy was set up; 300584 a second history after the only peer heard was repairing; 300026 a recopy that finished by forking; 72047 and 72203 signed points off a copy's own chain left behind by a refused batch; 14226 two peers on different sides of a writer that went back; 17103 a second version whose first line is over one frame and whose prefix was made locally.
 describe('replicator fuzz: seeds that once failed', () => {
-  for (const seed of [605068, 616864, 505206, 601614, 300584, 300026, 400382, 400398, 400712, 815612, 712137]) {
+  for (const seed of [605068, 616864, 505206, 601614, 300584, 300026, 400382, 400398, 400712, 815612, 712137, 72047, 72203, 14226, 17103]) {
     it(`seed ${seed} passes`, async () => { await runSeed(seed); }, 60_000); // 815612 used to ping-pong for minutes and grow to gigabytes: a minute is far more than it needs now
   }
 });

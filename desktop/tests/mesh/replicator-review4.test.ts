@@ -493,7 +493,45 @@ describe('two peers, each holding a different side of the writer\'s chat (seed 1
       for (const v of world.devs[n].rep.versions()) expect(await st(world, n, v), `${n} ${v.toString('hex').slice(0, 6)}`).toMatch(/^in-sync/);
     }
     expect(moves.length, 'one move, not a repeated one').toBe(1);
+    // the second version is now announced and complete on every device. A replay of the writer's OTHER side (its own signed batch for the first version, as a slow relay may deliver late) makes C `diverged`
+    // again, and no second version will ever change after this: only a look at the announcements when the copy becomes diverged can resolve it.
+    const v2 = moves[0].movedTo; const rbLines = (await world.readAll('C', v2)).slice(0, 3);
+    const chain = rbLines.reduce((h, l) => chainStep(h, l), seed());
+    await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.C.deviceId, body: linesBody({ version: V, from: 0, lines: rbLines, head: { lines: 3, hash: chain, sig: signWith(world.ids.A, headMessage(V, 3, chain)) } }) });
+    await world.elapse(120_000, 5_000, true);
+    expect(await st(world, 'C', V), 'C does not stay diverged after a replay of the writer\'s other side').toMatch(/^in-sync/);
   }, 900_000);
+});
+
+describe('a chat whose first line is bigger than one frame (seed 17103)', () => {
+  it('a second version that moves ITSELF, when the devices made the prefix of it locally and so hold no saved signed point inside it, still resolves: the ask for the writer\'s other side starts at the fork line', async () => {
+    w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-bigprefix');
+    await world.create('A', V);
+    const big = Buffer.from(JSON.stringify({ type: 'user', message: { content: `big ${'x'.repeat(700 * 1024)}` } }) + '\n');   // over the 640 KiB frame budget: it travels alone
+    await world.append('A', V, [big, ...lineSet(5, 'pp', 1)]); await world.settle();
+    const bk0 = nodePath.join(world.dirs.A, '..', 'bk-r4-big0'); snap(world, 'A', bk0);
+    await world.append('A', V, lineSet(3, 'xx', 6)); await world.settle();
+    for (const [tag, bk] of [['rb', bk0]] as const) {
+      await down(world, 'A'); restore(world, 'A', bk); world.devs.B.carrier.setOnline(false); world.devs.C.carrier.setOnline(false);
+      await world.restart('A'); await world.elapse(8_000, 1_000, true);
+      expect((await world.append('A', V, lineSet(3, tag, 6))).result).toBe('saved');
+      world.devs.B.carrier.setOnline(true); world.devs.C.carrier.setOnline(true); await world.elapse(300_000, 10_000, true);
+    }
+    const v2 = world.devs.A.rep.selfForks()[0].movedTo;
+    const bk1 = nodePath.join(world.dirs.A, '..', 'bk-r4-big1'); snap(world, 'A', bk1);
+    await world.append('A', v2, lineSet(2, 'va', 9)); await world.settle();
+    await down(world, 'A'); restore(world, 'A', bk1); world.devs.B.carrier.setOnline(false); world.devs.C.carrier.setOnline(false);
+    await world.restart('A'); await world.elapse(8_000, 1_000, true);
+    expect((await world.append('A', v2, lineSet(2, 'vv', 9))).result).toBe('saved');
+    world.devs.B.carrier.setOnline(true); world.devs.C.carrier.setOnline(true);
+    await world.elapse(600_000, 10_000, true);
+    for (const n of ['A', 'B', 'C']) {
+      const all = await allTexts(world, n);
+      for (const t of ['xx', 'rb', 'va', 'vv']) expect(tagged(all, t), `${n} ${t}`).toBeGreaterThanOrEqual(t === 'va' || t === 'vv' ? 2 : 3);
+      for (const v of world.devs[n].rep.versions()) expect(await st(world, n, v), `${n} ${v.toString('hex').slice(0, 6)}`).toMatch(/^in-sync/);
+    }
+    expect(world.devs.A.rep.selfForks().length, 'two moves: the first version, then the second').toBe(2);
+  }, 1_200_000);
 });
 
 describe('directed self-fork cases the random schedules reach only rarely', () => {

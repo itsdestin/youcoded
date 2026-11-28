@@ -44,7 +44,7 @@ import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type 
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
 import { setupVersion } from './forks';
 import { IdMap, type Probe } from './idmap';
-import { askIntro, dropReassembly, receiveLines, sendNak } from './receive';
+import { askIntro, dropReassembly, receiveLines, restartPoint, sendNak } from './receive';
 import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
 import { isSelfForkToken, selfForkToken, type SelfForkJournal } from './selffork';
 import { onAck, onWant, pushNew } from './serve';
@@ -579,7 +579,7 @@ export class Replicator {
       // because that is how a writer meets a second history it signed (the peer's signed batches, not the nak, are the evidence).
       const wd = this.#directory.describe(n.version);
       if (!(wd && wd.writer.equals(this.#ctx.crypto.self))) run.diverged = `peer ${hex8(peer.id)} says my copy is not a prefix of theirs`; else this.#ctx.bump('nak-not-a-prefix-at-writer');
-      if (!run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); await this.want(n.version, peer, { haveLines: 0 }); }
+      if (!run.rewanted.has(peer.hex)) { run.rewanted.add(peer.hex); await this.want(n.version, peer, { haveLines: await restartPoint(this.#ctx, n.version) }); }
       return;
     }
     if (n.why === 'unavailable' || n.why === 'evicted') { run.unavailable.add(peer.hex); run.unavailableRounds++; }
@@ -641,18 +641,11 @@ export class Replicator {
     } catch (e) { reportFailure({ what: 'retry asking for chat lines', cause: e, where: 'mesh.replicator' }); }
   }
 
-  readonly #lookingAtForks = new Set<string>();
   private async reconsider(wire: Buffer): Promise<void> {
     if (this.#stopped) return;
     const ctx = this.#ctx; const run = ctx.runOf(wire);
     // a self-fork child that grew may now show which history a contradicted parent copy holds (selffork.ts); only a contradicted parent is looked at
     const dd = this.#directory.describe(wire);
-    // (and the other way round: a contradicted or diverged copy looks at the second versions its writer announced for it, which may have been announced before it was contradicted)
-    if ((run.fault || run.diverged) && !this.#lookingAtForks.has(wire.toString('hex'))) {
-      this.#lookingAtForks.add(wire.toString('hex'));
-      for (const w2 of this.#directory.list()) { const d2 = this.#directory.describe(w2); if (d2?.parent?.equals(wire) && isSelfForkToken(d2.writer, d2.token)) void this.resolveSelfFork(w2).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' })); }
-      const hexW = wire.toString('hex'); const t = setTimeout(() => this.#lookingAtForks.delete(hexW), 5_000); t.unref?.(); // at most one look every 5 s per version
-    }
     if (dd?.parent && (ctx.runOf(dd.parent).fault || ctx.runOf(dd.parent).diverged)) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
     try {
       const v = await this.localOf(wire);
@@ -696,7 +689,7 @@ export class Replicator {
       if (diverged) {
         run.diverged = `peer ${hex8(diverged.id)} claims a different history at the same point (not backed by a signed batch from it)`;
         // ask the WRITER (or the divergent peer) from line 0 once: signed batches decide what is true, never a count
-        if (!run.rewanted.has(diverged.hex)) { run.rewanted.add(diverged.hex); await this.want(wire, diverged, { haveLines: 0 }); }
+        if (!run.rewanted.has(diverged.hex)) { run.rewanted.add(diverged.hex); await this.want(wire, diverged, { haveLines: await restartPoint(this.#ctx, wire) }); }
       } else if (!pulls.length && allSync && anySeen) { run.diverged = null; run.pull = null; run.skip.clear(); run.stall?.cancel(); run.stall = null; }
       // a copy that was recopied (or restarted after being recopied) counts as caught up once at least one fresh peer claim exists and none of them holds more or something else (F1)
       // WHY at least one peer must be level with me AND none unsure (fuzz seed 300584): the only fresh peer being one that was repairing made a recopied writer believe it was caught up, and it began a second history at line 0

@@ -101,7 +101,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       const r = rand() * 100;
       const x = rand();
       const rb = rand();
-      if (rb < 0.16) {
+      if (rb < Number(process.env.MESH_REPLICATOR_ROLLBACK_BIAS ?? 0.16)) { // (the bias is raised by a batch aimed at whole-profile restores of a writer with peers holding different sides)
         const writers = NAMES.filter((n) => vs.some((v) => writer.get(v.toString('hex')) === n) && online.has(n));
         if (!writers.length) { note('rollback-skipped'); }
         else {
@@ -364,7 +364,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     }
     await world.settle();
     watchAcks();
-    if (process.env.MESH_REPLICATOR_DUMP) for (const [i, cv] of vs.entries()) for (const n of NAMES) { const lc = await world.localOf(n, cv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ROOT#${i} ${n} lines ${JSON.stringify(Array.isArray(tx) ? tx.map((l: Buffer) => (l.toString().match(/(\w+-\d+) (\d+)/) ?? ['?'])[0]) : tx)} status ${(await world.devs[n].rep.status(cv)).state}\n`); }
+    if (process.env.MESH_REPLICATOR_DUMP) for (const n of NAMES) { const hd = nodePath.join(world.dirs[n], 'replicator', 'heads'); if (fs.existsSync(hd)) for (const f of fs.readdirSync(hd)) { const raw = fs.readFileSync(nodePath.join(hd, f)); const pts: number[] = []; for (let o = 0; o + 112 <= raw.length; o += 112) pts.push(Number(raw.readBigUInt64BE(o))); fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} POINTS ${n} ${f.slice(0, 6)} bytes ${raw.length} points ${JSON.stringify(pts)}\n`); } }
+    if (process.env.MESH_REPLICATOR_DUMP) for (const [i, cv] of vs.entries()) for (const n of NAMES) { const lc = await world.localOf(n, cv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ROOT#${i} ${n} lines ${JSON.stringify(Array.isArray(tx) ? tx.map((l: Buffer) => (l.length > 4096 ? `big${l.length}` : (l.toString().match(/(\w+-\d+) (\d+)/) ?? ['?'])[0])) : tx)} status ${(await world.devs[n].rep.status(cv)).state}\n`); }
     if (process.env.MESH_REPLICATOR_DUMP) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} CHATS ${JSON.stringify(vs.map((v, i) => [i, v.toString('hex').slice(0, 6), writer.get(v.toString('hex')), oracle.get(v.toString('hex'))?.length]))} rolled ${JSON.stringify([...rolled].map((r) => r.slice(0, 6)))}\n`);
     // ---- review 3: the ledger of lines told saved, for chats whose writer moved lines into a second version (a self-fork): both versions are checked together
     const forks = new Map<string, Buffer[]>();
@@ -387,7 +388,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       const per = new Map<string, Array<{ lines: string[]; state: string; reason: string | null } | null>>();
       for (const n of NAMES) per.set(n, await Promise.all(group.map((gv) => linesOf(n, gv))));
       if (process.env.MESH_REPLICATOR_DUMP) {
-        const tagOf = (l: string): string => (l.match(/(\w+-\d+) (\d+)/) ?? ['?'])[0];
+        const tagOf = (l: string): string => (l.length > 4096 ? `big${l.length}` : (l.match(/(\w+-\d+) (\d+)/) ?? ['?'])[0]); // (a regex over a 17 MiB line took longer than the whole run)
         for (const n of NAMES) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ${n} describe ${JSON.stringify(group.map((gv) => { const d = world.devs[n].rep.describe(gv); return d ? [gv.toString('hex').slice(0, 6), d.writer.toString('hex').slice(0, 4), d.parent?.toString('hex').slice(0, 6) ?? null, d.forkLine ?? null] : null; }))} me ${world.ids[n].deviceId.toString('hex').slice(0, 4)}\n`);
         for (const n of NAMES) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ${n} statuses ${JSON.stringify(await Promise.all(group.map(async (gv) => world.devs[n].rep.status(gv).then((x) => x.state + '/' + x.reason))))} counters ${JSON.stringify(world.devs[n].rep.counters())} forks ${JSON.stringify(world.devs[n].rep.selfForks().map((f) => [f.version.toString('hex').slice(0, 6), f.from, f.movedTo.toString('hex').slice(0, 6)]))} versions ${JSON.stringify(await Promise.all(group.map(async (gv, gi) => [gv.toString('hex').slice(0, 6), (per.get(n)?.[gi]?.lines ?? []).map(tagOf), per.get(n)?.[gi]?.state])))}\n`);
       }
