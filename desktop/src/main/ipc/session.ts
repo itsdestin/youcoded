@@ -345,8 +345,12 @@ const sessionEntries: MainChannelDef[] = [
       // it is entered in the map only after its native start finishes; browsing in that window offered the
       // brand-new conversation as resumable. The old phone lookup excluded every live id; this keeps that for
       // native ids only (a Claude desktop id matches no transcript, and the tests pin it stays out).
+      // WHY provider, not nativeHost.isNativeSessionId (hitch audit 2026-11-27): that fell back to a synchronous
+      // scan of the whole native sessions folder once PER open session on every browse. An open session's
+      // SessionInfo is stamped provider:'native' at creation, before its native start finishes — so this also
+      // covers the start-up window the WHY above describes, with no disk read at all.
       for (const live of sessionManager.listSessions()) {
-        if (nativeHost.isNativeSessionId(live.id)) activeIds.add(live.id);
+        if (live.provider === 'native') activeIds.add(live.id);
       }
       // Native rows join the SAME enrichment pass Claude Code rows get (flags/tags/note/device/title
       // precedence, lastUsedModel); NativeSessionHost stays the one source of truth for what exists.

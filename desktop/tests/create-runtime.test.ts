@@ -189,6 +189,28 @@ describe('createRuntime with a temp folder and a fake platform', () => {
     expect(settled).toBe(true);
   });
 
+  // WHY (hitch audit 2026-11-27): the record's live source used to ask "was this id EVER native", which scans
+  // the whole native sessions folder synchronously for any id that is not live — every Claude Code session —
+  // on every event and every summary tick. With ~1,800 session files that was the app's biggest main-thread
+  // stall. Events and summaries must never list the folder, however many sessions or events there are.
+  it('records events and builds summaries for Claude Code sessions without listing the native sessions folder', async () => {
+    const { NativeHome } = await import('../src/main/native-home');
+    const list = vi.spyOn(NativeHome.prototype, 'listSessionFiles');
+    const ids = Array.from({ length: 17 }, (_, i) => `cc-session-${i}`);
+    try {
+      for (const id of ids) runtime.records.open(id);
+      for (let n = 0; n < 60; n++) {
+        for (const id of ids) runtime.records.note(id, 'transcript:event', { type: 'assistant-text', text: `word ${n}` });
+      }
+      runtime.records.summaries();
+      for (const id of ids) runtime.records.facts(id);
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      for (const id of ids) runtime.records.drop(id);
+      list.mockRestore();
+    }
+  });
+
   it('tells a subscribed door when an automatic title lands (the core never paints windows)', async () => {
     const heard: Array<[string, string]> = [];
     runtime.onTitleApplied((id, title) => heard.push([id, title]));
