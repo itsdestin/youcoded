@@ -577,6 +577,26 @@ describe('a copy that holds lines without a signature, and a peer that cannot se
   }, 300_000);
 });
 
+describe('the older side is held only by a copy whose saved signed points are gone (seed 203433)', () => {
+  it('the writer went back and signed another history; the only holder of the older lines cannot prove them: both stay NAMED, nothing is overwritten, nothing is asked at full speed', async () => {
+    w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-no-points');
+    await world.create('A', V); await world.settle();
+    const bk = nodePath.join(world.dirs.A, '..', 'bk-r4-no-points'); snap(world, 'A', bk);
+    await world.append('A', V, lineSet(3, 'ss')); await world.settle();
+    const older = await textOf(world, 'C', V);
+    world.devs.B.carrier.setOnline(false);
+    await down(world, 'C'); fs.rmSync(nodePath.join(world.dirs.C, 'replicator', 'heads'), { recursive: true, force: true }); await world.restart('C');   // C keeps its lines, loses the proof of them
+    world.devs.C.carrier.setOnline(false);                                                                                                                  // the writer comes back alone: its gate opens because nobody can be heard
+    await down(world, 'A'); restore(world, 'A', bk); await world.restart('A'); await world.elapse(8_000, 1_000, true);
+    expect((await world.append('A', V, lineSet(3, 'rb'))).result).toBe('saved');
+    world.devs.C.carrier.setOnline(true);
+    await world.elapse(900_000, 10_000, true);
+    expect(await textOf(world, 'C', V), 'C still holds exactly what it held').toEqual(older);
+    for (const n of ['A', 'C']) expect(await st(world, n, V), `${n} is named, not in-sync`).not.toMatch(/^in-sync/);
+    for (const n of ['A', 'C']) { const c = world.devs[n].rep.counters(); expect((c['cover-fetch'] ?? 0) + (c['nak-unavailable'] ?? 0), `${n} does not ask over and over`).toBeLessThan(400); }
+  }, 900_000);
+});
+
 describe('directed self-fork cases the random schedules reach only rarely', () => {
   it('a second version moves ITSELF: chat on in V2, restore the writer to a profile from before, chat alone in V2, meet', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-v2self');

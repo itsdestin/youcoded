@@ -64,6 +64,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
   const stopDevice = async (d: string): Promise<void> => { await world.devs[d].rep.idle(); world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close(); };
   const putBack = async (wr: string, s2: { dir: string }): Promise<void> => {
     await stopDevice(wr);
+    ops['replicator-folder-put-back'] = (ops['replicator-folder-put-back'] ?? 0) + 1;
     for (const k of ['store', 'replicator', 'witness']) { fs.rmSync(nodePath.join(world.dirs[wr], k), { recursive: true, force: true }); if (fs.existsSync(nodePath.join(s2.dir, k))) fs.cpSync(nodePath.join(s2.dir, k), nodePath.join(world.dirs[wr], k), { recursive: true }); }
     const lp = nodePath.join(world.dirs[wr], 'store', 'LOCK'); if (fs.existsSync(lp)) fs.writeFileSync(lp, JSON.stringify({ ...JSON.parse(fs.readFileSync(lp, 'utf8')), pid: 2147483646, start: 'dead' }));
     await world.restart(wr, { graceful: false });
@@ -233,6 +234,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             fs.rmSync(e.dir, { recursive: true, force: true });
             await world.restart(dd, { graceful: false }); if (!online.has(dd)) world.devs[dd].carrier.setOnline(false);
             if (kind !== 'restore-store') lostIntro.add(dd);
+            ops['replicator-folder-put-back'] = (ops['replicator-folder-put-back'] ?? 0) + 1;
             note(kind);
           } else if (e) { fs.rmSync(e.dir, { recursive: true, force: true }); note('restore-skipped'); }
         } else if (writesSomething) {
@@ -252,7 +254,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         const d = pick(NAMES); await world.devs[d].rep.idle(); world.devs[d].rep.stop(); world.devs[d].link.stop(); await world.devs[d].store.close();
         const all: string[] = []; const walk = (dir: string): void => { if (!fs.existsSync(dir)) return; for (const f of fs.readdirSync(dir)) { const pth = nodePath.join(dir, f); if (fs.statSync(pth).isDirectory()) walk(pth); else all.push(pth); } };
         walk(nodePath.join(world.dirs[d], 'replicator')); walk(nodePath.join(world.dirs[d], 'witness'));
-        if (all.length) { const f = pick(all); const raw = fs.readFileSync(f); if (raw.length) { raw[Math.floor(rand() * raw.length)] ^= 1 << Math.floor(rand() * 8); fs.writeFileSync(f, raw); } }
+        if (all.length) { const f = pick(all); if (f.includes(`${nodePath.sep}heads${nodePath.sep}`)) ops['signed-points-file-rotted'] = (ops['signed-points-file-rotted'] ?? 0) + 1; const raw = fs.readFileSync(f); if (raw.length) { raw[Math.floor(rand() * raw.length)] ^= 1 << Math.floor(rand() * 8); fs.writeFileSync(f, raw); } }
         await world.restart(d, { graceful: false }); if (!online.has(d)) world.devs[d].carrier.setOnline(false);
         note('rot-any-file');
       } else if (r < 34 && x >= 0.19 && rand() < 0.2 && kidsOf().length) { // review 4: the writer chats on in a second version too (so a second version can itself be rolled back and moved)
@@ -439,6 +441,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
           const r = per.get(n)?.[gi]; if (!r) continue;
           for (const l of r.lines) if (!told.has(l)) fail(`${n} holds a line in ${gv.toString('hex').slice(0, 6)} that nobody was ever told saved for (ledger)`);
           if (r.state === 'in-sync') calm.push(r.lines.join('\n'));
+          // WHY excused only with its cause present (seed 203433): a copy whose saved signed points were damaged or put back holds lines no signature covers; when the writer then signs ANOTHER history the copy refuses it
+          // (`unsigned-lines-contradicted`) and the writer, which has lost its own record of the older lines, cannot tell which side is older, so neither side can be proven right: both stay named and loud, nothing is overwritten
+          else if (r.state === 'diverged' && /unsigned-lines-contradicted/.test(r.reason ?? '') && ((ops['signed-points-file-rotted'] ?? 0) > 0 || (ops['replicator-folder-put-back'] ?? 0) > 0)) { excuses.push(`${n}:limit:signed-points-lost-then-writer-signed-another-history`); }
           else if (r.state === 'diverged' && /writer-two-histories/.test(r.reason ?? '')) fail(`${n} still waits for the writer on ${gv.toString('hex').slice(0, 6)} although the writer is back and everything is online`);
         }
         if (new Set(calm).size > 1) fail(`devices that say in-sync differ on ${gv.toString('hex').slice(0, 6)} (ledger)`);
