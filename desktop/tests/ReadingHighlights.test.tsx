@@ -11,8 +11,8 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { createRef } from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest';
+import { render, act } from '@testing-library/react';
 import { ReadingHighlights } from '../src/renderer/components/comments/ReadingHighlights';
 import { addComment, resolveComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
 import { genRefId, type ComposeRef } from '../src/renderer/components/context-menu/compose-ref';
@@ -157,4 +157,82 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     // Linear is ~10x; a pass that rewalked the document per comment is ~100x. 30x sits well clear of both.
     expect(large / Math.max(small, 1)).toBeLessThan(30);
   }, STRESS_TEST_BUDGET_MS);
+});
+
+describe('the menu that opens on a released selection', () => {
+  // jsdom draws nothing, so a text range has no on-screen boxes; the menu only needs some position to open at.
+  beforeAll(() => {
+    Range.prototype.getClientRects ??= (() => []) as unknown as Range['getClientRects'];
+    Range.prototype.getBoundingClientRect ??= (() => new DOMRect(0, 0, 10, 10)) as Range['getBoundingClientRect'];
+  });
+  // jsdom (unlike a browser) clears a text selection when the menu takes focus, then announces that late — which
+  // would race every assertion here. Focus is not what these tests are about.
+  let focusSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => {}); });
+  afterEach(() => { focusSpy.mockRestore(); getSelection()?.removeAllRanges(); });
+  // WHY: the browser announces a selection change as its own event a moment later. Picked and released quickly on a
+  // busy machine, the announcement for the SAME selection arrived after the menu opened and closed it.
+  async function openMenuOnSelection() {
+    const containerRef = createRef<HTMLDivElement>();
+    const utils = render(
+      <div ref={containerRef} data-artifact-viewer="">
+        <div data-testid="inner-scroller" style={{ overflowX: 'auto' }}><p>First line of the document, long enough to select.</p></div>
+        <p>Second line of the document, also long enough.</p>
+        <ReadingHighlights containerRef={containerRef} path="test-fixtures/selection-menu.md" onOpenComments={() => {}} />
+      </div>,
+    );
+    // Stands in for the chat panel: a scroller beside the file, not around it.
+    const beside = document.createElement('div');
+    utils.container.appendChild(beside);
+    const [first, second] = Array.from(utils.container.querySelectorAll('p'));
+    const range = document.createRange();
+    range.selectNodeContents(first.firstChild!);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    await act(async () => {
+      first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      first.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    });
+    await vi.waitFor(() => expect(document.querySelector('[role=menu]')).not.toBeNull());
+    return { second, beside, inner: utils.getByTestId('inner-scroller') };
+  }
+
+  it('stays open when the selection-changed event arrives late for the same selection', async () => {
+    await openMenuOnSelection();
+    await act(async () => { document.dispatchEvent(new Event('selectionchange')); });
+    expect(document.querySelector('[role=menu]')).not.toBeNull();
+  });
+
+  it('closes when the selection really changes', async () => {
+    const { second } = await openMenuOnSelection();
+    await act(async () => {
+      const r = document.createRange();
+      r.selectNodeContents(second.firstChild!);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(r);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(document.querySelector('[role=menu]')).toBeNull();
+  });
+
+  it('closes when the selection is cleared', async () => {
+    await openMenuOnSelection();
+    await act(async () => {
+      getSelection()!.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(document.querySelector('[role=menu]')).toBeNull();
+  });
+
+  it('stays open when a scroller beside the file (the chat) scrolls', async () => {
+    const { beside } = await openMenuOnSelection();
+    await act(async () => { beside.dispatchEvent(new Event('scroll')); });
+    expect(document.querySelector('[role=menu]')).not.toBeNull();
+  });
+
+  it('closes when a scroller inside the file that holds the words scrolls (a wide table)', async () => {
+    const { inner } = await openMenuOnSelection();
+    await act(async () => { inner.dispatchEvent(new Event('scroll')); });
+    expect(document.querySelector('[role=menu]')).toBeNull();
+  });
 });

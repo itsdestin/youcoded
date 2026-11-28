@@ -9,8 +9,21 @@
     "params": ""
   },
   "steps": [
-    { "do": "expect", "control": { "role": "button", "label": "Comments 3" } },
-    { "do": "wait-scroll-idle", "area": "chat" },
+    {
+      "do": "expect",
+      "control": {
+        "role": "button",
+        "label": "Comments 3"
+      }
+    },
+    {
+      "do": "wait-scroll-idle",
+      "area": "chat"
+    },
+    {
+      "do": "check",
+      "file": "comment-popup-reading.ready.check.js"
+    },
     {
       "do": "right-click",
       "target": {
@@ -21,8 +34,18 @@
     },
     {
       "do": "click",
-      "target": { "role": "menuitem", "label": "Add comment", "nth": 1 }
+      "target": {
+        "role": "menuitem",
+        "label": "Add comment",
+        "nth": 1
+      }
     },
-    { "do": "expect", "control": { "role": "textbox", "label": "New comment" } }
+    {
+      "do": "expect",
+      "control": {
+        "role": "textbox",
+        "label": "New comment"
+      }
+    }
   ]
 }
