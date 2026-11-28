@@ -23,15 +23,20 @@
   // exactly those messages. This check guards the first-draw plan, not font loading, so the theme's font is
   // made to finish BEFORE the conversation opens. Capped, so an offline run (font never comes) measures in the
   // fallback font, which is just as stable, rather than hanging.
+  // WHY 40 s, not 10 (2026-11-27): in a full verify run on a loaded machine (load 57-190 on 32 threads) the font took
+  // about 19 s, so the 10 s cap gave up and Nunito landed mid-measurement ("Nunito 400 at 8825 ms", a lasting 68.5px
+  // jump, 4 of 6 full runs; 0 of 8 alone). A font that is merely slow must be waited for; an offline run still ends
+  // at once, because the failed stylesheet leaves no font to load.
+  const FONT_WAIT_MS = 40000;
   const tFonts = performance.now();
   const fontLink = document.getElementById('theme-google-font');
   if (fontLink && !fontLink.sheet) {
-    await Promise.race([new Promise((r) => { fontLink.addEventListener('load', r, { once: true }); fontLink.addEventListener('error', r, { once: true }); }), wait(10000)]);
+    await Promise.race([new Promise((r) => { fontLink.addEventListener('load', r, { once: true }); fontLink.addEventListener('error', r, { once: true }); }), wait(FONT_WAIT_MS)]);
   }
   const family = getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim();
   // Every weight the chat can use (body, semi-bold names, bold markdown), not only the ones the Home page drew.
-  if (family) await Promise.race([Promise.all(['400', '600', '700', '800'].map((w) => document.fonts.load(`${w} 16px ${family}`).catch(() => null))), wait(10000)]);
-  await Promise.race([document.fonts.ready, wait(10000)]);
+  if (family) await Promise.race([Promise.all(['400', '600', '700', '800'].map((w) => document.fonts.load(`${w} 16px ${family}`).catch(() => null))), wait(FONT_WAIT_MS)]);
+  await Promise.race([document.fonts.ready, wait(FONT_WAIT_MS)]);
   const fontWaitMs = Math.round(performance.now() - tFonts);
   // WHY recorded: should a font still land mid-measurement (a theme change, a weight not listed above), the
   // failure says so instead of looking like the first-draw plan moving text.
