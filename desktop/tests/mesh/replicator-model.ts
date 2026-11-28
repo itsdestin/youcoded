@@ -133,7 +133,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
                 await putBack(wr, snapUse); await world.elapse(8_000, 2_000, true);
                 const head = await headLines(wr, tgt.v);
                 const ls = lineSet(1 + Math.floor(rand() * 3), `rb${seed}-${counter++}`, head);
-                await world.append(wr, tgt.v, ls).then(() => { for (const l of ls) { told.add(l.toString()); toldBy.set(l.toString(), tgt.root); toldNow.push(l.toString()); } rolled.add(tgt.root); }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version|self-fork/.test(String(e))) throw e; });
+                await world.append(wr, tgt.v, ls).then((r) => { ops[`meet-append-${tgt === target ? 'root' : 'v2'}-${r.result}`] = (ops[`meet-append-${tgt === target ? 'root' : 'v2'}-${r.result}`] ?? 0) + 1; if (r.result !== 'saved') return; for (const l of ls) { told.add(l.toString()); toldBy.set(l.toString(), tgt.root); toldNow.push(l.toString()); } rolled.add(tgt.root); }, (e) => { ops[`meet-append-${tgt === target ? 'root' : 'v2'}-threw`] = (ops[`meet-append-${tgt === target ? 'root' : 'v2'}-threw`] ?? 0) + 1; if (!/refilling|version-not-ready|writer-|unknown version|self-fork/.test(String(e))) throw e; });
                 for (const n of wasOnline) if (n !== wr) world.devs[n].carrier.setOnline(true);
               };
               await meet();
@@ -150,10 +150,16 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
                   for (const k of ['store', 'replicator', 'witness']) if (fs.existsSync(nodePath.join(world.dirs[wr], k))) fs.cpSync(nodePath.join(world.dirs[wr], k), nodePath.join(dir3, k), { recursive: true });
                   await world.restart(wr, { graceful: true });
                   const s3 = { dev: wr, dir: dir3, lines: new Map<string, number>() }; wsnaps.push(s3);
+                  await world.elapse(8_000, 2_000, true); // WHY: a just-restarted writer refuses until its gate opens; without this wait the "chat" here was refused and nothing ever disagreed
                   const h3 = await headLines(wr, kid.v); const l3 = lineSet(2, `v2a${seed}-${counter++}`, h3);
-                  await world.append(wr, kid.v, l3).then(() => { for (const l of l3) { told.add(l.toString()); toldBy.set(l.toString(), kid.root); } }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version|self-fork/.test(String(e))) throw e; });
+                  await world.append(wr, kid.v, l3).then((r) => { ops[`v2-chat-${r.result}`] = (ops[`v2-chat-${r.result}`] ?? 0) + 1; if (r.result !== 'saved') return; for (const l of l3) { told.add(l.toString()); toldBy.set(l.toString(), kid.root); } }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version|self-fork/.test(String(e))) throw e; });
                   await world.elapse(60_000, 10_000, true);
-                  if (await isSafe()) { await meet(s3, kid); await world.elapse(150_000, 10_000, true); }
+                  if (await isSafe()) {
+                    await meet(s3, kid); await world.elapse(150_000, 10_000, true);
+                    const moved = world.devs[wr].rep.selfForks().some((f) => f.version.equals(kid.v)); const stt = await world.devs[wr].rep.status(kid.v);
+                    ops[`v2-after-meet-${moved ? 'moved' : 'notmoved'}-${stt.state}`] = (ops[`v2-after-meet-${moved ? 'moved' : 'notmoved'}-${stt.state}`] ?? 0) + 1;
+                    if (process.env.MESH_REPLICATOR_V2DBG && !moved) fs.appendFileSync(process.env.MESH_REPLICATOR_V2DBG, `texts ${JSON.stringify(await Promise.all(NAMES.map(async (n) => { const lc = await world.localOf(n, kid.v); const rd = lc ? await world.devs[n].store.read(lc, 0, 0, (await world.devs[n].store.head(lc)).lines) : null; return Array.isArray(rd) ? rd.map((l: Buffer) => l.toString().slice(0, 14)) : null; })))} s3lines ${JSON.stringify(Array.from(s3.lines))} l3 ${JSON.stringify(l3.map((l) => l.toString().slice(-26)))} peerCounters ${JSON.stringify(NAMES.filter((n) => n !== wr).map((n) => world.devs[n].rep.counters()))} seed ${seed} kid ${kid.v.toString('hex').slice(0, 6)} writerHead ${await headLines(wr, kid.v)} peers ${JSON.stringify(await Promise.all(NAMES.filter((n) => n !== wr).map(async (n) => [n, online.has(n), await headLines(n, kid.v)])))} counters ${JSON.stringify(world.devs[wr].rep.counters())}\n`);
+                  } else ops['v2-meet-unsafe'] = (ops['v2-meet-unsafe'] ?? 0) + 1;
                 }
               }
               if (variant === 'again' && (await isSafe())) { await meet(); await world.elapse(150_000, 10_000, true); }
