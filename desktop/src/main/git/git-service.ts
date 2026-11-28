@@ -103,6 +103,7 @@ export function gitFileStatus(projectRoot: string, relPath: string): Promise<Git
   const key = `${projectRoot}\0${relPath}`;
   const slot = fileStatusRuns.get(key);
   if (!slot) return startFileStatusRun(key, projectRoot, relPath);
+  // benign: the current run's error already reaches ITS caller through `running`; here it only gates when the follow-up starts.
   slot.next ??= slot.running.catch(() => undefined).then(() => startFileStatusRun(key, projectRoot, relPath));
   return slot.next;
 }

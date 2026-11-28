@@ -115,25 +115,29 @@ describe('StallProfiler', () => {
     try {
       const p = new StallProfiler({ dir: tmp() });
       p.start();
-      const startsAfterBoot = post.mock.calls.filter((c) => c[0] === 'Profiler.start').length;
+      const startsAfterBoot = post.mock.calls.filter((c) => (c[0] as string) === 'Profiler.start').length;
       vi.advanceTimersByTime(9 * 60_000);
-      expect(post.mock.calls.filter((c) => c[0] === 'Profiler.start').length).toBe(startsAfterBoot);
+      expect(post.mock.calls.filter((c) => (c[0] as string) === 'Profiler.start').length).toBe(startsAfterBoot);
       vi.advanceTimersByTime(60_000);
-      expect(post.mock.calls.filter((c) => c[0] === 'Profiler.start').length).toBe(startsAfterBoot + 1);
+      expect(post.mock.calls.filter((c) => (c[0] as string) === 'Profiler.start').length).toBe(startsAfterBoot + 1);
       await p.stop();
     } finally { post.mockRestore(); vi.useRealTimers(); }
   });
 
   it('a saved profile keeps only the samples around the stall, with recounted hits', () => {
     // 600 samples one second apart (profile clock in microseconds), window closed at wall time 1,000,000 ms.
-    const samples = Array.from({ length: 600 }, (_, i) => (i % 2) + 1);
-    const profile = { nodes: [{ id: 1, hitCount: 300 }, { id: 2, hitCount: 300 }], startTime: 0, endTime: 600e6, samples, timeDeltas: samples.map(() => 1e6) };
+    // Tree: root 0 → 1, 2, 3; samples alternate 1/2 except the first 100 (node 3, early, outside the slice).
+    const samples = Array.from({ length: 600 }, (_, i) => (i < 100 ? 3 : (i % 2) + 1));
+    const profile = { nodes: [{ id: 0, children: [1, 2, 3] }, { id: 1, hitCount: 250 }, { id: 2, hitCount: 250 }, { id: 3, hitCount: 100 }], startTime: 0, endTime: 600e6, samples, timeDeltas: samples.map(() => 1e6) };
     const end = 1_000_000;
     const cut = sliceProfile(profile, end, end - 40_000, end - 10_000);   // the 30 s ending 10 s before the window closed
     expect(cut.samples.length).toBe(31);
     expect(cut.timeDeltas[0]).toBe(0);
     expect(cut.endTime - cut.startTime).toBe(30e6);
     expect(cut.nodes.reduce((n, x) => n + (x.hitCount ?? 0), 0)).toBe(31);
+    // Nodes the slice never uses are dropped, ancestors kept, and children lists follow.
+    expect(cut.nodes.map((n) => n.id).sort()).toEqual([0, 1, 2]);
+    expect(cut.nodes.find((n) => n.id === 0)!.children).toEqual([1, 2]);
     // A range that matches nothing keeps the whole window rather than losing it.
     expect(sliceProfile(profile, end, 0, 1).samples.length).toBe(600);
   });

@@ -106,5 +106,19 @@ describe('useChromeGeometry', () => {
     act(() => { StubResizeObserver.instances[0].trigger(); });
     expect(result.current).toBe(before);
   });
+
+  // ThemeEffects reads the window size during render, and this hook's state change is what renders it.
+  it('hands back a fresh array when the window resized even though no chrome rect moved', () => {
+    makeChrome('header-bar', { left: 0, top: 0, width: 1280, height: 40 });
+    const { result } = renderHook(() => useChromeGeometry());
+    const before = result.current;
+    const width = window.innerWidth;
+    try {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width + 200 });
+      act(() => { StubResizeObserver.instances[0].trigger(); });
+      expect(result.current).not.toBe(before);
+      expect(result.current).toEqual(before);
+    } finally { Object.defineProperty(window, 'innerWidth', { configurable: true, value: width }); }
+  });
 });
 

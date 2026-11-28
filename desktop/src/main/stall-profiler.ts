@@ -65,9 +65,18 @@ export function sliceProfile(profile: CpuProfile, endedAtMs: number, fromMs: num
     last = t;
   }
   if (samples.length === 0) return profile; // nothing matched (clock mapping off): keep the whole window, never lose it
+  // Keep only the call-tree nodes the kept samples use, plus their ancestors, so a file holds the slice's tree and not
+  // the whole window's (a 10-minute tree is several times larger than the 30 s that matter).
+  const parent = new Map<number, number>();
+  for (const n of profile.nodes) for (const c of (n.children as number[] | undefined) ?? []) parent.set(c, n.id);
+  const keep = new Set<number>();
+  for (const id of hits.keys()) for (let at: number | undefined = id; at !== undefined && !keep.has(at); at = parent.get(at)) keep.add(at);
   return {
     ...profile,
-    nodes: profile.nodes.map((n) => ({ ...n, hitCount: hits.get(n.id) ?? 0 })),
+    nodes: profile.nodes.filter((n) => keep.has(n.id)).map((n) => ({
+      ...n, hitCount: hits.get(n.id) ?? 0,
+      ...(Array.isArray(n.children) ? { children: (n.children as number[]).filter((c) => keep.has(c)) } : {}),
+    })),
     startTime: first, endTime: last, samples, timeDeltas,
   };
 }
@@ -133,7 +142,10 @@ export class StallProfiler {
       this.done.push(w);
       // Four, not two: a stall waiting out the burst gap must still find its window after a timer rotation and the
       // flush's own rotation.
-      if (this.done.length > 4) this.done.shift();
+      // WHY three (2026-11-27, with the 10-minute window): the window a stall is in, the one before it (a timer rotation
+      // may land while the stall waits out the save gap) and the flush's own tiny one. Four 10-minute windows would hold
+      // ~40 minutes of raw profile in the main process for nothing.
+      if (this.done.length > 3) this.done.shift();
       return w;
     } catch { this.teardown(); return null; }
   }

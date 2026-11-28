@@ -8,7 +8,7 @@ import React from 'react';
 import { useSessionMetaView, resetSessionMetaViewForTests } from '../src/renderer/state/session-meta-view';
 
 let metaChanged: (() => void) | null = null;
-const getMeta = vi.fn(async (id: string) => ({ tags: [`tag-of-${id}`], note: '', flags: { priority: id === 'a' } }));
+const getMeta = vi.fn(async (id: string): Promise<{ tags: string[]; note: string; flags: { priority?: boolean } }> => ({ tags: [`tag-of-${id}`], note: '', flags: { priority: id === 'a' } }));
 
 function Row({ id }: { id: string }) {
   const m = useSessionMetaView(id);

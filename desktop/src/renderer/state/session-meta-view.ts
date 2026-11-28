@@ -38,10 +38,14 @@ function read(sessionId: string): void {
   Promise.resolve((window as any).claude?.session?.getMeta?.(sessionId))
     .then((m: SessionMetaResult | undefined) => {
       if (reads.get(sessionId) !== mine) return;
+      // Nobody shows it any more: drop the answer, so a meta change missed meanwhile can't leave it stale for the next
+      // reader (that reader simply asks again).
+      if (!readers.get(sessionId)?.size) return;
       views.set(sessionId, toView(m));
       readers.get(sessionId)?.forEach((f) => f());
     })
-    .catch(() => { /* keep what is shown; a failed read of a display-only copy never blanks it */ })
+    // benign: a failed read of this display-only copy keeps what is shown; editing surfaces (useSessionMeta) report their own failures.
+    .catch(() => {})
     .finally(() => { if (reads.get(sessionId) === mine) inflight.delete(sessionId); });
 }
 
