@@ -119,7 +119,13 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             // the lines the restore takes away must be held by an online peer (store limit 4: a copy that exists nowhere is gone, which this oracle cannot express)
             const isSafe = async (): Promise<boolean> => {
               let ok = true;
-              for (const m of mineOf(wr)) { const now = await headLines(wr, m.v); if (!NAMES.filter((n) => n !== wr).some((n) => online.has(n)) || !(await Promise.all(NAMES.filter((n) => n !== wr && online.has(n)).map((n) => headLines(n, m.v)))).some((h) => h >= now)) ok = false; }
+              // WHY by content, not by count (seed 202277): a peer that holds as many lines as the writer but ANOTHER history (the writer's lines were written alone after a restore) does not hold the writer's lines, and a second restore then destroys the only copy
+              const holds = async (n: string, v: Buffer, upTo: number, hash: string | null): Promise<boolean> => { const l = await world.localOf(n, v); if (!l) return upTo === 0; const hd = await world.devs[n].store.head(l); if (hd.lines < upTo) return false; return upTo === 0 || (await world.devs[n].store.hashAt(l, 0, upTo)) === hash; };
+              for (const m of mineOf(wr)) {
+                const lw = await world.localOf(wr, m.v); const now = lw ? (await world.devs[wr].store.head(lw)).lines : 0; const myHash = lw && now ? ((await world.devs[wr].store.hashAt(lw, 0, now)) as string) : null;
+                const ons = NAMES.filter((n) => n !== wr && online.has(n));
+                if (!ons.length || !(await Promise.all(ons.map((n) => holds(n, m.v, now, myHash)))).some(Boolean)) ok = false;
+              }
               return ok;
             };
             const safe = lostNow.length > 0 && (await isSafe());
@@ -366,6 +372,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     watchAcks();
     if (process.env.MESH_REPLICATOR_DUMP) for (const n of NAMES) { const hd = nodePath.join(world.dirs[n], 'replicator', 'heads'); if (fs.existsSync(hd)) for (const f of fs.readdirSync(hd)) { const raw = fs.readFileSync(nodePath.join(hd, f)); const pts: number[] = []; for (let o = 0; o + 112 <= raw.length; o += 112) pts.push(Number(raw.readBigUInt64BE(o))); fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} POINTS ${n} ${f.slice(0, 6)} bytes ${raw.length} points ${JSON.stringify(pts)}\n`); } }
     if (process.env.MESH_REPLICATOR_DUMP) for (const [i, cv] of vs.entries()) for (const n of NAMES) { const lc = await world.localOf(n, cv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ROOT#${i} ${n} lines ${JSON.stringify(Array.isArray(tx) ? tx.map((l: Buffer) => (l.length > 4096 ? `big${l.length}` : (l.toString().match(/(\w+-\d+) (\d+)/) ?? ['?'])[0])) : tx)} status ${(await world.devs[n].rep.status(cv)).state}\n`); }
+    if (process.env.MESH_REPLICATOR_DUMP) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} LOSTINTRO ${JSON.stringify([...lostIntro])}\n`);
     if (process.env.MESH_REPLICATOR_DUMP) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} CHATS ${JSON.stringify(vs.map((v, i) => [i, v.toString('hex').slice(0, 6), writer.get(v.toString('hex')), oracle.get(v.toString('hex'))?.length]))} rolled ${JSON.stringify([...rolled].map((r) => r.slice(0, 6)))}\n`);
     // ---- review 3: the ledger of lines told saved, for chats whose writer moved lines into a second version (a self-fork): both versions are checked together
     const forks = new Map<string, Buffer[]>();
@@ -406,7 +413,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         if (owner !== vk) continue;
         for (const n of NAMES) {
           const rs = per.get(n) ?? []; if (!rs.length || !rs.every((r) => r && r.state === 'in-sync')) continue; // a device in a named state is excused by that state
-          if (!rs.some((r) => r?.lines.includes(line))) fail(`a line told saved (${line.slice(-40).replace(/\s+/g, ' ')}) is held by ${n} in neither ${vk.slice(0, 6)} nor its second version (ledger); version #${vs.indexOf(V)}; holders ${JSON.stringify(NAMES.map((x) => [x, group.map((_, gi) => (per.get(x)?.[gi]?.lines.includes(line) ? 1 : 0) + ':' + per.get(x)?.[gi]?.state + ':' + per.get(x)?.[gi]?.lines.length)]))}; group ${group.length}`);
+          if (!rs.some((r) => r?.lines.includes(line))) fail(`a line told saved (${(line.match(/[a-z]+\d+-\d+(?:-\d+)? \d+/) ?? [line.slice(0, 60)])[0]}) is held by ${n} in neither ${vk.slice(0, 6)} nor its second version (ledger); version #${vs.indexOf(V)}; holders ${JSON.stringify(NAMES.map((x) => [x, group.map((_, gi) => (per.get(x)?.[gi]?.lines.includes(line) ? 1 : 0) + ':' + per.get(x)?.[gi]?.state + ':' + per.get(x)?.[gi]?.lines.length)]))}; group ${group.length}`);
         }
       }
     }
