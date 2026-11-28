@@ -11,13 +11,7 @@ type NativeStorage = {
   isEncryptionAvailable(): boolean;
   encryptString(value: string): Buffer;
   decryptString(value: Buffer): string;
-  /** Electron 36+: initialises the ASYNC encryptor without blocking. Optional: the headless stand-in lacks it. */
-  isAsyncEncryptionAvailable?(): Promise<boolean>;
 };
-
-/** How long the warm-up waits for the wallet to open before falling back to the old (blocking) path.
- *  A locked wallet showing an unlock prompt must not hold secret operations hostage forever. */
-const ASYNC_OPEN_TIMEOUT_MS = 10_000;
 
 /** Preserve Electron's normal path; only Linux's cached failure needs a fresh
  * process. The helper still uses safeStorage, not a second encryption format. */
@@ -35,26 +29,8 @@ export class RecoverableSafeStorage implements SecretStorage {
   private async warm(): Promise<void> {
     if (this.platform !== 'linux' || !this.warmUp) return;
     // One shared attempt, so concurrent first calls all wait on the same wake-up instead of each starting their own.
-    this.warming ??= this.warmUp().catch(() => { /* best effort: without it we behave as before */ })
-      .then(() => this.openWalletAsync());
+    this.warming ??= this.warmUp().catch(() => { /* best effort: without it we behave as before */ });
     await this.warming;
-  }
-
-  /** WHY (hitch audit 2026-11-27): waking the wallet daemons (warmUp) was not enough — desktop.log still showed
-   *  "keychain-available" at 3.8-7.8 s on launches after it shipped, all of it inside the SYNCHRONOUS native probe
-   *  (saved stall profiles: needsHelper), i.e. every window frozen. The slow part is the wallet itself opening, not
-   *  the daemon starting. Electron's async encryptor opens the same wallet without blocking, so by the time the
-   *  synchronous probe runs the daemon already holds it open. Additive only: nothing is encrypted or decrypted
-   *  through the async encryptor, so the on-disk ciphertext format is unchanged. Unverified on a cold wallet in
-   *  the lab (cannot be reproduced without stopping the owner's wallet); desktop.log's keychain-available timing
-   *  after release is the check. */
-  private async openWalletAsync(): Promise<void> {
-    if (typeof this.native.isAsyncEncryptionAvailable !== 'function') return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, ASYNC_OPEN_TIMEOUT_MS); timer.unref?.(); });
-    try {
-      await Promise.race([this.native.isAsyncEncryptionAvailable().then(() => undefined, () => undefined), timeout]);
-    } finally { if (timer) clearTimeout(timer); }
   }
 
   private needsHelper(): boolean {

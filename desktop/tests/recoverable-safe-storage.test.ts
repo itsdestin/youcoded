@@ -85,39 +85,6 @@ describe('keychain warm-up before the first native probe', () => {
     expect(order[0]).toBe('warm');
     expect(warmUp).toHaveBeenCalledTimes(1);
   });
-  // The daemons being awake was not enough: the wallet itself opened inside the synchronous probe (3.8-7.8 s in
-  // desktop.log after the daemon warm-up shipped). The async encryptor opens it without blocking, first.
-  it('opens the wallet through the non-blocking check before the first synchronous probe', async () => {
-    const order: string[] = [];
-    let opened!: () => void;
-    const native = {
-      isEncryptionAvailable: vi.fn(() => { order.push('sync'); return true; }),
-      encryptString: vi.fn((v: string) => Buffer.from(v)),
-      decryptString: vi.fn((v: Buffer) => v.toString()),
-      isAsyncEncryptionAvailable: vi.fn(() => new Promise<boolean>((r) => { opened = () => { order.push('async'); r(true); }; })),
-    };
-    const storage = new RecoverableSafeStorage(native, 'linux', () => ({ request: vi.fn() }), async () => undefined);
-    const pending = storage.isEncryptionAvailable();
-    await vi.waitFor(() => expect(native.isAsyncEncryptionAvailable).toHaveBeenCalledTimes(1));
-    expect(native.isEncryptionAvailable).not.toHaveBeenCalled();
-    opened();
-    expect(await pending).toBe(true);
-    await storage.encryptString('x');
-    expect(order.slice(0, 2)).toEqual(['async', 'sync']);
-    expect(native.isAsyncEncryptionAvailable).toHaveBeenCalledTimes(1);
-  });
-  it('stops waiting for a wallet that never opens (a locked wallet) and carries on as before', async () => {
-    vi.useFakeTimers();
-    try {
-      const native = {
-        isEncryptionAvailable: vi.fn(() => true), encryptString: vi.fn(), decryptString: vi.fn(),
-        isAsyncEncryptionAvailable: vi.fn(() => new Promise<boolean>(() => {})),
-      };
-      const pending = new RecoverableSafeStorage(native as any, 'linux', () => ({ request: vi.fn() }), async () => undefined).isEncryptionAvailable();
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(await pending).toBe(true);
-    } finally { vi.useRealTimers(); }
-  });
   it('carries on if the warm-up fails, and never runs it off Linux', async () => {
     const native = { isEncryptionAvailable: vi.fn(() => true), encryptString: vi.fn(), decryptString: vi.fn() };
     const bad = vi.fn(async () => { throw new Error('no busctl'); });
