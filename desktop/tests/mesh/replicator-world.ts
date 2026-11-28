@@ -143,7 +143,7 @@ export async function repWorld(names: string[], o: WorldOptions = {}) {
       return null;
     },
     /** `localOf` that must exist. */
-    async local(n: string, v: Buffer): Promise<Buffer> { const l = await world.localOf(n, v); if (!l) throw new Error(`${n} holds no copy of the version`); return l; },
+    async local(n: string, v: Buffer): Promise<Buffer> { const l = await world.localOf(n, v); if (!l) throw new Error(`${n} holds no copy of the version${process.env.MESH_REPLICATOR_STACK ? " " + (new Error().stack ?? "").split("\n").slice(2, 5).join(" | ") : ""}`); return l; },
     async heads(n: string, v: Buffer): Promise<{ lines: number; hash: string; conv: string }> {
       const local = await world.localOf(n, v);
       if (!local) return { lines: 0, hash: '', conv: '' };

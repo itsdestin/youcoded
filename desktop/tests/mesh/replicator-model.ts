@@ -224,7 +224,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       } else if (r < 34 && x >= 0.19 && rand() < 0.2 && kidsOf().length) { // review 4: the writer chats on in a second version too (so a second version can itself be rolled back and moved)
         const [kid, root] = pick(kidsOf()); const wr = writer.get(root) as string;
         const ls = lineSet(1 + Math.floor(rand() * 3), `k${seed}-${counter++}`, 0);
-        const head = await world.devs[wr].store.head(await world.local(wr, kid)).catch(() => null);
+        // (a restore may have taken the second version away from the writer; then there is nothing to chat on)
+        const kidLocal = await world.localOf(wr, kid); const head = kidLocal ? await world.devs[wr].store.head(kidLocal).catch(() => null) : null;
         if (head) await world.append(wr, kid, ls.map((l, i) => lineSet(1, `k${seed}-${counter}-${i}`, head.lines + i)[0])).then(() => { for (let i = 0; i < ls.length; i++) { const l = lineSet(1, `k${seed}-${counter}-${i}`, head.lines + i)[0]; told.add(l.toString()); toldBy.set(l.toString(), root); } counter++; }, (e) => { if (!/refilling|version-not-ready|writer-|unknown version|self-fork/.test(String(e))) throw e; });
         note('append-second-version');
       } else if (r < 34) { // the writer appends one to four lines
