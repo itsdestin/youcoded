@@ -493,6 +493,8 @@ describe('two peers, each holding a different side of the writer\'s chat (seed 1
       for (const v of world.devs[n].rep.versions()) expect(await st(world, n, v), `${n} ${v.toString('hex').slice(0, 6)}`).toMatch(/^in-sync/);
     }
     expect(moves.length, 'one move, not a repeated one').toBe(1);
+    // the invariant behind every retire in the replicator: nothing is deleted, the set-aside copy of the moved side stays on disk (in the store's aside folder) next to the live ones
+    expect(fs.readdirSync(nodePath.join(world.dirs.B, 'store', 'aside')).length, 'B kept its set-aside copy of the side that moved').toBeGreaterThanOrEqual(1);
     // the second version is now announced and complete on every device. A replay of the writer's OTHER side (its own signed batch for the first version, as a slow relay may deliver late) makes C `diverged`
     // again, and no second version will ever change after this: only a look at the announcements when the copy becomes diverged can resolve it.
     const v2 = moves[0].movedTo; const rbLines = (await world.readAll('C', v2)).slice(0, 3);
