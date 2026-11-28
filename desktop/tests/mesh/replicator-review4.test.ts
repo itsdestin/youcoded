@@ -548,6 +548,21 @@ describe('directed self-fork cases the random schedules reach only rarely', () =
   }, 600_000);
 });
 
+describe('a continuation of a refused history is never appended onto my own lines', () => {
+  it('after the writer\'s signed batch of ANOTHER history was refused, a signed batch that continues THAT history is refused too (the base is my own chain value), and my lines stay as they were', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-splice');
+    await world.create('A', V); await world.append('A', V, lineSet(6, 'old')); await world.settle();
+    world.devs.A.rep.stop(); const keep = await textOf(world, 'B', V);
+    const fork = lineSet(6, 'FORK'); const ch6 = fork.reduce((h, l) => chainStep(h, l), seed());
+    const more = lineSet(2, 'FORKMORE', 6); const ch8 = more.reduce((h, l) => chainStep(h, l), ch6);
+    const send = async (from: number, lines: Buffer[], total: number, hash: Buffer): Promise<void> => { await world.devs.A.link.sendDurable({ group: chatGroup(world.setId, CHAT), kind: KIND_LINES, line: true, to: world.ids.B.deviceId, body: linesBody({ version: V, from, lines, head: { lines: total, hash, sig: signWith(world.ids.A, headMessage(V, total, hash)) } }) }); };
+    await send(0, fork, 6, ch6); await world.elapse(20_000, 5_000, true);     // another history, as long as B's copy: refused
+    await send(6, more, 8, ch8); await world.elapse(60_000, 10_000, true);    // its continuation: must be refused too
+    expect(await textOf(world, 'B', V)).toEqual(keep);
+    expect((await textOf(world, 'B', V)).some((l) => /FORKMORE/.test(l))).toBe(false);
+  });
+});
+
 describe('F6: the same count of lines with different content is chased to where the lines part', () => {
   it('A and B both hold 15 lines that agree for 11 and then differ: the writer moves its four lines to a second version, and both end in sync (the ask goes on past the first shared signed point)', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-f6');
