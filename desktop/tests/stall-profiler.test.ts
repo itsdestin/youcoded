@@ -141,4 +141,70 @@ describe('StallProfiler', () => {
     // A range that matches nothing keeps the whole window rather than losing it.
     expect(sliceProfile(profile, end, 0, 1).samples.length).toBe(600);
   });
+
+  // 140-350 ms stalls locked to a timer ran hundreds of times an hour and no profile ever named them. One per 10 minutes is
+  // noted and saved at the NEXT scheduled rotation (no extra profiler restart, which would itself stall).
+  it('saves one short stall per ten minutes at the next scheduled rotation, under its own small cap', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const dir = tmp();
+    let clock = Date.parse('2026-11-28T10:00:00Z');
+    // maxFiles 2: with one shared cap, three short samples would have evicted the long freeze's profile.
+    const p = new StallProfiler({ dir, now: () => clock, windowMs: 60_000, maxFiles: 2 });
+    try {
+      p.start();
+      // A long freeze's profile exists first; short samples must never push it out.
+      await p.onStall(clock, 3000);
+      for (let i = 0; i < 6; i++) {
+        clock += 10 * 60_000;
+        p.onShortStall(clock, 400);
+        p.onShortStall(clock + 1000, 350);           // a second one inside the ten minutes is ignored
+        vi.advanceTimersByTime(60_000);              // the scheduled rotation saves it
+        await p.stop().catch(() => {}); p.start();   // flush pending writes, keep going
+      }
+      const names = fs.readdirSync(dir).filter((n) => n.endsWith('.cpuprofile'));
+      const shorts = names.filter((n) => n.startsWith('short-stall-'));
+      expect(shorts).toHaveLength(3);
+      expect(shorts.every((n) => n.endsWith('-400ms.cpuprofile'))).toBe(true);
+      expect(names.some((n) => n.startsWith('stall-') && n.includes('3000ms'))).toBe(true);
+      // Under 120 ms is never noted; a 2 s+ stall belongs to onStall.
+      clock += 10 * 60_000;
+      p.onShortStall(clock, 110);
+      vi.advanceTimersByTime(60_000);
+      await p.stop();
+      expect(fs.readdirSync(dir).filter((n) => n.includes('110ms'))).toEqual([]);
+    } finally { await p.stop().catch(() => {}); vi.useRealTimers(); }
+  });
+
+  it('notes at most one short stall per ten minutes, even after the last one was saved', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const dir = tmp();
+    let clock = Date.parse('2026-11-28T12:00:00Z');
+    const p = new StallProfiler({ dir, now: () => clock, windowMs: 60_000 });
+    try {
+      p.start();
+      clock += 5000; p.onShortStall(clock, 400);
+      clock += 60_000; vi.advanceTimersByTime(60_000);   // saved at this rotation
+      clock += 2 * 60_000; p.onShortStall(clock, 500);    // three minutes after the first: too soon
+      clock += 60_000; vi.advanceTimersByTime(60_000);
+      await p.stop();
+      const shorts = fs.readdirSync(dir).filter((n) => n.startsWith('short-stall-') && n.endsWith('.cpuprofile'));
+      expect(shorts).toHaveLength(1);
+      expect(shorts[0]).toMatch(/-400ms\.cpuprofile$/);
+    } finally { await p.stop().catch(() => {}); vi.useRealTimers(); }
+  });
+
+  it('ignores a short stall that ends right after a rotation (most likely the profiler restart itself)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const dir = tmp();
+    let clock = Date.parse('2026-11-28T13:00:00Z');
+    const p = new StallProfiler({ dir, now: () => clock, windowMs: 60_000 });
+    try {
+      p.start();
+      clock += 500; p.onShortStall(clock, 150);           // 0.5 s into the window
+      clock += 60_000; vi.advanceTimersByTime(60_000);
+      await p.stop();
+      expect(fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith('short-stall-')) : []).toEqual([]);
+    } finally { await p.stop().catch(() => {}); vi.useRealTimers(); }
+  });
 });
+

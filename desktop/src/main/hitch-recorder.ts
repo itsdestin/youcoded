@@ -135,7 +135,7 @@ export interface RecorderDeps {
   startTimer?: boolean;
   env?: NodeJS.ProcessEnv;
   /** Saves a CPU profile when a stall of STALL_PROFILE_MIN_MS or more ends (stall-profiler.ts). */
-  stallProfiler?: { onStall: (endedAtMs: number, ms: number) => Promise<void>; stop: () => Promise<void> } | null;
+  stallProfiler?: { onStall: (endedAtMs: number, ms: number) => Promise<void>; onShortStall?: (endedAtMs: number, ms: number) => void; stop: () => Promise<void> } | null;
 }
 
 interface WindowState { id: string; minStart: number; minCount: number; severeCount: number; batchStart: number; batchCount: number; swStart: number; swCount: number }
@@ -320,6 +320,8 @@ export class HitchRecorder {
         });
         // A long stall also saves the CPU profile that covers it, named with the SAME timestamp as the line above.
         if (maxMs >= STALL_PROFILE_MIN_MS) void this.d.stallProfiler?.onStall(nowMs, maxMs).catch(() => {});
+        // A shorter one is noted for a sampled profile (at most one per 10 minutes; see SHORT_STALL_PROFILE_MS).
+        else this.d.stallProfiler?.onShortStall?.(nowMs, maxMs);
       }
       if (++this.tick % 60 === 0) this.onMinute();
     } catch { /* ignore */ }
