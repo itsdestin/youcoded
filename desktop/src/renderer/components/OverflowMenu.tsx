@@ -24,7 +24,7 @@ import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactConte
 import { GamepadIcon, GlobeIcon } from './Icons';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { useArtifactCount } from '../hooks/useArtifactCount';
-import { Tooltip } from './ui';
+import { Button, Tooltip } from './ui';
 import { FOCUS_RING } from './ui/Button';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
@@ -160,6 +160,32 @@ function RowTiles({ rows }: { rows: Row[] }) {
         </button>
       ))}
     </div>
+  );
+}
+
+/** The full-screen phone menu ALTERNATIVE (2026-11-28, header/phone-screen-menu.tsx): the
+ *  places Destin named (Projects, Pages, Games) and Settings as its own button at the bottom.
+ *  Session files and Browser are NOT here: in this version they sit at top right (his note on
+ *  U-8: "browser can stay next to session files"). `layout` is the drawn version: rows or tiles
+ *  just above Settings, or (`top`) lifted under New session with flex `order`. */
+export function ScreenMenuFooter({ layout, ...props }: Props & { layout: 'rows' | 'tiles' | 'top' }) {
+  const { rows } = useOverflowRows(props, (fn) => fn);
+  const places = rows.filter((r) => r.key === 'projects' || r.key === 'pages' || r.key === 'games');
+  const settings = rows.find((r) => r.key === 'settings')!;
+  return (
+    <>
+      <div className={`shrink-0 ${layout === 'top' ? 'px-2 pb-1' : 'border-t border-edge py-1'}`} style={{ order: layout === 'top' ? -1 : 1 }}>
+        {layout === 'rows' ? <RowButtons rows={places} /> : <RowTiles rows={places} />}
+      </div>
+      <div className="shrink-0 px-3 pt-1 pb-3" style={{ order: 2 }}>
+        {/* Through the Button primitive (control-primitives rule). */}
+        <Button variant="secondary" size="md" className="w-full gap-2" onClick={settings.onClick}>
+          {settings.icon}
+          <span>Settings</span>
+          {settings.dot && <span className={`w-1.5 h-1.5 rounded-full ${settings.dot}`} />}
+        </Button>
+      </div>
+    </>
   );
 }
 

@@ -9,8 +9,8 @@ import { getCapabilities, isAndroid, isRemoteMode } from '../platform';
 import { fingerSized } from '../device';   // device.ts: touch screen or narrow window
 // Artifact drawer trigger — reads session artifact count for the badge.
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
-import OverflowMenu, { DrawerMenuButton, OverflowRowList } from './OverflowMenu';
-import { workbenchNarrowTop, workbenchNarrowPills } from '../workbench-mode';
+import OverflowMenu, { DrawerMenuButton, OverflowRowList, ScreenMenuFooter } from './OverflowMenu';
+import { workbenchNarrowTop, workbenchNarrowPills, workbenchPhoneMenu } from '../workbench-mode';
 import { SessionLights } from './header/phone-session-menu';
 import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
@@ -288,7 +288,7 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
  *  Always rendered (so the drawer is reachable before any files exist); only
  *  the count badge is conditional. (An earlier plan hid the whole button at
  *  zero — that changed; this comment used to say so and was stale.) */
-function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionId: string | null; projectRoot?: string }) {
+function ArtifactDrawerButton({ activeSessionId, projectRoot, hideCount }: { activeSessionId: string | null; projectRoot?: string; hideCount?: boolean }) {
   const dispatch = useArtifactDispatch();
   // Open/closed is per-session — reflect (and toggle) the ACTIVE session's flag.
   // A narrow selector, so another session's file activity does not redraw it.
@@ -335,7 +335,8 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
         {/* Count badge — only shown when there are tracked artifacts. Flips to
             bg-on-accent/text-accent while open so it stays legible against the
             now-accent-colored button background. */}
-        {artifactCount > 0 && (
+        {/* hideCount: the phone menu alternative's top-right button carries no number (Destin, 2026-11-27). */}
+        {artifactCount > 0 && !hideCount && (
           <span className={`text-3xs rounded-full px-1 min-w-[14px] inline-flex items-center justify-center leading-none py-0.5 ${
             drawerOpen ? 'bg-on-accent text-accent' : 'bg-accent text-on-accent'
           }`}>
@@ -421,6 +422,10 @@ export default React.memo(function HeaderBar({
   // Close, or a Mac's three on the left) has no room for Projects, so it lives in ☰ there, and the name
   // starts right after ☰ instead of centring. Phones keep Projects on the bar (round 5 N-1 yes).
   const windowButtonsBar = narrowTop === 'lights' && getCapabilities().nativeWindows;
+  // Phone menu ALTERNATIVE (2026-11-28, youcoded-dev …/2026-11-04-narrow-screens/phone-menu.json):
+  // ☰ and the name are ONE button at the left that opens a full-screen menu; Browser and Session
+  // files (no number) sit at top right beside the terminal switch. Workbench-only, not chosen.
+  const menuBar = narrowTop === 'menu';
   // Q-3: the REMOTE label moves into the pill row under the message box
   // (StatusBar draws it there when the compact pills are on).
   const remoteInPills = narrow && workbenchNarrowPills() === 'compact';
@@ -450,7 +455,7 @@ export default React.memo(function HeaderBar({
       windowDirectory={windowDirectory}
       myWindowId={myWindowId}
       menuApiRef={stripApi}
-      drawerFooter={narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
+      drawerFooter={menuBar ? <ScreenMenuFooter {...overflowProps} layout={workbenchPhoneMenu()} /> : narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
     />
   );
 
@@ -559,7 +564,8 @@ export default React.memo(function HeaderBar({
   // Round 8 (Destin on the phone bar: "doesn't quite feel well centered/visually balanced"): with + gone
   // the phone has room again, so its name centres on the SCREEN (equal reservation, as today); only a
   // window with its own buttons keeps per-side widths, its name already sitting left.
-  const ownWidths = windowButtonsBar;
+  // The menu alternative's name starts at the left edge, so neither side reserves a matching width.
+  const ownWidths = windowButtonsBar || menuBar;
   const clusterStyle: React.CSSProperties | undefined = ownWidths ? undefined : reservedWidth != null
     ? { flex: '0 0 auto', width: `${reservedWidth}px`, transition: 'width 200ms ease' }
     : undefined;
@@ -598,7 +604,7 @@ export default React.memo(function HeaderBar({
         className={`header-controls-left ${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
         style={clusterStyle}
       >
-        {narrowTop === 'drawer' || narrowTop === 'hub' ? (
+        {menuBar ? null /* ☰ is part of the name button in the middle */ : narrowTop === 'drawer' || narrowTop === 'hub' ? (
           /* Side-drawer top bar: ☰ opens the session drawer, which carries
              the menu's places under the sessions — one panel, not two. */
           <DrawerMenuButton {...overflowProps} onOpen={() => stripApi.current?.openList()} />
@@ -650,13 +656,26 @@ export default React.memo(function HeaderBar({
       {/* Round 7 (Destin on round 6: "the alignment is all fucked up"): the whole name stack moves left,
           but the lights stay centred under the name (round 6 left them hanging past the dot), and the
           stack keeps a gap before the terminal switch instead of its arrow touching it. */}
-      <div className={`flex-1 min-w-0 flex ${windowButtonsBar ? 'justify-start pr-2' : 'justify-center'}`}>
+      <div className={`flex-1 min-w-0 flex ${windowButtonsBar || menuBar ? 'justify-start pr-2' : 'justify-center'}`}>
       {/* Round 4 (Destin picked the lights bar: "prettier … clean up the dead space and improve
           alignment/centering"): the name, its arrow AND the lights are one stack with ONE hover
           background, so the lights read as part of the button. Only that bar gets the wrapper: the
           strip measures its PARENT's width to pack pills, and a `display: contents` wrapper has none
           (the desktop journeys found every pill but the active one gone). */}
-      {narrowTop === 'lights' ? (
+      {menuBar ? (
+      // One button: ☰, then the name with the status lights under it, left-aligned with the name
+      // (Destin on U-3: "they still stay under the name, to the right of the 3-line button. but they
+      // align with the left side of name now"). The contains() check: the menu is a portal whose
+      // clicks still bubble here through React, so its close button would reopen it otherwise.
+      <div onClick={(e) => { if (e.currentTarget.contains(e.target as Node)) stripApi.current?.openList(); }} className="session-name-stack group isolate relative cursor-pointer flex items-center gap-0.5 min-w-0 max-w-full pr-1 py-2">
+      <span aria-hidden className="absolute inset-x-0 inset-y-1 -z-10 rounded-lg pointer-events-none transition-colors group-hover:bg-inset" />
+      <DrawerMenuButton {...overflowProps} onOpen={() => stripApi.current?.openList()} />
+      <div className="relative flex flex-col items-start min-w-0">
+      {sessionStrip}
+      <span className="absolute -bottom-1.5 left-1.5"><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>
+      </div>
+      </div>
+      ) : narrowTop === 'lights' ? (
       // Round 4 (Destin: "make the whole hoverable area of the current name dropdown button area
       // clickable"): the stack takes the click itself, so its padding and the gaps between dot,
       // name, arrow and lights all open the list. The name and arrow inside pass their clicks up
@@ -707,6 +726,10 @@ export default React.memo(function HeaderBar({
             </button>
           </Tooltip>
         )}
+        {/* Menu alternative: Browser and Session files come back to the bar, beside the terminal switch
+            (Destin on U-8: "browser can stay next to session files"). */}
+        {menuBar && <BrowserHeaderButton sessionId={activeSessionId} />}
+        {menuBar && <ArtifactDrawerButton activeSessionId={activeSessionId} projectRoot={sessions.find((s) => s.id === activeSessionId)?.cwd} hideCount />}
         {(narrow || !toggleOnLeft) && showToggle && toggleElement}
         {/* Files-drawer trigger — always visible; only the count badge is
             conditional (the original hide-at-zero plan was dropped — see the

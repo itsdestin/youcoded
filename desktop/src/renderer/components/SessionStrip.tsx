@@ -4,6 +4,7 @@ import { markPointerSwitch } from '../hooks/use-focus-composer-after-switch';
 import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
 import { Button, SectionLabel, Toggle, Tooltip } from './ui';
+import { ScreenMenuPrevious, useScreenMenuQuery, matchesScreenQuery } from './header/phone-screen-menu';
 import { phoneMenuStyle, usePhoneMenu, PhoneCount, PhoneMenuTop, PhoneMenuScrim, PhoneDrawerFooter, PhoneRecent } from './header/phone-session-menu';
 import { getCapabilities, isAndroid } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
@@ -422,6 +423,7 @@ export default function SessionStrip({
   // Round 3 `hub` bar: ☰ opens the list as the everything-panel, the name opens it as the plain list.
   const [hubMode, setHubMode] = useState(false);
   const menuShape = hubMode ? 'hub' : listShape;
+  const screenQuery = useScreenMenuQuery(); // full-screen menu alternative: its search box filters open rows too
   const [shiftNavIdx, setShiftNavIdx] = useState<number>(-1);
   const shiftNavActive = useRef(false);
   // Photo-only build: `shoot` opens the list, or the Shift-hold switcher (the same list, Shift-navigation armed).
@@ -2130,7 +2132,7 @@ export default function SessionStrip({
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 // A plain-title bar's name IS the list button (round 3); the arrow beside it does the same.
-                onClick={(e) => (narrowTop === 'lights' ? undefined /* the name stack owns the click */ : plainTitle ? handleMenuToggle() : handleClick(s.id, e))}
+                onClick={(e) => (narrowTop === 'lights' || narrowTop === 'menu' ? undefined /* the name stack owns the click */ : plainTitle ? handleMenuToggle() : handleClick(s.id, e))}
                 onContextMenu={(e) => handlePillContextMenu(e, s.id)}
                 // 'html-drag' only (Linux/Wayland): the browser starts a native
                 // drag from the press. Everywhere else the pointer path owns
@@ -2289,12 +2291,12 @@ export default function SessionStrip({
           <Tooltip text="All sessions">
           <button
             ref={triggerBtnRef}
-            onClick={narrowTop === 'lights' ? undefined : handleMenuToggle}
+            onClick={narrowTop === 'lights' || narrowTop === 'menu' ? undefined : handleMenuToggle}
             aria-label={narrowTop !== 'today' && hiddenCount > 0 ? `All sessions (${hiddenCount} more)` : undefined}
             className={`flex items-center justify-center gap-0.5 h-5 ${plainTitle ? '-ml-1' : 'ml-1'} rounded-sm ${plainTitle ? '' : 'hover:bg-inset'} transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && !plainTitle && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
           >
             {narrowTop !== 'today' && !plainTitle && <PhoneCount n={hiddenCount} />}
-            <svg className={`w-3 h-3 shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg className={`w-3 h-3 shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''} ${narrowTop === 'menu' ? 'hidden' /* menu alternative: no dropdown, so no arrow */ : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
@@ -2356,7 +2358,7 @@ export default function SessionStrip({
                   margin/layout (design lint no-restyle), and margin keeps
                   this a flat sibling of the list below (SessionStrip.test.tsx
                   finds it via `heading.nextElementSibling`). */}
-              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : menuShape === 'hub' ? 'Open now' : phoneRows ? 'Your sessions' : 'Sessions in this window'}</SectionLabel>
+              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : menuShape === 'screen' ? 'Active sessions' : menuShape === 'hub' ? 'Open now' : phoneRows ? 'Your sessions' : 'Sessions in this window'}</SectionLabel>
             </>
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
@@ -2435,6 +2437,7 @@ export default function SessionStrip({
             >
               <div className="py-1">
               {sessions.map((s, idx) => {
+                if (menuShape === 'screen' && !matchesScreenQuery(s.name, screenQuery)) return null;
                 const color = sessionStatuses?.get(s.id) || 'gray';
                 const isBeingDragged = dragId === s.id && dragActive;   // see dragActive
                 return (
@@ -2645,6 +2648,7 @@ export default function SessionStrip({
                 );
               })}
               </div>
+              {menuShape === 'screen' && <ScreenMenuPrevious openIds={new Set(sessions.flatMap((x) => [x.id, x.name]))} onOpen={() => { setMenuOpen(false); onOpenResumeBrowser(); }} />}
             </div>
           )}
 
@@ -2898,7 +2902,7 @@ export default function SessionStrip({
                 {dangerous && runtime !== 'native' ? 'Create (dangerous)' : 'Create session'}
               </Button>
             </div>
-          ) : menuShape === 'hub' ? (
+          ) : menuShape === 'screen' ? null : menuShape === 'hub' ? (
             /* The hub has New session on top and Earlier + See all for Resume. */
             <PhoneRecent shape={menuShape} openIds={new Set(sessions.flatMap((x) => [x.id, x.name]))} onSeeAll={() => { setMenuOpen(false); onOpenResumeBrowser(); }} />
           ) : (

@@ -25,8 +25,10 @@ import { formatRelativeTime } from '../../utils/format-time';
 import { Scrim } from '../overlays/Overlay';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { workbenchNarrowTop, workbenchNarrowList } from '../../workbench-mode';
+import { ScreenMenuTop } from './phone-screen-menu';
 
-export type MenuShape = 'today' | 'dropdown' | 'sheet' | 'full' | 'drawer' | 'hub';
+// `screen` — the full-screen menu ALTERNATIVE (2026-11-28, phone-screen-menu.tsx).
+export type MenuShape = 'today' | 'dropdown' | 'sheet' | 'full' | 'drawer' | 'hub' | 'screen';
 type PhoneShape = Exclude<MenuShape, 'today'>;
 
 /** Which phone top bar and list shape the strip draws. Both switches are
@@ -39,10 +41,10 @@ export function usePhoneMenu() {
   // is open), so the name's list is at least the full-width dropdown there.
   const round3 = narrowTop === 'plain' || narrowTop === 'lights' || narrowTop === 'hub';
   const list = narrow ? workbenchNarrowList() : 'today';
-  const menuShape: MenuShape = narrowTop === 'drawer' ? 'drawer' : round3 && list === 'today' ? 'dropdown' : list;
+  const menuShape: MenuShape = narrowTop === 'menu' ? 'screen' : narrowTop === 'drawer' ? 'drawer' : round3 && list === 'today' ? 'dropdown' : list;
   // "a more simply styled name dropdown button kinda like drawer": no pill
   // outline; the dot, the name and the arrow share ONE hover background.
-  const plainTitle = narrowTop === 'drawer' || round3;
+  const plainTitle = narrowTop === 'drawer' || round3 || narrowTop === 'menu';
   return { narrowTop, menuShape, phoneRows: menuShape !== 'today', plainTitle };
 }
 
@@ -84,6 +86,7 @@ export function phoneMenuStyle(shape: PhoneShape, trigger: DOMRect | undefined):
         animation: 'phone-sheet-in 180ms var(--ease-out) both',
       } as React.CSSProperties;
     case 'full':
+    case 'screen':
       return {
         top: 0, left: 0, right: 0, bottom: 'var(--kb-offset, 0px)', width: 'auto',
         borderWidth: none, borderRadius: 0,
@@ -114,6 +117,7 @@ export function PhoneMenuScrim({ shape, onClose }: { shape: MenuShape; onClose: 
 export function PhoneMenuTop({ shape, onClose, onNew }: { shape: MenuShape; onClose: () => void; onNew?: () => void }) {
   // The hub's New session: the panel's first and biggest action, where the
   // Claude/ChatGPT apps put theirs, instead of half of the bottom button row.
+  if (shape === 'screen') return <ScreenMenuTop onClose={onClose} onNew={onNew} />;
   if (shape === 'hub') {
     return (
       <div className="shrink-0 px-3 pt-3 pb-1">
@@ -143,7 +147,10 @@ export function PhoneMenuTop({ shape, onClose, onNew }: { shape: MenuShape; onCl
  *  (the way the Claude and ChatGPT apps end their side panels). Any tap on one
  *  closes the drawer. */
 export function PhoneDrawerFooter({ shape, onClose, children }: { shape: MenuShape; onClose: () => void; children?: React.ReactNode }) {
-  if ((shape !== 'drawer' && shape !== 'hub') || !children) return null;
+  if ((shape !== 'drawer' && shape !== 'hub' && shape !== 'screen') || !children) return null;
+  // The full-screen menu's places and Settings take their own places in the panel (flex
+  // `order`: places above the list in layout `top`), so no wrapper box of their own.
+  if (shape === 'screen') return <div className="contents" onClickCapture={onClose}>{children}</div>;
   return (
     // mt-auto: in the hub the places sit at the panel's bottom edge, in thumb reach.
     <div className="mt-auto border-t border-edge py-1 shrink-0" onClickCapture={onClose}>

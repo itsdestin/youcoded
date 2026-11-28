@@ -39,6 +39,10 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#top-plain', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'plain', platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat#top-lights', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat#top-hub', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'hub', platform: 'android' }, newIn: 'after' as const, sameAs: { name: 'chat#top-plain', why: 'the two bars look the same; only what ☰ opens differs (chat/sessions#phone-hub)' } },
+  // Phone menu alternative (2026-11-28): the bar with ☰ and the name as one button, Browser and Session files at top right.
+  { ...chat('chat#top-menu', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', platform: 'android' }, newIn: 'after' as const },
+  // The approved bar, same practice state, for a side-by-side.
+  { ...chat('chat#top-decided', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', narrowPills: 'compact', platform: 'android' }, newIn: 'after' as const },
   // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
@@ -62,6 +66,11 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/sessions#phone-plain', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'plain', platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-lights', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-hub', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'hub', platform: 'android' }, newIn: 'after' as const },
+  // Phone menu ALTERNATIVE (2026-11-28, youcoded-dev …/2026-11-04-narrow-screens/phone-menu.json): ☰ and the
+  // name as one button, the full-screen menu in its three drawn versions (where Projects, Pages and Games sit).
+  { ...chat('chat/sessions#menu-rows', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#menu-tiles', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', phoneMenu: 'tiles', platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#menu-top', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'menu', narrowPills: 'compact', phoneMenu: 'top', platform: 'android' }, newIn: 'after' as const },
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),

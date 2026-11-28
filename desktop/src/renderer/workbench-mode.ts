@@ -230,7 +230,7 @@ export function workbenchNetworkOffline(): boolean {
  *  - `narrowPills` the pills under the message box: `today` · `compact` (one
  *                  row you swipe, short/icon pills, the remote chip)
  *  (The shortcut-row switch was dropped in round 2: Destin kept today's row.) */
-export type NarrowTop = 'today' | 'name' | 'drawer' | 'pair' | 'plain' | 'lights' | 'hub';
+export type NarrowTop = 'today' | 'name' | 'drawer' | 'pair' | 'plain' | 'lights' | 'hub' | 'menu';
 export type NarrowList = 'today' | 'sheet' | 'full' | 'dropdown';
 export type NarrowPills = 'today' | 'compact';
 
@@ -240,6 +240,22 @@ function narrowSwitch<T extends string>(key: string, allowed: readonly T[]): T |
   return (allowed as readonly string[]).includes(raw) ? (raw as T) : 'today';
 }
 
-export const workbenchNarrowTop = (): NarrowTop => narrowSwitch<NarrowTop>('narrowTop', ['name', 'drawer', 'pair', 'plain', 'lights', 'hub'] as NarrowTop[]);
+export const workbenchNarrowTop = (): NarrowTop => narrowSwitch<NarrowTop>('narrowTop', ['name', 'drawer', 'pair', 'plain', 'lights', 'hub', 'menu'] as NarrowTop[]);
 export const workbenchNarrowList = (): NarrowList => narrowSwitch<NarrowList>('narrowList', ['sheet', 'full', 'dropdown'] as NarrowList[]);
 export const workbenchNarrowPills = (): NarrowPills => narrowSwitch<NarrowPills>('narrowPills', ['compact'] as NarrowPills[]);
+
+/** Phone menu ALTERNATIVE (2026-11-28, youcoded-dev docs/active/design/2026-11-04-narrow-screens/
+ *  phone-menu.json): Destin wants to compare the approved layout with one where ☰ and the name are
+ *  one button that opens a FULL-SCREEN menu (New session, Active sessions, Previous sessions,
+ *  places, Settings at the bottom), and Session files and Browser sit at top right. Neither is
+ *  chosen. `narrowTop=menu` turns it on; `phoneMenu` picks where the places (Projects, Pages,
+ *  Games) sit in the menu, one drawn version each:
+ *  - `rows`  — a short list of rows just above the Settings button (default)
+ *  - `tiles` — one row of icon tiles just above the Settings button
+ *  - `top`   — a row of small buttons right under New session, so only Settings is at the bottom */
+export type PhoneMenuLayout = 'rows' | 'tiles' | 'top';
+export function workbenchPhoneMenu(): PhoneMenuLayout {
+  if (!isWorkbenchMode()) return 'rows';
+  const raw = new URLSearchParams(location.search).get('phoneMenu') ?? 'rows';
+  return raw === 'tiles' || raw === 'top' ? raw : 'rows';
+}
