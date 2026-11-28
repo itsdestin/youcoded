@@ -463,6 +463,39 @@ const allTexts = async (world: World, n: string): Promise<string[][]> => { const
 const tagged = (all: string[][], tag: string): number => all.flat().filter((l) => new RegExp(`${tag} \\d`).test(l)).length;
 const mixes = (all: string[][], a: string, b: string): boolean => all.some((t) => t.some((l) => new RegExp(`${a} \\d`).test(l)) && t.some((l) => new RegExp(`${b} \\d`).test(l)));
 
+describe('two peers, each holding a different side of the writer\'s chat (seed 14226 class)', () => {
+  it('A restored to before its chat, writes again with only B online; C still holds the first lines: everyone ends in-sync on the writer\'s chain, the other side kept as a second version, nothing repeated without end', async () => {
+    w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-two-sides');
+    await world.create('A', V); await world.settle();
+    const bk = nodePath.join(world.dirs.A, '..', 'bk-r4-two-sides'); snap(world, 'A', bk);
+    const bkB = nodePath.join(world.dirs.A, '..', 'bk-r4-two-sides-b'); snap(world, 'B', bkB);
+    await world.append('A', V, lineSet(3, 'ss')); await world.settle();                            // all three get these
+    // B's whole profile goes back to before them (the relay already delivered them, so B holds nothing of them), then A's does
+    world.devs.C.carrier.setOnline(false);
+    await down(world, 'B'); restore(world, 'B', bkB); await down(world, 'A'); restore(world, 'A', bk);
+    await world.restart('B'); await world.restart('A'); await world.elapse(8_000, 1_000, true);
+    expect((await world.append('A', V, lineSet(3, 'rb'))).result).toBe('saved');                  // only B gets these
+    await world.elapse(60_000, 10_000, true);
+    world.devs.C.carrier.setOnline(true);
+    await world.elapse(600_000, 10_000, true);
+    // WHY a long quiet wait with the sizes compared: before the fix the writer moved the same lines again about every ten minutes for as long as a peer offered its side, and each pass left more retired
+    // copies in its store (about 6 KB and 10 files per pass here), until the store's own limit was hit. A resting state must do no work.
+    const du = (dir: string): string => { let n = 0; let b = 0; const walk = (d: string): void => { for (const f of fs.readdirSync(d)) { const q = nodePath.join(d, f); const t = fs.statSync(q); if (t.isDirectory()) walk(q); else { n++; b += t.size; } } }; walk(dir); return `${n} files ${b} bytes`; };
+    const sizeBefore = du(nodePath.join(world.dirs.A, 'store')); // (the store: that is where each pass left its retired copies; small periodic records elsewhere may change)
+    const passesBefore = world.devs.A.rep.counters()['writer-self-fork'] ?? 0;
+    await world.elapse(3_600_000, 10_000, true);
+    expect(du(nodePath.join(world.dirs.A, 'store')), 'A does no more work once everyone agrees').toBe(sizeBefore);
+    expect(world.devs.A.rep.counters()['writer-self-fork'] ?? 0).toBe(passesBefore);
+    const moves = world.devs.A.rep.selfForks();
+    for (const n of ['A', 'B', 'C']) {
+      const all = await allTexts(world, n);
+      expect(tagged(all, 'ss'), `${n} ss`).toBeGreaterThanOrEqual(3); expect(tagged(all, 'rb'), `${n} rb`).toBeGreaterThanOrEqual(3);
+      for (const v of world.devs[n].rep.versions()) expect(await st(world, n, v), `${n} ${v.toString('hex').slice(0, 6)}`).toMatch(/^in-sync/);
+    }
+    expect(moves.length, 'one move, not a repeated one').toBe(1);
+  }, 900_000);
+});
+
 describe('directed self-fork cases the random schedules reach only rarely', () => {
   it('a second version moves ITSELF: chat on in V2, restore the writer to a profile from before, chat alone in V2, meet', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-v2self');

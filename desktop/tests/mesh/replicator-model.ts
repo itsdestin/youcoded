@@ -280,7 +280,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         const v = vs[0]; const local = await world.localOf('B', v);
         if (local) {
           const h = await world.devs.B.store.head(local);
-          if (h.lines > 0 && h.lines <= (oracle.get(v.toString('hex'))?.length ?? 0)) {
+          // WHY not a rolled chat: B's copy of a chat whose writer was rolled back and chatted on is not the oracle's text, so the child's expected lines (copied from the oracle) would be wrong (seed 14226)
+          if (h.lines > 0 && h.lines <= (oracle.get(v.toString('hex'))?.length ?? 0) && !rolled.has(v.toString('hex'))) {
             const token = `${world.ids.B.deviceId.toString('hex')}:fz-${seed}`; const child = deriveForkId(v, h.lines, h.hash, token);
             await world.devs.B.rep.createVersion({ version: child, chatId: CHAT, runtime: 'claude-code', parent: v, forkLine: h.lines, forkHash: Buffer.from(h.hash, 'hex'), token });
             vs.push(child); oracle.set(child.toString('hex'), (oracle.get(v.toString('hex')) as Buffer[]).slice(0, h.lines)); writer.set(child.toString('hex'), 'B'); forked = true; note('takeover');
@@ -363,6 +364,8 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     }
     await world.settle();
     watchAcks();
+    if (process.env.MESH_REPLICATOR_DUMP) for (const [i, cv] of vs.entries()) for (const n of NAMES) { const lc = await world.localOf(n, cv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ROOT#${i} ${n} lines ${JSON.stringify(Array.isArray(tx) ? tx.map((l: Buffer) => (l.toString().match(/(\w+-\d+) (\d+)/) ?? ['?'])[0]) : tx)} status ${(await world.devs[n].rep.status(cv)).state}\n`); }
+    if (process.env.MESH_REPLICATOR_DUMP) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} CHATS ${JSON.stringify(vs.map((v, i) => [i, v.toString('hex').slice(0, 6), writer.get(v.toString('hex')), oracle.get(v.toString('hex'))?.length]))} rolled ${JSON.stringify([...rolled].map((r) => r.slice(0, 6)))}\n`);
     // ---- review 3: the ledger of lines told saved, for chats whose writer moved lines into a second version (a self-fork): both versions are checked together
     const forks = new Map<string, Buffer[]>();
     for (const n of NAMES) for (const f of world.devs[n].rep.selfForks()) { const k = f.version.toString('hex'); const arr = forks.get(k) ?? []; if (!arr.some((y) => y.equals(f.movedTo))) arr.push(f.movedTo); forks.set(k, arr); }
@@ -385,6 +388,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       for (const n of NAMES) per.set(n, await Promise.all(group.map((gv) => linesOf(n, gv))));
       if (process.env.MESH_REPLICATOR_DUMP) {
         const tagOf = (l: string): string => (l.match(/(\w+-\d+) (\d+)/) ?? ['?'])[0];
+        for (const n of NAMES) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ${n} describe ${JSON.stringify(group.map((gv) => { const d = world.devs[n].rep.describe(gv); return d ? [gv.toString('hex').slice(0, 6), d.writer.toString('hex').slice(0, 4), d.parent?.toString('hex').slice(0, 6) ?? null, d.forkLine ?? null] : null; }))} me ${world.ids[n].deviceId.toString('hex').slice(0, 4)}\n`);
         for (const n of NAMES) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ${n} statuses ${JSON.stringify(await Promise.all(group.map(async (gv) => world.devs[n].rep.status(gv).then((x) => x.state + '/' + x.reason))))} counters ${JSON.stringify(world.devs[n].rep.counters())} forks ${JSON.stringify(world.devs[n].rep.selfForks().map((f) => [f.version.toString('hex').slice(0, 6), f.from, f.movedTo.toString('hex').slice(0, 6)]))} versions ${JSON.stringify(await Promise.all(group.map(async (gv, gi) => [gv.toString('hex').slice(0, 6), (per.get(n)?.[gi]?.lines ?? []).map(tagOf), per.get(n)?.[gi]?.state])))}\n`);
       }
       group.forEach((gv, gi) => {

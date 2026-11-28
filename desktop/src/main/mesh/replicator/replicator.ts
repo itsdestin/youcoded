@@ -303,7 +303,13 @@ export class Replicator {
     const V = d2.parent; const dV = this.#directory.describe(V);
     if (!dV || dV.writer.equals(this.#ctx.crypto.self) || !d2.writer.equals(dV.writer) || !isSelfForkToken(d2.writer, d2.token)) return;
     const runV = this.#ctx.runOf(V);
-    if (runV.fault !== 'writer-signed-two-histories' && runV.fault !== 'unsigned-lines-contradicted') return;
+    // WHY `diverged` counts too (review 4 gap round, seed 14226 class): a copy that rejected a writer-signed batch of ANOTHER history says `diverged(writer-signed-two-histories)`, which is not a fault (it clears
+    // with the next accepted batch) and so was never resolved: two peers, each holding one side of a writer that had gone back, stayed `diverged` for good although the writer had already announced where its
+    // lines now live. The evidence needed is the same as for a fault (the announcement, the parting point's chain value matching MY copy, the comparison of lines), so nothing weaker is trusted.
+    const contradicted = runV.fault === 'writer-signed-two-histories' || runV.fault === 'unsigned-lines-contradicted' || runV.diverged !== null;
+    if (!contradicted) return;
+    // (a fault is forgotten on disk too; a `diverged` is only a memory, and is looked at again from the peers' claims right after)
+    const settle = async (): Promise<void> => { await this.clearFault(V); runV.diverged = null; runV.rewanted.clear(); void this.reconsider(V).catch((e: unknown) => reportFailure({ what: 'look at a chat copy again after a move was announced', cause: e, where: 'mesh.replicator' })); };
     await this.queue(V, async () => {
       const vv = await this.localOf(V); const v2v = await this.localOf(v2);
       if (!vv || !v2v) return;
@@ -311,11 +317,11 @@ export class Replicator {
       const p = d2.forkLine as number;
       if (hV.lines < p || (await this.#o.store.hashAt(vv.local, 0, p)) !== (d2.forkHash as Buffer).toString('hex')) return; // not a statement about my copy
       const k = Math.min(hV.lines, h2.lines);
-      if (k <= p) { if (h2.lines >= hV.lines) await this.clearFault(V); return; } // nothing of mine past p to compare
+      if (k <= p) { if (h2.lines >= hV.lines) await settle(); return; } // nothing of mine past p to compare
       const mine = await this.#o.store.hashAt(vv.local, 0, k); const theirs = await this.#o.store.hashAt(v2v.local, 0, k);
-      if (mine !== theirs) { await this.clearFault(V); this.#ctx.bump('self-fork-old-history-kept'); return; } // I hold the older history: it stays under V
+      if (mine !== theirs) { await settle(); this.#ctx.bump('self-fork-old-history-kept'); return; } // I hold the older history: it stays under V
       if (h2.lines >= hV.lines) { // my lines past p are exactly what now lives, verified, under V2: set this copy aside and refill V from the peers
-        await retireAndRecopy(this.#ctx, V, 'moved-to-self-fork'); await this.clearFault(V); this.#ctx.bump('self-fork-newer-history-moved');
+        await retireAndRecopy(this.#ctx, V, 'moved-to-self-fork'); await settle(); this.#ctx.bump('self-fork-newer-history-moved');
       }
       // else: the second version has not caught up with my lines yet; asked again when it grows
     });
@@ -635,12 +641,19 @@ export class Replicator {
     } catch (e) { reportFailure({ what: 'retry asking for chat lines', cause: e, where: 'mesh.replicator' }); }
   }
 
+  readonly #lookingAtForks = new Set<string>();
   private async reconsider(wire: Buffer): Promise<void> {
     if (this.#stopped) return;
     const ctx = this.#ctx; const run = ctx.runOf(wire);
     // a self-fork child that grew may now show which history a contradicted parent copy holds (selffork.ts); only a contradicted parent is looked at
     const dd = this.#directory.describe(wire);
-    if (dd?.parent && ctx.runOf(dd.parent).fault) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
+    // (and the other way round: a contradicted or diverged copy looks at the second versions its writer announced for it, which may have been announced before it was contradicted)
+    if ((run.fault || run.diverged) && !this.#lookingAtForks.has(wire.toString('hex'))) {
+      this.#lookingAtForks.add(wire.toString('hex'));
+      for (const w2 of this.#directory.list()) { const d2 = this.#directory.describe(w2); if (d2?.parent?.equals(wire) && isSelfForkToken(d2.writer, d2.token)) void this.resolveSelfFork(w2).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' })); }
+      const hexW = wire.toString('hex'); const t = setTimeout(() => this.#lookingAtForks.delete(hexW), 5_000); t.unref?.(); // at most one look every 5 s per version
+    }
+    if (dd?.parent && (ctx.runOf(dd.parent).fault || ctx.runOf(dd.parent).diverged)) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
     try {
       const v = await this.localOf(wire);
       if (!v) return;
