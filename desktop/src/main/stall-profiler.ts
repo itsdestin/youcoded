@@ -20,7 +20,12 @@ export const STALL_PROFILE_MIN_MS = 2000;
  *  10 s timer, hundreds an hour, and no profile ever named them — only 2 s+ stalls were saved. One stall of this size per
  *  SHORT_EVERY_MS is noted and saved at the NEXT scheduled rotation (no extra Profiler restart, so no extra stall),
  *  sliced to the half-minute before it — a repeating timer shows several times inside that slice. */
-export const SHORT_STALL_PROFILE_MS = 300;
+// 120 ms, above the recorder's 100 ms floor: the timer stalls seen in the field had medians of 137 ms (10 s rhythm) and
+// 173 ms (5 s rhythm), so a 300 ms floor would have missed most of them (review 2026-11-28).
+const SHORT_STALL_PROFILE_MS = 120;
+/** The profiler's own restart blocks 50-170 ms at the start of each window; a stall that ends this soon after a rotation
+ *  is most likely that restart, and sampling it would spend the ten-minute slot on our own cost. */
+const AFTER_ROTATE_IGNORE_MS = 2000;
 const SHORT_EVERY_MS = 10 * 60_000;
 /** Short-stall files have their own cap, so they can never push a long freeze's profile out. */
 const SHORT_MAX_FILES = 3;
@@ -164,6 +169,7 @@ export class StallProfiler {
   onShortStall(endedAtMs: number, ms: number): void {
     if (!this.session || ms < SHORT_STALL_PROFILE_MS || ms >= STALL_PROFILE_MIN_MS || this.shortStall) return;
     if (this.now() - this.lastShortAt < SHORT_EVERY_MS) return;
+    if (endedAtMs - this.windowStart < AFTER_ROTATE_IGNORE_MS) return;
     this.lastShortAt = this.now();
     this.shortStall = { endedAt: endedAtMs, ms };
   }
@@ -175,6 +181,7 @@ export class StallProfiler {
     const name = `${SHORT_PREFIX}${new Date(s.endedAt).toISOString().replace(/[:.]/g, '-')}-${Math.round(s.ms)}ms.cpuprofile`;
     const sliced = sliceProfile(w.profile as CpuProfile, w.endedAt, s.endedAt - s.ms - SAVE_SPAN_MS, s.endedAt + 1000);
     const stalls = [{ ts: new Date(s.endedAt).toISOString(), ms: Math.round(s.ms) }];
+    // benign: a sampled profile that fails to write is simply not there; the stall line itself is already in hitches.jsonl.
     this.writing = this.writing.then(() => this.save(name, sliced, stalls)).catch(() => {});
   }
 
