@@ -190,6 +190,13 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
             const held = await Promise.all(NAMES.filter((n) => n !== e.dev).map(async (n) => (online.has(n) ? (await world.heads(n, v)).lines : 0)));
             if (!held.some((n) => n === O.length) || !online.has(e.dev)) lossless = false;
           }
+          // (the same for a SECOND version the device holds: lines only it holds are destroyed by a store put back, store limit 4)
+          if (e && kind !== 'restore-replicator') for (const wv of world.devs[e.dev].rep.versions()) {
+            if (vs.some((y) => y.equals(wv))) continue;
+            const mine = await headLines(e.dev, wv); if (!mine) continue;
+            const heldK = await Promise.all(NAMES.filter((n) => n !== e.dev).map(async (n) => (online.has(n) ? await headLines(n, wv) : 0)));
+            if (!heldK.some((n) => n >= mine)) lossless = false;
+          }
           // (a whole-profile restore of a WRITER is now part of the model: review 3. Lines it re-uses positions of end up in a second version; the oracle below is the ledger of lines told saved)
           if (e && lossless) {
             const parts = kind === 'restore-store' ? ['store'] : kind === 'restore-replicator' ? ['replicator'] : kind === 'restore-both' ? ['store', 'replicator'] : ['store', 'replicator', 'witness'];
