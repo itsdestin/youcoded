@@ -16,6 +16,15 @@ import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 
 export const STALL_PROFILE_MIN_MS = 2000;
+/** WHY short-stall samples (hitch audit 2026-11-27): the owner's log showed engine stalls of 140-350 ms locked to a 5 s or
+ *  10 s timer, hundreds an hour, and no profile ever named them — only 2 s+ stalls were saved. One stall of this size per
+ *  SHORT_EVERY_MS is noted and saved at the NEXT scheduled rotation (no extra Profiler restart, so no extra stall),
+ *  sliced to the half-minute before it — a repeating timer shows several times inside that slice. */
+export const SHORT_STALL_PROFILE_MS = 300;
+const SHORT_EVERY_MS = 10 * 60_000;
+/** Short-stall files have their own cap, so they can never push a long freeze's profile out. */
+const SHORT_MAX_FILES = 3;
+const SHORT_PREFIX = 'short-stall-';
 // WHY 10 minutes, not 25 s (hitch audit 2026-11-27): restarting V8's profiler is itself a main-thread block —
 // Profiler.start re-logs every compiled function; measured 50-170 ms in a small Node script, and the saved stall
 // profiles show ~100 ms inside inspector.post per rotation in the app. At one restart per 25 s the recorder caused up
@@ -99,6 +108,8 @@ export class StallProfiler {
   private lastSaveAt = 0;
   private pending: { startedAt: number; stalls: Array<{ endedAt: number; ms: number }> } | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | undefined;
+  private shortStall: { endedAt: number; ms: number } | null = null;
+  private lastShortAt = -Infinity;
   private readonly now: () => number;
   private readonly o: Required<Omit<StallProfilerOptions, 'now'>>;
 
@@ -140,14 +151,31 @@ export class StallProfiler {
       this.windowStart = w.endedAt;
       this.post('Profiler.start');
       this.done.push(w);
-      // Four, not two: a stall waiting out the burst gap must still find its window after a timer rotation and the
-      // flush's own rotation.
+      this.saveNotedShortStall(w);
       // WHY three (2026-11-27, with the 10-minute window): the window a stall is in, the one before it (a timer rotation
       // may land while the stall waits out the save gap) and the flush's own tiny one. Four 10-minute windows would hold
       // ~40 minutes of raw profile in the main process for nothing.
       if (this.done.length > 3) this.done.shift();
       return w;
     } catch { this.teardown(); return null; }
+  }
+
+  /** A stall too short for onStall: note at most one per SHORT_EVERY_MS, saved when the running window next closes. */
+  onShortStall(endedAtMs: number, ms: number): void {
+    if (!this.session || ms < SHORT_STALL_PROFILE_MS || ms >= STALL_PROFILE_MIN_MS || this.shortStall) return;
+    if (this.now() - this.lastShortAt < SHORT_EVERY_MS) return;
+    this.lastShortAt = this.now();
+    this.shortStall = { endedAt: endedAtMs, ms };
+  }
+
+  private saveNotedShortStall(w: Window): void {
+    const s = this.shortStall;
+    if (!s || w.endedAt < s.endedAt) return;
+    this.shortStall = null;
+    const name = `${SHORT_PREFIX}${new Date(s.endedAt).toISOString().replace(/[:.]/g, '-')}-${Math.round(s.ms)}ms.cpuprofile`;
+    const sliced = sliceProfile(w.profile as CpuProfile, w.endedAt, s.endedAt - s.ms - SAVE_SPAN_MS, s.endedAt + 1000);
+    const stalls = [{ ts: new Date(s.endedAt).toISOString(), ms: Math.round(s.ms) }];
+    this.writing = this.writing.then(() => this.save(name, sliced, stalls)).catch(() => {});
   }
 
   /** A main-thread stall of `ms` ended at `endedAtMs`. Saves the profile window(s) that cover it. */
@@ -207,12 +235,21 @@ export class StallProfiler {
       return st ? { n, size: st.size, t: st.mtimeMs } : null;
     }));
     const live = files.filter((f): f is { n: string; size: number; t: number } => f !== null).sort((a, b) => a.t - b.t || (a.n < b.n ? -1 : 1));
-    let total = live.reduce((s, f) => s + f.size, 0);
-    while (live.length > 0 && (live.length > this.o.maxFiles || total > this.o.maxBytes)) {
-      const old = live.shift()!;
+    const remove = async (n: string) => {
+      await fsp.rm(join(this.o.dir, n), { force: true });
+      await fsp.rm(join(this.o.dir, `${n}.stalls.json`), { force: true });
+    };
+    // Each kind keeps its own count; the byte cap covers both.
+    const short = live.filter((f) => f.n.startsWith(SHORT_PREFIX));
+    const long = live.filter((f) => !f.n.startsWith(SHORT_PREFIX));
+    while (short.length > SHORT_MAX_FILES) await remove(short.shift()!.n);
+    while (long.length > this.o.maxFiles) await remove(long.shift()!.n);
+    const rest = [...short, ...long].sort((a, b) => a.t - b.t || (a.n < b.n ? -1 : 1));
+    let total = rest.reduce((s, f) => s + f.size, 0);
+    while (rest.length > 0 && total > this.o.maxBytes) {
+      const old = rest.shift()!;
       total -= old.size;
-      await fsp.rm(join(this.o.dir, old.n), { force: true });
-      await fsp.rm(join(this.o.dir, `${old.n}.stalls.json`), { force: true });
+      await remove(old.n);
     }
   }
 

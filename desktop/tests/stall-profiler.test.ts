@@ -141,4 +141,37 @@ describe('StallProfiler', () => {
     // A range that matches nothing keeps the whole window rather than losing it.
     expect(sliceProfile(profile, end, 0, 1).samples.length).toBe(600);
   });
+
+  // 140-350 ms stalls locked to a timer ran hundreds of times an hour and no profile ever named them. One per 10 minutes is
+  // noted and saved at the NEXT scheduled rotation (no extra profiler restart, which would itself stall).
+  it('saves one short stall per ten minutes at the next scheduled rotation, under its own small cap', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const dir = tmp();
+    let clock = Date.parse('2026-11-28T10:00:00Z');
+    const p = new StallProfiler({ dir, now: () => clock, windowMs: 60_000 });
+    try {
+      p.start();
+      // A long freeze's profile exists first; short samples must never push it out.
+      await p.onStall(clock, 3000);
+      for (let i = 0; i < 6; i++) {
+        clock += 10 * 60_000;
+        p.onShortStall(clock, 400);
+        p.onShortStall(clock + 1000, 350);           // a second one inside the ten minutes is ignored
+        vi.advanceTimersByTime(60_000);              // the scheduled rotation saves it
+        await p.stop().catch(() => {}); p.start();   // flush pending writes, keep going
+      }
+      const names = fs.readdirSync(dir).filter((n) => n.endsWith('.cpuprofile'));
+      const shorts = names.filter((n) => n.startsWith('short-stall-'));
+      expect(shorts).toHaveLength(3);
+      expect(shorts.every((n) => n.endsWith('-400ms.cpuprofile'))).toBe(true);
+      expect(names.some((n) => n.startsWith('stall-') && n.includes('3000ms'))).toBe(true);
+      // Under 300 ms is never noted; a 2 s+ stall belongs to onStall.
+      clock += 10 * 60_000;
+      p.onShortStall(clock, 250);
+      vi.advanceTimersByTime(60_000);
+      await p.stop();
+      expect(fs.readdirSync(dir).filter((n) => n.includes('250ms'))).toEqual([]);
+    } finally { await p.stop().catch(() => {}); vi.useRealTimers(); }
+  });
 });
+
