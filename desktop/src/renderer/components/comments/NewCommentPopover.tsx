@@ -96,7 +96,16 @@ export function NewCommentPopover({ comment, getAnchor, boundsEl, onTextChange, 
     };
     window.addEventListener('scroll', onMove, { capture: true, passive: true });
     window.addEventListener('resize', onMove);
+    // WHY also watch the file's own size (2026-11-27): its text can re-wrap
+    // with no scroll or window resize — the app's font finishing loading,
+    // dragging the file panel's divider, a picture in the file loading — and
+    // the words then moved ~100 px while the box stayed on top of them. Any
+    // such re-wrap changes the content element's size, so this catches it.
+    // Same one-placement-per-frame guard as scrolling.
+    const ro = boundsEl && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => onMove(new Event('reflow'))) : null;
+    if (ro && boundsEl) ro.observe(boundsEl);
     return () => {
+      ro?.disconnect();
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener('scroll', onMove, { capture: true });
       window.removeEventListener('resize', onMove);

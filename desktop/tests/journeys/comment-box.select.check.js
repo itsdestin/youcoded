@@ -39,5 +39,16 @@
   node.parentElement.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
   node.parentElement.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
   for (let j = 0; j < 40 && !document.querySelector('[role=menu]'); j++) await wait(25);
-  return document.querySelector('[role=menu]') ? { ok: true } : { ok: false, why: 'the menu never opened on the selection' };
+  if (!document.querySelector('[role=menu]')) return { ok: false, why: 'the menu never opened on the selection' };
+  // WHY scroll the chat here (2026-11-27): the chat beside the file scrolls by itself — a streaming reply, or its
+  // text re-wrapping when the app's font finishes loading — and that used to close this menu (it had no anchor, so ANY
+  // scroll on the page closed it). On a busy machine the font swap landed after the menu opened and the next step
+  // found no "Add comment". Doing it on purpose makes that case run every time instead of by luck.
+  const chat = document.querySelector('.chat-scroll');
+  if (chat) {
+    chat.scrollTop = Math.max(0, chat.scrollTop - 40);
+    await wait(150);
+    if (!document.querySelector('[role=menu]')) return { ok: false, why: 'the chat beside the file scrolled and the menu closed' };
+  }
+  return { ok: true };
 })()

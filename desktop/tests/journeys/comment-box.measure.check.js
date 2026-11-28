@@ -11,7 +11,10 @@
   let box = ta;
   while (box && getComputedStyle(box).position !== 'fixed') box = box.parentElement;
   const viewer = document.querySelector('[data-artifact-viewer]');
-  const segs = [...viewer.querySelectorAll('mark[data-comment-id]')].filter((m) => window.__cbText.includes(m.textContent));
+  // WHY the draft's own id (2026-11-27): matching any highlight whose words appear in the selected line could pick an
+  // older, shorter one. The draft is the only highlight drawn active while its box is open (use-quote-marks.ts).
+  const active = viewer.querySelector('mark[data-comment-id][class*="!bg-accent/30"]');
+  const segs = active ? [...viewer.querySelectorAll(`mark[data-comment-id="${CSS.escape(active.dataset.commentId)}"]`)] : [];
   if (!segs.length) return { ok: false, why: 'the new highlight was not drawn' };
   let scroller = viewer.parentElement;
   while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
@@ -29,12 +32,36 @@
     if (b.top < panel.top - 1 || b.bottom > panel.bottom + 1) return `the box leaves the visible panel (${said})`;
     return null;
   };
-  const first = where();
+  // WHY a few frames of grace, not one look: if the file's text re-wraps just as the box opens (the font finishing
+  // loading on a busy machine), the box follows it a frame later. 500 ms is far below what a stuck box (the
+  // bottom-left-corner bug, or one that never follows) would need — those never come right.
+  let first = where();
+  for (let j = 0; first && j < 10; j++) { await wait(50); first = where(); }
   if (first) return { ok: false, why: first };
   scroller.scrollTop += 40;
   await frames();
   const after = where();
   if (after) return { ok: false, why: `after scrolling 40px: ${after}` };
+  // WHY re-wrap the text (2026-11-27): words can move with no scroll and no window resize — the font finishing
+  // loading, dragging the file panel's divider — and the box used to stay where it was, on top of them (measured
+  // ~100 px off). Narrowing the text column does the same on purpose. Only "next to it" is judged: in a column this
+  // narrow the box is pushed in from the edge, so its left side cannot line up.
+  // If the re-wrap pushes the words past the visible part of the panel, the box rightly stops at the panel's edge
+  // instead; then it must still have MOVED (a box that never follows stays exactly where it was).
+  const topBefore = box.getBoundingClientRect().top;
+  viewer.style.maxWidth = '260px';
+  await wait(100);
+  await frames();
+  const rewrapped = where();
+  const hlNow = segs.map((s) => s.getBoundingClientRect());
+  const pr = scroller.getBoundingClientRect();
+  const wordsVisible = Math.min(...hlNow.map((x) => x.top)) >= pr.top && Math.max(...hlNow.map((x) => x.bottom)) <= pr.bottom - 100;
+  const moved = Math.abs(box.getBoundingClientRect().top - topBefore) > 4;
+  viewer.style.maxWidth = '';
+  await frames();
+  if (wordsVisible ? rewrapped && !rewrapped.includes('not lined up') : !moved) {
+    return { ok: false, why: `after the text re-wrapped: ${rewrapped ?? 'the box did not move with its words'}` };
+  }
   // Close it the way a user does (a click elsewhere drops an empty draft), ready for the next run.
   viewer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
   getSelection().removeAllRanges();
