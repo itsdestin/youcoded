@@ -175,7 +175,8 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     // asked for the next one: both devices sat in `diverged` for good. Now the ask CONTINUES from where the batch ended for as long as that device claims more than that, until the lines part (and the
     // writer moves its lines to a second version, or a peer names its state).
     const claimedNow = peer.heads.get(wire.toString('hex'));
-    if (wasDiverged && claimedNow && end < claimedNow.lines && end > b.from) { ctx.bump('diverged-ask-continued'); await ctx.want(wire, peer, { haveLines: end }); }
+    // (also for a WRITER, whose own state is `pulling`, not `diverged`, because a nak never marks it so: a batch of lines it already held, answered to an ask that was made because the peer claims more, goes on)
+    if ((wasDiverged || !!run.pull) && claimedNow && end < claimedNow.lines && end <= head.lines && end > b.from) { ctx.bump('diverged-ask-continued'); await ctx.want(wire, peer, { haveLines: end }); }
     await ctx.reconsider(wire);
     // WHY: an ack no longer refreshes what the writer thinks I hold (review 2, finding 6); the device's own heads do, so once this pull is finished they are sent
     if (!run.pull) ctx.advertise();
