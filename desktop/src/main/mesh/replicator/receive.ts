@@ -117,11 +117,11 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
   // 3. never park: a batch that starts past my head is dropped and the missing lines are asked for
   if (b.from > head.lines) { ctx.bump('lines-ahead-dropped'); await ctx.want(wire, peer); return; }
   // 4. the chain over these lines from a trusted starting value must equal the signed value
-  const lastSigned = run.lastSigned.get(peer.hex);
   let base: Buffer; let baseIsMine = false;
-  // (a faulted copy never trusts the remembered `lastSigned`: it may come from the very contradicting batch that faulted it, so the base is read from my own store)
-  if (lastSigned && lastSigned.lines === b.from && !run.fault) base = lastSigned.hash;
-  else {
+  // WHY the base is ALWAYS read from my own store (review 4 gap round, found by the self-fork schedules): the old shortcut took the chain value the previous batch from this device ended at. That value came from a
+  // batch whose append may have been REFUSED (a contradicting history), and the next batch was then checked against the sender's chain and appended onto my different lines: a spliced copy. By now my head is
+  // at least `from` (a batch that starts past my head was dropped above), so my own chain value is always there.
+  {
     let h: string | null;
     try { h = await ctx.store.hashAt(v.local, 0, b.from); } catch (e) { if (e instanceof StoreError && e.code === 'evicted') { ctx.bump('lines-base-evicted'); return; } await storeFailed(ctx, peer, wire, e, b.from); return; }
     if (h === null) { ctx.bump('lines-base-missing'); await ctx.want(wire, peer); return; }
@@ -140,7 +140,6 @@ async function applyLines(ctx: RepCtx, peer: PeerInfo, b: LinesBody, lines: Buff
     if (b.from + lines.length === head.lines && (await ctx.store.hashAt(v.local, 0, head.lines).catch(() => null /* benign: see above */)) !== hex(b.head.hash)) { ctx.bump('lines-refused-faulted'); return; }
     await ctx.clearFault(wire); ctx.bump(b.from === head.lines ? 'fault-cleared-by-extension' : 'fault-cleared-by-cover');
   }
-  run.lastSigned.set(peer.hex, { lines: b.head.lines, hash: b.head.hash });
   // 5. keep the signed point (a non-writer needs it to serve; the writer signs on demand)
   if (!iAmWriter) {
     let span = 0; for (const l of lines) span += l.length;

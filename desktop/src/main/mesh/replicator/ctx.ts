@@ -54,7 +54,6 @@ export interface VRun {
   /** Peers asked to restart from line 0 after a chain mismatch whose base was my own store (once each until the next hello). */
   rewanted: Set<string>;
   /** The last signed head of a verified batch, per peer, so the next batch of a session can be verified from the WRITER's chain value rather than my own. */
-  lastSigned: Map<string, { lines: number; hash: Buffer }>;
   stall: { cancel(): void } | null;
   /** The writer's lines below this have been pushed to the other devices (durable lane); the rest is pushed by the next flush. */
   pushedThrough: number | null;

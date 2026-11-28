@@ -50,7 +50,7 @@ export async function setupVersion(ctx: RepCtx, wire: Buffer, desc: VersionDescr
   // and the other devices must hear at once what this device holds now, so no acknowledgement of the old copy outlives it.
   const retiredNow = run.incarnationSeen !== null && cur.incarnation > run.incarnationSeen;
   run.incarnationSeen = Math.max(run.incarnationSeen ?? 0, cur.incarnation);
-  if (retiredNow) { run.caughtUp = false; run.retiredRecopy = true; run.lastSigned.clear(); run.refill = null; ctx.bump('retired-by-store'); ctx.heads.forget(wire); }
+  if (retiredNow) { run.caughtUp = false; run.retiredRecopy = true; run.refill = null; ctx.bump('retired-by-store'); ctx.heads.forget(wire); }
   if (cur.registered) {
     if (!(await folderIsThisVersion(ctx, cur.local, desc))) { run.stuck = 'folder-belongs-to-another-version'; ctx.bump('folder-belongs-to-another-version'); return null; }
     if (retiredNow) ctx.advertise();

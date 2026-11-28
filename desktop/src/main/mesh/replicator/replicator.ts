@@ -88,7 +88,7 @@ export interface ReplicatorOptions {
   stepLimitMs?: number;
 }
 
-const newRun = (): VRun => ({ selfForking: false, rounds: [], ownNote: null, discounted: null, stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), lastSigned: new Map(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null, unavailable: new Set(), unavailableRounds: 0, ownPending: null, evidence: false });
+const newRun = (): VRun => ({ selfForking: false, rounds: [], ownNote: null, discounted: null, stuck: null, diverged: null, retiredRecopy: false, refill: null, pull: null, seenRejected: 0, lastHead: { lines: 0, incarnation: 0 }, recopies: 0, rewanted: new Set(), stall: null, pushedThrough: null, pushing: false, skip: new Set(), fault: null, caughtUp: false, serveWait: false, incarnationSeen: null, wantAt: new Map(), parentAskAt: null, parentAskLines: null, unavailable: new Set(), unavailableRounds: 0, ownPending: null, evidence: false });
 
 export class Replicator {
   readonly #o: ReplicatorOptions;
@@ -435,7 +435,7 @@ export class Replicator {
     for (const s of this.#ctx.sessions.values()) s.timer?.cancel();
     this.#ctx.sessions.clear(); // WHY: "reconnect: drop all sessions"; the receiver re-asks
     // WHY acks are NOT wiped here any more (review 1, F2): a quiet, in-sync system must still be able to list them. An ack is valid only while the holder's latest heads agree with it (see peerAcks), and `solicitAcks` asks again.
-    for (const r of this.#ctx.runs.values()) { r.rewanted.clear(); r.skip.clear(); r.lastSigned.clear(); }
+    for (const r of this.#ctx.runs.values()) { r.rewanted.clear(); r.skip.clear(); }
     dropReassembly(this.#ctx);
     this.#introAsked.clear();
     // WHY here: damage the store finds on its own (a scrub, a read) is otherwise noticed only at the next append; every hello looks again

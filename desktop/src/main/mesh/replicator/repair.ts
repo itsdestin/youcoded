@@ -39,7 +39,7 @@ export async function retireAndRecopy(ctx: RepCtx, wire: Buffer, why: string): P
     }
   }
   ctx.ids.retired(wire, cur.incarnation);
-  run.recopies++; run.retiredRecopy = true; run.refill = null; run.lastSigned.clear(); run.seenRejected = 0; run.caughtUp = false;
+  run.recopies++; run.retiredRecopy = true; run.refill = null; run.seenRejected = 0; run.caughtUp = false;
   ctx.bump('retired-recopy');
   ctx.heads.forget(wire);
   // the new incarnation is registered lazily by localOf; then everything is asked for again from line 0
