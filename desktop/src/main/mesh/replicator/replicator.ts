@@ -43,7 +43,7 @@ import { compareHeads, type HeadView, type MineAtTheirs } from './compare';
 import { chatGroup, hex8, realClock, repairFrom, type Clock, type PeerAck, type PeerInfo, type RepCtx, type ReplicatorLink, type SourceRefill, type VersionStatus, type VRun } from './ctx';
 import { InterimDirectory, type ReplicatorCrypto, type VersionDescriptor, type VersionDirectory } from './directory';
 import { setupVersion } from './forks';
-import { IdMap, type Probe } from './idmap';
+import { IdMap, incarnationId, MAX_INCARNATIONS, type Probe } from './idmap';
 import { askIntro, dropReassembly, receiveLines, restartPoint, sendNak } from './receive';
 import { checkRepair, onCorruptRead, retireAndRecopy } from './repair';
 import { isSelfForkToken, selfForkToken, type SelfForkJournal } from './selffork';
@@ -388,12 +388,28 @@ export class Replicator {
     await this.loadSelfForkNotes(); // before anything can append: a chat with an unfinished move is marked as being moved
     for (const wire of this.#directory.list()) await this.adopt(wire);
     await this.resumeSelfForks();
+    await this.scanOrphans().catch((e: unknown) => reportFailure({ what: 'look for chat copies the sync no longer knows', cause: e, where: 'mesh.replicator' }));
     for (const wire of this.#directory.list()) void this.resolveSelfFork(wire).catch((e: unknown) => reportFailure({ what: 'resolve a version that was contradicted', cause: e, where: 'mesh.replicator' }));
     this.#directory.onChange((wire) => { void this.adopt(wire).catch((e: unknown) => reportFailure({ what: 'start copying a new chat version', cause: e, where: 'mesh.replicator' })); });
     this.hello();
     this.armScrub();
     this.askHeads();
     this.armGate();
+  }
+  /** WHY (review 4 gap round, seed 202277): the announcement of a second version lives only in the replicator's own folder. When every device that held it had that folder put back (or the whole profile),
+   *  the lines of the second version are still on disk in a device's store, under a folder no one can name any more, and nothing said so: the chat looked as if those lines had never existed. This looks, once per start,
+   *  for store copies that are a fork of a version the sync knows but are not themselves known, counts them (`orphan-store-versions`) and says so. Nothing is changed or deleted: without the writer's announcement
+   *  (its token) the copy cannot be given its wire id again, so it can only be named, never silently adopted. */
+  private async scanOrphans(): Promise<void> {
+    const listed = await this.#o.store.listVersions();
+    if (listed.length === 0) return;
+    const known = new Set<string>();
+    for (const w of this.#directory.list()) for (let n = 0; n <= MAX_INCARNATIONS; n++) known.add(incarnationId(w, n).toString('hex'));
+    let orphans = 0;
+    for (const x of listed) if (x.parent && known.has(x.parent.toString('hex')) && !known.has(x.version.toString('hex'))) orphans++;
+    if (orphans === 0) return;
+    for (let i = 0; i < orphans; i++) this.#ctx.bump('orphan-store-versions');
+    reportFailure({ what: `${orphans} chat ${orphans === 1 ? 'copy' : 'copies'} in the store ${orphans === 1 ? 'is' : 'are'} not known to the sync any more (the announcement was lost with a restored folder); kept as ${orphans === 1 ? 'it is' : 'they are'}`, where: 'mesh.replicator' });
   }
   /** Review 1, F9: the store finds rot past its scrub mark only when something reads it. One slice of one version is scrubbed per tick (round robin, 4 MiB at most), so a copy that rots at rest is found while peers still hold the lines. */
   private armScrub(): void {

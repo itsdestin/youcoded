@@ -534,6 +534,25 @@ describe('a chat whose first line is bigger than one frame (seed 17103)', () => 
   }, 1_200_000);
 });
 
+describe('a second version whose announcement was lost on every device that held it (seed 202277)', () => {
+  it('the lines are still in the store and the sync SAYS there is a copy it no longer knows (counted and reported), instead of the chat looking as if they never existed', async () => {
+    w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-orphan');
+    await world.create('A', V); await world.settle();
+    const keep = (n: string, to: string): void => { fs.rmSync(to, { recursive: true, force: true }); fs.mkdirSync(to, { recursive: true }); fs.cpSync(nodePath.join(world.dirs[n], 'replicator'), nodePath.join(to, 'replicator'), { recursive: true }); };
+    const bkA = nodePath.join(world.dirs.A, '..', 'bk-r4-orphan-a'); const bkB = nodePath.join(world.dirs.A, '..', 'bk-r4-orphan-b'); keep('A', bkA); keep('B', bkB);
+    await splitHistories(world, V);
+    const v2 = world.devs.A.rep.selfForks()[0].movedTo; const lines = await textOf(world, 'A', v2);
+    expect(lines.length).toBeGreaterThan(0);
+    // both replicator folders go back to before the move; the stores are left as they are
+    for (const [n, bk] of [['A', bkA], ['B', bkB]] as const) { await down(world, n); fs.rmSync(nodePath.join(world.dirs[n], 'replicator'), { recursive: true, force: true }); fs.cpSync(nodePath.join(bk, 'replicator'), nodePath.join(world.dirs[n], 'replicator'), { recursive: true }); await world.restart(n); }
+    await world.elapse(60_000, 10_000, true);
+    for (const n of ['A', 'B']) {
+      expect(world.devs[n].rep.versions().some((x) => x.equals(v2)), `${n} no longer knows the second version`).toBe(false);
+      expect(world.devs[n].rep.counters()['orphan-store-versions'] ?? 0, `${n} says so`).toBeGreaterThanOrEqual(1);
+    }
+  }, 600_000);
+});
+
 describe('directed self-fork cases the random schedules reach only rarely', () => {
   it('a second version moves ITSELF: chat on in V2, restore the writer to a profile from before, chat alone in V2, meet', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-v2self');

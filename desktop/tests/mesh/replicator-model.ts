@@ -98,6 +98,14 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
       for (const n of NAMES) world.devs[n].carrier.passFilter = on ? () => { const r = rand(); return r < 0.15 ? 'drop' : r < 0.25 ? 'dup' : r < 0.5 ? Math.floor(rand() * 20) : 'deliver'; } : null;
     };
     for (let s = 0; s < steps; s++) {
+      if (process.env.MESH_REPLICATOR_STEPSTATE) {
+        // (debug only) every device's copy of chat 0 and its second versions, after the previous step
+        const root0 = vs[0]; const fam = (wv: Buffer): boolean => { let cur: Buffer | undefined = wv; for (let k = 0; k < 8 && cur; k++) { if (cur.equals(root0)) return true; cur = world.devs.A.rep.describe(cur)?.parent ?? world.devs.B.rep.describe(cur)?.parent ?? world.devs.C.rep.describe(cur)?.parent ?? undefined; } return false; };
+        const out: string[] = [];
+        for (const n of NAMES) for (const wv of world.devs[n].rep.versions()) { if (!fam(wv)) continue; const lc = await world.localOf(n, wv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; out.push(`${n}:${wv.toString('hex').slice(0, 4)}[${Array.isArray(tx) ? tx.map((l: Buffer) => (l.length > 4096 ? 'big' : (l.toString().match(/(\w+?)(\d+)-(\d+) (\d+)/) ?? ['?']).slice(0, 1)[0].replace(/\d{4,}/, ''))).join(' ') : 'x'}]${(await world.devs[n].rep.status(wv)).state.slice(0, 9)}`); }
+        if (process.env.MESH_REPLICATOR_STEPCOUNTERS) for (const n of NAMES) out.push(`${n}#${JSON.stringify(world.devs[n].rep.counters())}`);
+        fs.appendFileSync(process.env.MESH_REPLICATOR_STEPSTATE, `seed ${seed} after step ${s} (${trace[trace.length - 1] ?? '-'}) online=${[...online].join('')} :: ${out.join(' | ')}\n`);
+      }
       const r = rand() * 100;
       const x = rand();
       const rb = rand();
@@ -121,7 +129,9 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
               let ok = true;
               // WHY by content, not by count (seed 202277): a peer that holds as many lines as the writer but ANOTHER history (the writer's lines were written alone after a restore) does not hold the writer's lines, and a second restore then destroys the only copy
               const holds = async (n: string, v: Buffer, upTo: number, hash: string | null): Promise<boolean> => { const l = await world.localOf(n, v); if (!l) return upTo === 0; const hd = await world.devs[n].store.head(l); if (hd.lines < upTo) return false; return upTo === 0 || (await world.devs[n].store.hashAt(l, 0, upTo)) === hash; };
-              for (const m of mineOf(wr)) {
+              // WHY every version the device holds, not only those it writes (seed 202277): a whole-profile restore also destroys the copies it holds of OTHER writers' chats and of second versions; when an earlier
+              // restore of another device had already left this one as the only holder, the second restore destroyed the last copy (store limit 4), which this oracle cannot express
+              for (const m of world.devs[wr].rep.versions().map((wv) => ({ v: wv }))) {
                 const lw = await world.localOf(wr, m.v); const now = lw ? (await world.devs[wr].store.head(lw)).lines : 0; const myHash = lw && now ? ((await world.devs[wr].store.hashAt(lw, 0, now)) as string) : null;
                 const ons = NAMES.filter((n) => n !== wr && online.has(n));
                 if (!ons.length || !(await Promise.all(ons.map((n) => holds(n, m.v, now, myHash)))).some(Boolean)) ok = false;
@@ -170,6 +180,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
               }
               if (variant === 'again' && (await isSafe())) { await meet(); await world.elapse(150_000, 10_000, true); }
               if (!online.has(wr)) world.devs[wr].carrier.setOnline(false);
+              if (process.env.MESH_REPLICATOR_DECISIONS) fs.appendFileSync(process.env.MESH_REPLICATOR_DECISIONS, `seed ${seed} DECISION rollback-meet-${variant} writer=${wr} online=${[...online].join('')} lostNow=${lostNow.map((m) => m.v.toString('hex').slice(0, 4)).join(',')}\n`);
               note(`rollback-meet-${variant}`);
             }
           }
@@ -372,6 +383,7 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
     watchAcks();
     if (process.env.MESH_REPLICATOR_DUMP) for (const n of NAMES) { const hd = nodePath.join(world.dirs[n], 'replicator', 'heads'); if (fs.existsSync(hd)) for (const f of fs.readdirSync(hd)) { const raw = fs.readFileSync(nodePath.join(hd, f)); const pts: number[] = []; for (let o = 0; o + 112 <= raw.length; o += 112) pts.push(Number(raw.readBigUInt64BE(o))); fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} POINTS ${n} ${f.slice(0, 6)} bytes ${raw.length} points ${JSON.stringify(pts)}\n`); } }
     if (process.env.MESH_REPLICATOR_DUMP) for (const [i, cv] of vs.entries()) for (const n of NAMES) { const lc = await world.localOf(n, cv); const hh = lc ? await world.devs[n].store.head(lc) : null; const tx = lc && hh && hh.lines ? await world.devs[n].store.read(lc, 0, 0, hh.lines).catch(() => 'x') : []; fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} ROOT#${i} ${n} lines ${JSON.stringify(Array.isArray(tx) ? tx.map((l: Buffer) => (l.length > 4096 ? `big${l.length}` : (l.toString().match(/(\w+-\d+) (\d+)/) ?? ['?'])[0])) : tx)} status ${(await world.devs[n].rep.status(cv)).state}\n`); }
+    if (process.env.MESH_REPLICATOR_DUMP) for (const n of NAMES) { const all = await world.devs[n].store.listVersions(); const rows: string[] = []; for (const x of all) { const hd = await world.devs[n].store.head(x.version).catch(() => null); rows.push(`${x.version.toString('hex').slice(0, 6)}:parent=${x.parent ? x.parent.toString('hex').slice(0, 6) : '-'}:lines=${hd?.lines ?? '?'}`); } fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} STORE ${n} ${rows.join(' ')}\n`); }
     if (process.env.MESH_REPLICATOR_DUMP) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} LOSTINTRO ${JSON.stringify([...lostIntro])}\n`);
     if (process.env.MESH_REPLICATOR_DUMP) fs.appendFileSync(process.env.MESH_REPLICATOR_DUMP, `seed ${seed} CHATS ${JSON.stringify(vs.map((v, i) => [i, v.toString('hex').slice(0, 6), writer.get(v.toString('hex')), oracle.get(v.toString('hex'))?.length]))} rolled ${JSON.stringify([...rolled].map((r) => r.slice(0, 6)))}\n`);
     // ---- review 3: the ledger of lines told saved, for chats whose writer moved lines into a second version (a self-fork): both versions are checked together
@@ -409,10 +421,22 @@ export async function runSeed(seed: number, steps = 22): Promise<SeedReport> {
         }
         if (new Set(calm).size > 1) fail(`devices that say in-sync differ on ${gv.toString('hex').slice(0, 6)} (ledger)`);
       });
+      // a second version whose announcement every holder lost (replicator folders put back) is still in a store, unnamed: the line counts as kept when a device that holds it ALSO says it holds a copy it no longer knows
+      const orphanLines = new Set<string>();
+      for (const n of NAMES) {
+        if (!(world.devs[n].rep.counters()['orphan-store-versions'] ?? 0)) continue;
+        const known = new Set<string>(); for (const wv of world.devs[n].rep.versions()) { const lc = await world.localOf(n, wv); if (lc) known.add(lc.toString('hex')); }
+        for (const x of await world.devs[n].store.listVersions()) {
+          if (!x.parent || known.has(x.version.toString('hex'))) continue;
+          const hd = await world.devs[n].store.head(x.version).catch(() => null); if (!hd || !hd.lines) continue;
+          const got = await world.devs[n].store.read(x.version, 0, 0, hd.lines).catch(() => 'x' as const); if (Array.isArray(got)) for (const l of got) orphanLines.add(l.toString());
+        }
+      }
       for (const [line, owner] of toldBy) {
         if (owner !== vk) continue;
         for (const n of NAMES) {
           const rs = per.get(n) ?? []; if (!rs.length || !rs.every((r) => r && r.state === 'in-sync')) continue; // a device in a named state is excused by that state
+          if (!rs.some((r) => r?.lines.includes(line)) && orphanLines.has(line)) { ops['ledger-line-kept-in-unknown-copy'] = (ops['ledger-line-kept-in-unknown-copy'] ?? 0) + 1; continue; }
           if (!rs.some((r) => r?.lines.includes(line))) fail(`a line told saved (${(line.match(/[a-z]+\d+-\d+(?:-\d+)? \d+/) ?? [line.slice(0, 60)])[0]}) is held by ${n} in neither ${vk.slice(0, 6)} nor its second version (ledger); version #${vs.indexOf(V)}; holders ${JSON.stringify(NAMES.map((x) => [x, group.map((_, gi) => (per.get(x)?.[gi]?.lines.includes(line) ? 1 : 0) + ':' + per.get(x)?.[gi]?.state + ':' + per.get(x)?.[gi]?.lines.length)]))}; group ${group.length}`);
         }
       }
