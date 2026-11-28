@@ -553,6 +553,21 @@ describe('a second version whose announcement was lost on every device that held
   }, 600_000);
 });
 
+describe('a copy that holds lines without a signature, and a peer that cannot serve one (seed 200408)', () => {
+  it('two non-writers that both lost their saved signed points do not ask each other for a cover at full speed: the ask is spaced like every other ask', async () => {
+    w = await repWorld(['A', 'B', 'C'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-cover-loop');
+    await world.create('A', V); await world.append('A', V, lineSet(5, 'cv')); await world.settle();
+    world.devs.A.carrier.setOnline(false);                                       // the writer cannot be asked
+    for (const n of ['B', 'C']) { await down(world, n); fs.rmSync(nodePath.join(world.dirs[n], 'replicator', 'heads'), { recursive: true, force: true }); await world.restart(n); }
+    await world.elapse(60_000, 1_000, true);
+    for (const n of ['B', 'C']) {
+      const c = world.devs[n].rep.counters();
+      // WHY a bound this loose: a handful of asks per minute is fine; before the fix this ran thousands of times at one instant of time, each answer `unavailable` starting the next ask
+      expect((c['cover-fetch'] ?? 0) + (c['nak-unavailable'] ?? 0), `${n} asks for a cover over and over`).toBeLessThan(120);
+    }
+  }, 300_000);
+});
+
 describe('directed self-fork cases the random schedules reach only rarely', () => {
   it('a second version moves ITSELF: chat on in V2, restore the writer to a profile from before, chat alone in V2, meet', async () => {
     w = await repWorld(['A', 'B'], { discoveryMs: 600_000 }); const world = w; const V = wireId('r4-v2self');

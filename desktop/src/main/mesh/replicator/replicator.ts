@@ -692,7 +692,13 @@ export class Replicator {
       const d0 = this.#directory.describe(wire);
       if (d0 && !d0.writer.equals(this.#ctx.crypto.self) && holder && !pulls.length && !diverged && !run.pull && repairFrom(head) === null) {
         const vz = await vouchLines(this.#ctx, wire, v.local, d0, head);
-        if (vz.unsignable) { this.#ctx.bump('cover-fetch'); await this.want(wire, holder, { haveLines: vz.lines }); }
+        if (vz.unsignable) {
+          // WHY spaced (review 4 gap round, seed 200408): this ask names its line count, and an ask that names one is never held back by `want`, so two devices that had both lost their saved signed points, each the
+          // other's only holder, asked each other for a cover at full speed for as long as anyone looked (20,000 asks and as many `unavailable` answers in one test minute). It is spaced like every other ask now.
+          const ck = `cover:${holder.hex}`; const lastC = run.wantAt.get(ck); const nowC = this.#ctx.clock.now();
+          if (lastC !== undefined && nowC - lastC < WANT_GAP_MS) { this.#ctx.bump('cover-fetch-held-back'); this.armWantRetry(wire, run, WANT_GAP_MS - (nowC - lastC)); }
+          else { run.wantAt.set(ck, nowC); this.#ctx.bump('cover-fetch'); await this.want(wire, holder, { haveLines: vz.lines }); }
+        }
       }
       // a copy held under a stale fault asks the WRITER for its current signed head once the writer says it holds exactly what I hold (review 4, F5): the answer is a signed batch that ends at my head, which
       // clears the fault when it reproduces my chain value there. Without this the fault waited for the writer's next append.
