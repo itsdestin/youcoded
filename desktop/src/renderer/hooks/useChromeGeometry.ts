@@ -9,7 +9,7 @@ import type { ChromeRect } from '../components/theme-effects-mask';
 // known, accepted trade-off documented in the plan.
 const CHROME_SELECTORS = ['.header-bar', '.status-bar', '.input-bar-container'];
 
-export function sameRects(a: ChromeRect[], b: ChromeRect[]): boolean {
+function sameRects(a: ChromeRect[], b: ChromeRect[]): boolean {
   return a.length === b.length && a.every((r, i) =>
     r.left === b[i].left && r.top === b[i].top && r.width === b[i].width && r.height === b[i].height);
 }
