@@ -664,7 +664,13 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // that owns them (never copied); every other fact is folded from the events publish carries.
   const records = new SessionRecords();
   const fills = new AudienceFills();
-  records.setLiveSource((sessionId) => (nativeHost.isNativeSessionId(sessionId)
+  // WHY isNative, not isNativeSessionId (hitch audit 2026-11-27): this source is read on EVERY event of EVERY
+  // session (note → summaryKeyOf) and for every session on each summary tick. isNativeSessionId falls back to a
+  // synchronous scan of the whole native sessions folder for any id that is not live — i.e. every Claude Code
+  // session — which was the app's biggest main-thread stall (lstat/readdir in the saved stall profiles). The
+  // queue and mode this returns exist only for a LIVE native session (queuedMessageIds is [] otherwise), so the
+  // in-memory live check is the exact question. "Was this id ever native" stays on click paths only.
+  records.setLiveSource((sessionId) => (nativeHost.isNative(sessionId)
     ? { queued: nativeHost.queuedMessageIds(sessionId), permissionMode: nativeHost.getPermissionMode(sessionId) }
     : null));
   // Card #207: an outside Word/Excel request in a chat Claude Code runs without asking (auto, skip permissions) has no card

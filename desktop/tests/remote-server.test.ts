@@ -878,7 +878,9 @@ describe('RemoteServer session meta + browse', () => {
     const nativeIds = new Set(opts.native ?? []);
     const live = new Set(opts.live ?? Object.keys(opts.map ?? {}));
     bindSessionOps({
-      sessionManager: { listSessions: () => [...live].map((id) => ({ id })), getSession: (id: string) => (live.has(id) ? { id } : undefined), sendInput: vi.fn(), resizeSession: vi.fn() },
+      // A real SessionInfo carries its provider from creation (session-manager.ts stamps provider:'native' before the
+      // session is listed); browse reads it instead of scanning the native sessions folder per open session.
+      sessionManager: { listSessions: () => [...live].map((id) => ({ id, provider: nativeIds.has(id) ? 'native' : 'claude' })), getSession: (id: string) => (live.has(id) ? { id } : undefined), sendInput: vi.fn(), resizeSession: vi.fn() },
       sessionIdMap: new Map(Object.entries(opts.map ?? {})),
       nativeHost: {
         isNativeSessionId: (id: string) => nativeIds.has(id),
